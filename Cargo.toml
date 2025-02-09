@@ -1,0 +1,27 @@
+[package]
+name = "api-store"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+chrono = "0.4.39"
+duckdb = { version = "1.1.1", features = ["bundled"] }
+futures = "0.3.31"
+prost = "0.13.4"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_yaml = "0.9.34"
+thiserror = "2.0.11"
+tokio = { version = "1.43.0", features = ["full"] }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
+tonic = "0.12.3"
+tonic-reflection = "0.12.3"
+tonic-web = "0.12.3"
+tower-http = { version = "0.6.2", features = ["cors"] }
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[build-dependencies]
+tonic-build = "0.12.3"
+

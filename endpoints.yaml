@@ -1,0 +1,283 @@
+endpoints:
+  - id: "send_email"
+    text: "send email"
+    description: "Send an email with possible attachments"
+    parameters:
+      - name: "to"
+        description: "Recipient's email address"
+        required: true
+        alternatives:
+          - "recipient_email"
+          - "email_to"
+          - "to_email"
+          - "destination_email"
+      - name: "subject"
+        description: "Email subject"
+        required: true
+        alternatives:
+          - "email_title"
+          - "mail_subject"
+          - "title"
+          - "email_subject"
+      - name: "body"
+        description: "Email content"
+        required: true
+        alternatives:
+          - "email_body"
+          - "content"
+          - "message"
+          - "mail_content"
+          - "email_content"
+      - name: "attachments"
+        description: "Attachments"
+        required: false
+        alternatives:
+          - "files"
+          - "attached_files"
+          - "email_attachments"
+
+  - id: "create_ticket"
+    text: "Create a new support ticket for tracking and resolving customer issues"
+    description: "Create a new support ticket for tracking and resolving customer issues"
+    parameters:
+      - name: "title"
+        description: "Ticket title"
+        required: true
+        alternatives:
+          - "ticket_title"
+          - "issue_title"
+          - "ticket_name"
+          - "issue_name"
+      - name: "priority"
+        description: "Ticket priority (urgent, normal, low)"
+        required: true
+        alternatives:
+          - "ticket_priority"
+          - "urgency"
+          - "importance"
+          - "severity"
+      - name: "description"
+        description: "Detailed problem description"
+        required: true
+        alternatives:
+          - "ticket_description"
+          - "issue_description"
+          - "problem_details"
+          - "details"
+          - "issue_content"
+
+  - id: "schedule_meeting"
+    text: "schedule meeting"
+    description: "Schedule a meeting or appointment"
+    parameters:
+      - name: "date"
+        description: "Meeting date"
+        required: true
+        alternatives:
+          - "meeting_date"
+          - "appointment_date"
+          - "scheduled_date"
+          - "event_date"
+      - name: "time"
+        description: "Meeting time"
+        required: true
+        alternatives:
+          - "meeting_time"
+          - "appointment_time"
+          - "scheduled_time"
+          - "start_time"
+          - "event_time"
+      - name: "participants"
+        description: "List of participants"
+        required: true
+        alternatives:
+          - "attendees"
+          - "meeting_participants"
+          - "invitees"
+          - "members"
+          - "people"
+      - name: "duration"
+        description: "Duration in minutes"
+        required: true
+        alternatives:
+          - "meeting_duration"
+          - "length"
+          - "time_duration"
+          - "duration_minutes"
+      - name: "topic"
+        description: "Meeting topic"
+        required: false
+        alternatives:
+          - "meeting_topic"
+          - "subject"
+          - "agenda"
+          - "meeting_subject"
+
+  - id: "analyze_logs"
+    text: "analyze logs"
+    description: "Analyze application logs"
+    parameters:
+      - name: "app_name"
+        description: "Application name"
+        required: true
+        alternatives:
+          - "application_name"
+          - "app"
+          - "application"
+          - "service_name"
+      - name: "start_date"
+        description: "Analysis start date"
+        required: true
+        alternatives:
+          - "from_date"
+          - "begin_date"
+          - "analysis_start"
+          - "log_start_date"
+      - name: "end_date"
+        description: "Analysis end date"
+        required: true
+        alternatives:
+          - "to_date"
+          - "finish_date"
+          - "analysis_end"
+          - "log_end_date"
+      - name: "log_level"
+        description: "Log level (ERROR, WARN, INFO, DEBUG)"
+        required: false
+        alternatives:
+          - "level"
+          - "severity_level"
+          - "logging_level"
+          - "debug_level"
+
+  - id: "deploy_app"
+    text: "deploy application"
+    description: "Deploy an application to production"
+    parameters:
+      - name: "app_name"
+        description: "Application name to deploy"
+        required: true
+        alternatives:
+          - "application_name"
+          - "app"
+          - "service_name"
+          - "deployment_name"
+      - name: "version"
+        description: "Version to deploy"
+        required: true
+        alternatives:
+          - "app_version"
+          - "release_version"
+          - "deployment_version"
+          - "build_version"
+      - name: "environment"
+        description: "Target environment (prod, staging, dev)"
+        required: true
+        alternatives:
+          - "env"
+          - "target_env"
+          - "deployment_env"
+          - "target_environment"
+      - name: "rollback_version"
+        description: "Rollback version in case of error"
+        required: false
+        alternatives:
+          - "backup_version"
+          - "fallback_version"
+          - "previous_version"
+          - "revert_version"
+
+  - id: "generate_report"
+    text: "generate report"
+    description: "Generate analysis or statistics report"
+    parameters:
+      - name: "report_type"
+        description: "Report type (sales, traffic, performance)"
+        required: true
+        alternatives:
+          - "type"
+          - "kind"
+          - "report_kind"
+          - "analysis_type"
+      - name: "period"
+        description: "Report period (daily, weekly, monthly)"
+        required: true
+        alternatives:
+          - "time_period"
+          - "duration"
+          - "report_period"
+          - "time_range"
+      - name: "format"
+        description: "Output format (PDF, Excel, CSV)"
+        required: true
+        alternatives:
+          - "output_format"
+          - "file_format"
+          - "report_format"
+          - "export_format"
+
+  - id: "backup_database"
+    text: "backup database"
+    description: "Create a database backup"
+    parameters:
+      - name: "database"
+        description: "Database name"
+        required: true
+        alternatives:
+          - "db_name"
+          - "db"
+          - "database_name"
+          - "schema_name"
+      - name: "backup_type"
+        description: "Backup type (full, incremental)"
+        required: true
+        alternatives:
+          - "type"
+          - "backup_mode"
+          - "db_backup_type"
+          - "backup_method"
+      - name: "compression"
+        description: "Compression level (none, low, high)"
+        required: false
+        alternatives:
+          - "compression_level"
+          - "compress_level"
+          - "compress_type"
+          - "compression_type"
+
+  - id: "process_payment"
+    text: "process payment"
+    description: "Process a customer payment"
+    parameters:
+      - name: "amount"
+        description: "Payment amount"
+        required: true
+        alternatives:
+          - "payment_amount"
+          - "sum"
+          - "total"
+          - "price"
+      - name: "currency"
+        description: "Currency (EUR, USD)"
+        required: true
+        alternatives:
+          - "currency_code"
+          - "currency_type"
+          - "payment_currency"
+          - "money_type"
+      - name: "payment_method"
+        description: "Payment method (card, transfer, paypal)"
+        required: true
+        alternatives:
+          - "method"
+          - "pay_method"
+          - "payment_type"
+          - "pay_type"
+      - name: "customer_id"
+        description: "Customer identifier"
+        required: true
+        alternatives:
+          - "client_id"
+          - "user_id"
+          - "payer_id"
+          - "customer_number"
