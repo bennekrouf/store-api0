@@ -2,6 +2,7 @@ mod server;
 use crate::server::EndpointServiceImpl;
 use api_store::{Endpoint, EndpointStore};
 use endpoint::endpoint_service_server::EndpointServiceServer;
+use grpc_logger::LoggingService;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tonic::transport::Server;
@@ -20,6 +21,11 @@ struct EndpointsWrapper {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize logging configuration
+    let config = grpc_logger::load_config("config.yaml")?;
+    let service = LoggingService::new();
+    service.init(&config).await?;
+
     let mut store = EndpointStore::new("endpoints.db")?;
     // Load default endpoints from YAML and initialize DB
     let config_content = std::fs::read_to_string("endpoints.yaml")?;
@@ -42,7 +48,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .allow_methods(Any)
         .expose_headers(Any);
 
-    println!("Starting gRPC server on {}", addr);
+    tracing::info!("Starting gRPC server on {}", addr);
 
     Server::builder()
         .accept_http1(true)
@@ -55,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .add_service(reflection_service)
         .serve_with_shutdown(addr, async {
             tokio::signal::ctrl_c().await.ok();
-            println!("Shutting down server...");
+            tracing::info!("Shutting down server...");
         })
         .await?;
 

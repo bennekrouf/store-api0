@@ -27,32 +27,57 @@ impl EndpointService for EndpointServiceImpl {
         request: Request<GetEndpointsRequest>,
     ) -> Result<Response<GetEndpointsResponse>, Status> {
         let email = &request.get_ref().email;
-        let endpoints = self
-            .store
-            .get_endpoints_by_email(email)
-            .map_err(|e| Status::internal(e.to_string()))?;
+        tracing::info!(email = %email, "Received get_default_endpoints request");
 
+        let endpoints = match self.store.get_endpoints_by_email(email) {
+            Ok(endpoints) => {
+                tracing::debug!(count = endpoints.len(), "Retrieved endpoints from store");
+                endpoints
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to get endpoints from store");
+                return Err(Status::internal(e.to_string()));
+            }
+        };
+
+        tracing::debug!("Starting endpoint transformation");
         let proto_endpoints: Vec<ProtoEndpoint> = endpoints
             .into_iter()
-            .map(|e| ProtoEndpoint {
-                id: e.id,
-                text: e.text,
-                description: e.description,
-                parameters: e
-                    .parameters
-                    .into_iter()
-                    .map(|p| ProtoParameter {
-                        name: p.name,
-                        description: p.description,
-                        required: p.required,
-                        alternatives: p.alternatives,
-                    })
-                    .collect(),
+            .map(|e| {
+                let param_count = e.parameters.len();
+                tracing::trace!(
+                    endpoint_id = %e.id,
+                    parameter_count = param_count,
+                    "Transforming endpoint"
+                );
+                ProtoEndpoint {
+                    id: e.id,
+                    text: e.text,
+                    description: e.description,
+                    parameters: e
+                        .parameters
+                        .into_iter()
+                        .map(|p| ProtoParameter {
+                            name: p.name,
+                            description: p.description,
+                            required: p.required,
+                            alternatives: p.alternatives,
+                        })
+                        .collect(),
+                }
             })
             .collect();
 
-        Ok(Response::new(GetEndpointsResponse {
+        tracing::info!(
+            endpoint_count = proto_endpoints.len(),
+            "Successfully transformed endpoints"
+        );
+
+        let response = GetEndpointsResponse {
             endpoints: proto_endpoints,
-        }))
+        };
+        tracing::debug!(response = ?response, "Sending response");
+
+        Ok(Response::new(response))
     }
 }

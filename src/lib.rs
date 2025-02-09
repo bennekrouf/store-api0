@@ -3,7 +3,6 @@ use duckdb::{Connection, Result as DuckResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-//use thiserror::Error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -38,7 +37,12 @@ pub struct EndpointStore {
 
 impl EndpointStore {
     pub fn new<P: AsRef<Path>>(db_path: P) -> DuckResult<Self> {
+        tracing::info!(
+            "Initializing EndpointStore with path: {:?}",
+            db_path.as_ref()
+        );
         let conn = Connection::open(db_path)?;
+        tracing::debug!("DuckDB connection established");
 
         // Create tables if they don't exist
         conn.execute_batch(
@@ -131,16 +135,31 @@ impl EndpointStore {
     }
 
     pub fn get_endpoints_by_email(&self, email: &str) -> Result<Vec<Endpoint>, StoreError> {
-        let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+        tracing::info!(email = %email, "Starting to fetch endpoints");
+
+        let conn = self.conn.lock().map_err(|e| {
+            tracing::error!("Failed to acquire database lock");
+            StoreError::Lock
+        })?;
+
         // Check if user has custom endpoints
-        let has_custom: bool = conn.query_row(
+        let has_custom: bool = match conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE email = ?)",
             [email],
             |row| row.get(0),
-        )?;
+        ) {
+            Ok(result) => {
+                tracing::debug!(email = %email, has_custom = %result, "Checked custom endpoints");
+                result
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to check for custom endpoints");
+                return Err(StoreError::Database(e));
+            }
+        };
 
         let query = if has_custom {
-            // Get user's custom endpoints
+            tracing::debug!(email = %email, "Using custom endpoints query");
             r#"
         SELECT 
             e.id,
@@ -158,7 +177,7 @@ impl EndpointStore {
         GROUP BY e.id, e.text, e.description, p.name, p.description, p.required
         "#
         } else {
-            // Get default endpoints
+            tracing::debug!("Using default endpoints query");
             r#"
         SELECT 
             e.id,
@@ -176,11 +195,19 @@ impl EndpointStore {
         "#
         };
 
-        let mut stmt = conn.prepare(query)?;
-        let params: &[&dyn ToSql] = if has_custom { &[&email] } else { &[] };
+        let mut stmt = match conn.prepare(query) {
+            Ok(stmt) => stmt,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to prepare SQL statement");
+                return Err(StoreError::Database(e));
+            }
+        };
 
-        let rows = stmt.query_map(params, |row| {
-            Ok((
+        let params: &[&dyn ToSql] = if has_custom { &[&email] } else { &[] };
+        tracing::debug!(has_params = has_custom, "Executing query");
+
+        let rows = match stmt.query_map(params, |row| {
+            let result = Ok((
                 row.get::<_, String>(0)?,         // id
                 row.get::<_, String>(1)?,         // text
                 row.get::<_, String>(2)?,         // description
@@ -188,35 +215,95 @@ impl EndpointStore {
                 row.get::<_, Option<String>>(4)?, // param_description
                 row.get::<_, Option<bool>>(5)?,   // required
                 row.get::<_, Option<String>>(6)?, // alternatives as comma-separated string
-            ))
-        })?;
+            ));
+            if let Err(ref e) = result {
+                tracing::error!(error = %e, "Error reading row data");
+            }
+            result
+        }) {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to execute query");
+                return Err(StoreError::Database(e));
+            }
+        };
 
         let mut endpoints_map = std::collections::HashMap::new();
-
         for row in rows {
-            let (id, text, description, param_name, param_desc, required, alternatives_str) = row?;
+            match row {
+                Ok((id, text, description, param_name, param_desc, required, alternatives_str)) => {
+                    tracing::trace!(
+                        endpoint_id = %id,
+                        has_parameter = param_name.is_some(),
+                        "Processing endpoint row"
+                    );
 
-            let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| Endpoint {
-                id,
-                text,
-                description,
-                parameters: Vec::new(),
-            });
+                    let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
+                        tracing::debug!(endpoint_id = %id, "Creating new endpoint entry");
+                        Endpoint {
+                            id,
+                            text,
+                            description,
+                            parameters: Vec::new(),
+                        }
+                    });
 
-            if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {
-                let alternatives = alternatives_str
-                    .map(|s| s.split(',').map(String::from).collect())
-                    .unwrap_or_default();
+                    if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required)
+                    {
+                        let alternatives = alternatives_str
+                            .map(|s| {
+                                let alts = s.split(',').map(String::from).collect::<Vec<_>>();
+                                tracing::trace!(
+                                    param = %name,
+                                    alt_count = alts.len(),
+                                    "Processed parameter alternatives"
+                                );
+                                alts
+                            })
+                            .unwrap_or_default();
 
-                endpoint.parameters.push(Parameter {
-                    name,
-                    description: desc,
-                    required: req,
-                    alternatives,
-                });
+                        endpoint.parameters.push(Parameter {
+                            name: name.clone(),
+                            description: desc,
+                            required: req,
+                            alternatives,
+                        });
+                        tracing::trace!(
+                            endpoint_id = %endpoint.id,
+                            parameter = %name,
+                            required = req,
+                            "Added parameter to endpoint"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to process row");
+                    return Err(StoreError::Database(e));
+                }
             }
         }
 
-        Ok(endpoints_map.into_values().collect())
+        let endpoints = endpoints_map.into_values().collect::<Vec<_>>();
+        tracing::info!(
+            endpoint_count = endpoints.len(),
+            email = %email,
+            "Successfully fetched endpoints"
+        );
+
+        // Only log endpoint details if we have any
+        if !endpoints.is_empty() {
+            for endpoint in &endpoints {
+                tracing::debug!(
+                    id = %endpoint.id,
+                    text = %endpoint.text,
+                    param_count = endpoint.parameters.len(),
+                    "Endpoint details"
+                );
+            }
+        } else {
+            tracing::warn!(email = %email, "No endpoints found");
+        }
+
+        Ok(endpoints)
     }
 }
