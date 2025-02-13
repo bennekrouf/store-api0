@@ -50,9 +50,9 @@ EOF
 echo "Testing endpoint service..."
 
 # Test with different email addresses
-test_get_endpoints "user@example.com" "Get endpoints for standard user"
-test_get_endpoints "new.user@company.com" "Get endpoints for new user"
-test_get_endpoints "admin@system.com" "Get endpoints for admin"
+# test_get_endpoints "user@example.com" "Get endpoints for standard user"
+# test_get_endpoints "new.user@company.com" "Get endpoints for new user"
+test_get_endpoints "mohamed.bennekrouf@gmail.com" "Get endpoints for admin"
 
 # List available services (for verification)
 echo "Checking available services:"

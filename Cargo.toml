@@ -3,7 +3,6 @@ name = "api-store"
 version = "0.1.0"
 edition = "2021"
 
-
 [dependencies]
 chrono = "0.4.39"
 duckdb = { version = "1.1.1", features = ["bundled"] }
@@ -21,8 +20,8 @@ tower-http = { version = "0.6.2", features = ["cors"] }
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-grpc_logger = "0.5.0"
-
+# grpc_logger = "0.10.0"
+grpc_logger = { path = "../grpc-logger" }
 
 [build-dependencies]
 tonic-build = "0.12.3"

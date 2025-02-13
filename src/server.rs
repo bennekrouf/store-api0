@@ -40,16 +40,17 @@ impl EndpointService for EndpointServiceImpl {
             }
         };
 
-        tracing::debug!("Starting endpoint transformation");
+        tracing::info!("Starting endpoint transformation");
         let proto_endpoints: Vec<ProtoEndpoint> = endpoints
             .into_iter()
             .map(|e| {
                 let param_count = e.parameters.len();
-                tracing::trace!(
+                tracing::info!(
                     endpoint_id = %e.id,
                     parameter_count = param_count,
                     "Transforming endpoint"
                 );
+                // tracing::info!("Tranfor toto {}", param_count);
                 ProtoEndpoint {
                     id: e.id,
                     text: e.text,

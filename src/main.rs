@@ -2,7 +2,6 @@ mod server;
 use crate::server::EndpointServiceImpl;
 use api_store::{Endpoint, EndpointStore};
 use endpoint::endpoint_service_server::EndpointServiceServer;
-use grpc_logger::LoggingService;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tonic::transport::Server;
@@ -20,13 +19,12 @@ struct EndpointsWrapper {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging configuration
     let config = grpc_logger::load_config("config.yaml")?;
-    let service = LoggingService::new();
-    service.init(&config).await?;
+    grpc_logger::setup_client_logging(&config).await?;
 
-    let mut store = EndpointStore::new("endpoints.db")?;
+    let mut store = EndpointStore::new("db/endpoints.db")?;
     // Load default endpoints from YAML and initialize DB
     let config_content = std::fs::read_to_string("endpoints.yaml")?;
     let wrapper: EndpointsWrapper = serde_yaml::from_str(&config_content)?;

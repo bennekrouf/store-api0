@@ -1,15 +1,18 @@
-whoami: api-store
-output: grpc
+whoami: "api-store"
+output: grpc # console, file
 level: trace
 grpc:
   address: "127.0.0.1"
   port: 50052
+# file_path: "logs"
+# file_name: "app.log"
 log_fields:
-  include_thread_id: true
-  include_target: true
-  include_file: true
-  include_line: true
-  include_timestamp: true
+  include_thread_id: false
+  include_target: false
+  include_file: false
+  include_line: false
+  include_timestamp: false
 debug_mode:
   enabled: true
-  test_interval_secs: 200
+  test_interval_secs: 100
+log_all_messages: false 
