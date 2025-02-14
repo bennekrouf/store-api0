@@ -8,8 +8,6 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
-use uuid::Uuid;
-use grpc_logger::server_build::logging::ClientType;
 use grpc_logger::setup_logging;
 use grpc_logger::load_config;
 
@@ -29,10 +27,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     setup_logging(&config).await?;
 
     // Test log generation
-    loop {
-        tracing::info!("Test semantic log message");
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    }
+    // loop {
+    //     tracing::info!("Test semantic log message");
+    //     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // }
 
     let mut store = EndpointStore::new("db/endpoints.db")?;
 
@@ -57,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .allow_methods(Any)
         .expose_headers(Any);
 
-    tracing::info!("Starting gRPC server on {}", addr);
+    tracing::info!("Starting api-store gRPC server on {}", addr);
 
     Server::builder()
         .accept_http1(true)
@@ -70,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .add_service(reflection_service)
         .serve_with_shutdown(addr, async {
             tokio::signal::ctrl_c().await.ok();
-            tracing::info!("Shutting down server...");
+            tracing::info!("Shutting down api-store server...");
         })
         .await?;
 

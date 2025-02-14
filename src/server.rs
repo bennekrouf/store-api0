@@ -39,19 +39,6 @@ impl EndpointService for EndpointServiceImpl {
 
         // Create the stream
         let stream = async_stream::try_stream! {
-            // Get endpoints from store
-            // let endpoints = match store.get_endpoints_by_email(&email) {
-            //     Ok(endpoints) => {
-            //         tracing::debug!(count = endpoints.len(), "Retrieved endpoints from store");
-            //         endpoints
-            //     }
-            //     Err(e) => {
-            //         tracing::error!(error = %e, "Failed to get endpoints from store");
-            //         Err(Status::internal(e.to_string()))?;
-            //         return;
-            //     }
-            // };
-
             let endpoints = store.get_endpoints_by_email(&email).map_err(|e| {
                 tracing::error!(error = %e, "Failed to get endpoints from store");
                 Status::internal(e.to_string())
@@ -118,56 +105,4 @@ impl EndpointService for EndpointServiceImpl {
 
         Ok(Response::new(Box::pin(stream)))
     }
-    //     let endpoints = match self.store.get_endpoints_by_email(email) {
-    //         Ok(endpoints) => {
-    //             tracing::debug!(count = endpoints.len(), "Retrieved endpoints from store");
-    //             endpoints
-    //         }
-    //         Err(e) => {
-    //             tracing::error!(error = %e, "Failed to get endpoints from store");
-    //             return Err(Status::internal(e.to_string()));
-    //         }
-    //     };
-    //
-    //     tracing::info!("Starting endpoint transformation");
-    //     let proto_endpoints: Vec<ProtoEndpoint> = endpoints
-    //         .into_iter()
-    //         .map(|e| {
-    //             let param_count = e.parameters.len();
-    //             tracing::info!(
-    //                 endpoint_id = %e.id,
-    //                 parameter_count = param_count,
-    //                 "Transforming endpoint"
-    //             );
-    //             // tracing::info!("Tranfor toto {}", param_count);
-    //             ProtoEndpoint {
-    //                 id: e.id,
-    //                 text: e.text,
-    //                 description: e.description,
-    //                 parameters: e
-    //                     .parameters
-    //                     .into_iter()
-    //                     .map(|p| ProtoParameter {
-    //                         name: p.name,
-    //                         description: p.description,
-    //                         required: p.required,
-    //                         alternatives: p.alternatives,
-    //                     })
-    //                     .collect(),
-    //             }
-    //         })
-    //         .collect();
-    //
-    //     tracing::info!(
-    //         endpoint_count = proto_endpoints.len(),
-    //         "Successfully transformed endpoints"
-    //     );
-    //
-    //     let response = GetEndpointsResponse {
-    //         endpoints: proto_endpoints,
-    //     };
-    //     tracing::debug!(response = ?response, "Sending response");
-    //
-    //     Ok(Response::new(response))
-    // }
 }
