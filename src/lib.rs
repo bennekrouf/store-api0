@@ -137,7 +137,7 @@ impl EndpointStore {
     pub fn get_endpoints_by_email(&self, email: &str) -> Result<Vec<Endpoint>, StoreError> {
         tracing::info!(email = %email, "Starting to fetch endpoints");
 
-        let conn = self.conn.lock().map_err(|e| {
+        let conn = self.conn.lock().map_err(|_e| {
             tracing::error!("Failed to acquire database lock");
             StoreError::Lock
         })?;

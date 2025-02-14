@@ -8,6 +8,10 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
+use uuid::Uuid;
+use grpc_logger::server_build::logging::ClientType;
+use grpc_logger::setup_logging;
+use grpc_logger::load_config;
 
 pub mod endpoint {
     tonic::include_proto!("endpoint");
@@ -21,10 +25,17 @@ struct EndpointsWrapper {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging configuration
-    let config = grpc_logger::load_config("config.yaml")?;
-    grpc_logger::setup_client_logging(&config).await?;
+    let config = load_config("config.yaml")?;
+    setup_logging(&config).await?;
+
+    // Test log generation
+    loop {
+        tracing::info!("Test semantic log message");
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
 
     let mut store = EndpointStore::new("db/endpoints.db")?;
+
     // Load default endpoints from YAML and initialize DB
     let config_content = std::fs::read_to_string("endpoints.yaml")?;
     let wrapper: EndpointsWrapper = serde_yaml::from_str(&config_content)?;

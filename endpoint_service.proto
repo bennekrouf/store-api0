@@ -2,7 +2,7 @@ syntax = "proto3";
 package endpoint;
 
 service EndpointService {
-    rpc GetDefaultEndpoints (GetEndpointsRequest) returns (GetEndpointsResponse);
+    rpc GetDefaultEndpoints (GetEndpointsRequest) returns (stream GetEndpointsResponse);
 }
 
 message GetEndpointsRequest {

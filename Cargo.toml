@@ -22,6 +22,8 @@ tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 # grpc_logger = "0.10.0"
 grpc_logger = { path = "../grpc-logger" }
+async-stream = "0.3.6"
+uuid = "1.13.1"
 
 [build-dependencies]
 tonic-build = "0.12.3"
