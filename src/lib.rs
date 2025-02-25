@@ -306,4 +306,261 @@ impl EndpointStore {
 
         Ok(endpoints)
     }
+
+    pub async fn replace_user_endpoints(
+        &self,
+        email: &str,
+        endpoints: Vec<Endpoint>,
+    ) -> Result<usize, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+        
+        tracing::info!(email = %email, "Starting complete endpoint replacement");
+        
+        // First try the force cleanup approach
+        match self.force_clean_user_data(email, &mut conn) {
+            Ok(_) => {
+                tracing::info!(email = %email, "Successfully cleaned up user data");
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e, 
+                    email = %email, 
+                    "Failed to clean up user data, will try fallback approach"
+                );
+                
+                // Try a fallback approach if the force clean fails
+                match self.fallback_clean_user_data(email, &mut conn) {
+                    Ok(_) => tracing::info!(email = %email, "Fallback cleanup successful"),
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            email = %email,
+                            "Fallback cleanup also failed, proceeding with import anyway"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Now that we've tried to clean up, proceed with adding the new endpoints
+        let tx = conn.transaction()?;
+        let mut imported_count = 0;
+
+        for endpoint in &endpoints {
+            // Check if endpoint exists
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
+                [&endpoint.id],
+                |row| row.get(0),
+            )?;
+            
+            if !exists {
+                // Create new endpoint
+                tracing::debug!(endpoint_id = %endpoint.id, "Creating new endpoint");
+                tx.execute(
+                    "INSERT INTO endpoints (id, text, description, is_default) VALUES (?, ?, ?, false)",
+                    &[&endpoint.id, &endpoint.text, &endpoint.description],
+                )?;
+            } else {
+                // Check if it's a default endpoint
+                let is_default: bool = tx.query_row(
+                    "SELECT is_default FROM endpoints WHERE id = ?",
+                    [&endpoint.id],
+                    |row| row.get(0),
+                )?;
+                
+                if !is_default {
+                    // Update existing non-default endpoint
+                    tracing::debug!(endpoint_id = %endpoint.id, "Updating existing endpoint");
+                    tx.execute(
+                        "UPDATE endpoints SET text = ?, description = ? WHERE id = ?",
+                        &[&endpoint.text, &endpoint.description, &endpoint.id],
+                    )?;
+                }
+            }
+            
+            // Link to user (ignore if already exists)
+            tracing::debug!(email = %email, endpoint_id = %endpoint.id, "Linking endpoint to user");
+            tx.execute(
+                "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                &[email, &endpoint.id],
+            )?;
+            
+            imported_count += 1;
+        }
+        
+        // Add parameters in a separate loop after all endpoints are created/updated
+        for endpoint in &endpoints {
+            let is_default: bool = tx.query_row(
+                "SELECT is_default FROM endpoints WHERE id = ?",
+                [&endpoint.id],
+                |row| row.get(0),
+            )?;
+            
+            if !is_default {
+                // Try to clean up existing parameters first
+                let _ = tx.execute(
+                    "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
+                    [&endpoint.id],
+                );
+                
+                let _ = tx.execute(
+                    "DELETE FROM parameters WHERE endpoint_id = ?",
+                    [&endpoint.id],
+                );
+                
+                // Now add the new parameters
+                for param in &endpoint.parameters {
+                    tracing::debug!(
+                        endpoint_id = %endpoint.id, 
+                        param = %param.name, 
+                        "Adding parameter"
+                    );
+                    
+                    tx.execute(
+                        "INSERT INTO parameters (endpoint_id, name, description, required) 
+                        VALUES (?, ?, ?, ?)",
+                        &[
+                            &endpoint.id, 
+                            &param.name, 
+                            &param.description, 
+                            &param.required.to_string(),
+                        ],
+                    )?;
+                    
+                    for alt in &param.alternatives {
+                        tx.execute(
+                            "INSERT INTO parameter_alternatives 
+                            (endpoint_id, parameter_name, alternative) 
+                            VALUES (?, ?, ?)",
+                            &[&endpoint.id, &param.name, alt],
+                        )?;
+                    }
+                }
+            }
+        }
+        
+        tx.commit()?;
+        
+        tracing::info!(
+            email = %email, 
+            count = imported_count, 
+            "Successfully imported endpoints"
+        );
+        
+        Ok(imported_count)
+    }
+
+    // Fallback cleanup approach - more conservative
+    fn fallback_clean_user_data(&self, email: &str, conn: &mut Connection) -> Result<(), StoreError> {
+        let tx = conn.transaction()?;
+        
+        // Get all custom endpoint IDs for this user first
+        let mut stmt = tx.prepare(
+            "SELECT e.id 
+            FROM endpoints e
+            JOIN user_endpoints ue ON e.id = ue.endpoint_id
+            WHERE ue.email = ? AND e.is_default = false"
+        )?;
+        
+        let endpoint_ids: Vec<String> = stmt
+            .query_map([email], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        
+        // Remove user-endpoint associations
+        for id in &endpoint_ids {
+            let _ = tx.execute(
+                "DELETE FROM user_endpoints WHERE email = ? AND endpoint_id = ?",
+                &[email, id],
+            );
+        }
+        
+        // Now check which endpoints are no longer used
+        for id in &endpoint_ids {
+            let still_used: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE endpoint_id = ?)",
+                [id],
+                |row| row.get(0),
+            )?;
+            
+            if !still_used {
+                // Remove parameter alternatives first
+                let _ = tx.execute(
+                    "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
+                    [id],
+                );
+                
+                // Then remove parameters
+                let _ = tx.execute(
+                    "DELETE FROM parameters WHERE endpoint_id = ?",
+                    [id],
+                );
+                
+                // Finally remove the endpoint
+                let _ = tx.execute(
+                    "DELETE FROM endpoints WHERE id = ?",
+                    [id],
+                );
+            }
+        }
+        
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn force_clean_user_data(&self, email: &str, conn: &mut Connection) -> Result<(), StoreError> {
+        // First turn off foreign keys
+        conn.execute("PRAGMA foreign_keys=OFF;", [])?;
+        
+        // Execute the cleaning operations in a transaction
+        let tx = conn.transaction()?;
+        
+        // Create a temporary table to track user's custom endpoints
+        tx.execute(
+            "CREATE TEMPORARY TABLE user_custom_endpoints AS
+            SELECT e.id 
+            FROM endpoints e
+            JOIN user_endpoints ue ON e.id = ue.endpoint_id
+            WHERE ue.email = ? AND e.is_default = false",
+            [email],
+        )?;
+        
+        // Delete parameter alternatives
+        tx.execute(
+            "DELETE FROM parameter_alternatives 
+            WHERE endpoint_id IN (SELECT id FROM user_custom_endpoints)",
+            [],
+        )?;
+        
+        // Delete parameters
+        tx.execute(
+            "DELETE FROM parameters
+            WHERE endpoint_id IN (SELECT id FROM user_custom_endpoints)",
+            [],
+        )?;
+        
+        // Delete user endpoint associations
+        tx.execute("DELETE FROM user_endpoints WHERE email = ?", [email])?;
+        
+        // Delete endpoints that are no longer referenced and not default
+        tx.execute(
+            "DELETE FROM endpoints 
+            WHERE id IN (
+                SELECT id FROM user_custom_endpoints
+                WHERE id NOT IN (SELECT endpoint_id FROM user_endpoints)
+            )",
+            [],
+        )?;
+        
+        // Clean up temporary table
+        tx.execute("DROP TABLE user_custom_endpoints", [])?;
+        
+        // Commit the transaction
+        tx.commit()?;
+        
+        // Turn foreign keys back on
+        conn.execute("PRAGMA foreign_keys=ON;", [])?;
+        
+        Ok(())
+    }
 }

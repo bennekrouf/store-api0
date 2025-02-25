@@ -1,0 +1,358 @@
+endpoints:
+  - id: "get_themes_list"
+    text: "Get themes list"
+    description: "Return all categories and information"
+    parameters: []
+
+  - id: "upload_document"
+    text: "Upload document"
+    description: "Upload a document with event ID"
+    parameters:
+      - name: "file"
+        description: "File to upload"
+        required: true
+        alternatives:
+          - "document"
+          - "upload_file"
+      - name: "idEvenement"
+        description: "Event ID"
+        required: true
+        alternatives:
+          - "event_id"
+          - "evenement_id"
+
+  - id: "download_document"
+    text: "Download document"
+    description: "Download a document by ID and name"
+    parameters:
+      - name: "id"
+        description: "Document ID"
+        required: true
+        alternatives:
+          - "document_id"
+          - "doc_id"
+      - name: "nom"
+        description: "Document name"
+        required: true
+        alternatives:
+          - "name"
+          - "filename"
+
+  - id: "delete_document"
+    text: "Delete document"
+    description: "Delete a document by ID"
+    parameters:
+      - name: "id"
+        description: "Document ID"
+        required: true
+        alternatives:
+          - "document_id"
+          - "doc_id"
+
+  - id: "get_events_list"
+    text: "Get events list"
+    description: "Get list of events for a service"
+    parameters:
+      - name: "service"
+        description: "Service name"
+        required: true
+        alternatives:
+          - "service_id"
+      - name: "ids"
+        description: "List of event IDs"
+        required: true
+        alternatives:
+          - "event_ids"
+          - "evenement_ids"
+
+  - id: "save_event"
+    text: "Save event"
+    description: "Save a new event"
+    parameters:
+      - name: "evenement"
+        description: "Event object"
+        required: true
+        alternatives:
+          - "event"
+          - "event_data"
+
+  - id: "modify_event_relations"
+    text: "Modify event relations"
+    description: "Modify relationships for an event"
+    parameters:
+      - name: "evenement"
+        description: "Event object"
+        required: true
+        alternatives:
+          - "event"
+          - "event_data"
+
+  - id: "get_event"
+    text: "Get event"
+    description: "Get single event by ID"
+    parameters:
+      - name: "id"
+        description: "Event ID"
+        required: true
+        alternatives:
+          - "event_id"
+          - "evenement_id"
+
+  - id: "delete_event"
+    text: "Delete event"
+    description: "Delete an event"
+    parameters:
+      - name: "id"
+        description: "Event ID"
+        required: true
+        alternatives:
+          - "event_id"
+          - "evenement_id"
+
+  - id: "get_journal_prestataire"
+    text: "Get provider journal"
+    description: "Get journal for a provider within a date range"
+    parameters:
+      - name: "idPrestataire"
+        description: "Provider ID"
+        required: true
+        alternatives:
+          - "provider_id"
+      - name: "dateDebut"
+        description: "Start date"
+        required: true
+        alternatives:
+          - "start_date"
+      - name: "dateFin"
+        description: "End date"
+        required: true
+        alternatives:
+          - "end_date"
+      - name: "isActivite"
+        description: "Activity flag"
+        required: true
+        alternatives:
+          - "is_activity"
+
+  - id: "get_liste_evenements"
+    text: "Get events list report"
+    description: "Get list of events within a date range"
+    parameters:
+      - name: "dateDebut"
+        description: "Start date"
+        required: true
+        alternatives:
+          - "start_date"
+      - name: "dateFin"
+        description: "End date"
+        required: true
+        alternatives:
+          - "end_date"
+
+  - id: "get_liste_contact"
+    text: "Get contacts list"
+    description: "Get list of all contacts"
+    parameters: []
+
+  - id: "get_actors_list"
+    text: "Get actors list"
+    description: "Get list of all actors"
+    parameters: []
+
+  - id: "get_actors_by_name"
+    text: "Get actors by name"
+    description: "Get list of actors by name and date"
+    parameters:
+      - name: "date"
+        description: "Date"
+        required: true
+        alternatives:
+          - "search_date"
+      - name: "idActivite"
+        description: "Activity ID"
+        required: true
+        alternatives:
+          - "activity_id"
+
+  - id: "get_active_actors"
+    text: "Get active actors"
+    description: "Get list of active actors"
+    parameters:
+      - name: "date"
+        description: "Date"
+        required: true
+        alternatives:
+          - "search_date"
+      - name: "idInspection"
+        description: "Inspection ID"
+        required: true
+        alternatives:
+          - "inspection_id"
+
+  - id: "save_actor"
+    text: "Save actor"
+    description: "Save a new actor"
+    parameters:
+      - name: "acteurDTO"
+        description: "Actor data"
+        required: true
+        alternatives:
+          - "actor"
+          - "actor_data"
+
+  - id: "update_actor"
+    text: "Update actor"
+    description: "Update an existing actor"
+    parameters:
+      - name: "acteurDTO"
+        description: "Actor data"
+        required: true
+        alternatives:
+          - "actor"
+          - "actor_data"
+
+  - id: "delete_actor"
+    text: "Delete actor"
+    description: "Delete an actor"
+    parameters:
+      - name: "id"
+        description: "Actor ID"
+        required: true
+        alternatives:
+          - "actor_id"
+
+  - id: "get_dossier"
+    text: "Get dossier"
+    description: "Get dossier by ID"
+    parameters:
+      - name: "id"
+        description: "Dossier ID"
+        required: true
+        alternatives:
+          - "dossier_id"
+
+  - id: "get_prestataire_dossiers"
+    text: "Get provider dossiers"
+    description: "Get dossiers for a provider"
+    parameters:
+      - name: "idPrestataire"
+        description: "Provider ID"
+        required: true
+        alternatives:
+          - "provider_id"
+      - name: "typePrestataire"
+        description: "Provider type"
+        required: false
+        alternatives:
+          - "provider_type"
+      - name: "idSecteur"
+        description: "Sector ID"
+        required: false
+        alternatives:
+          - "sector_id"
+      - name: "spen"
+        description: "SPEN flag"
+        required: true
+        alternatives:
+          - "is_spen"
+
+  - id: "get_inspection_evaluation"
+    text: "Get inspection evaluation"
+    description: "Get evaluation for an inspection"
+    parameters:
+      - name: "idInspection"
+        description: "Inspection ID"
+        required: true
+        alternatives:
+          - "inspection_id"
+
+  - id: "get_modelerapport_roles"
+    text: "Get model report roles"
+    description: "Get roles for a model report"
+    parameters:
+      - name: "idInspection"
+        description: "Inspection ID"
+        required: true
+        alternatives:
+          - "inspection_id"
+
+  - id: "get_periode_dossier"
+    text: "Get period dossier"
+    description: "Get period for last open dossier"
+    parameters:
+      - name: "idActivite"
+        description: "Activity ID"
+        required: true
+        alternatives:
+          - "activity_id"
+      - name: "idSecteur"
+        description: "Sector ID"
+        required: true
+        alternatives:
+          - "sector_id"
+
+  - id: "get_list_periods"
+    text: "Get periods list"
+    description: "Get list of all periods plus one"
+    parameters:
+      - name: "idActivite"
+        description: "Activity ID"
+        required: true
+        alternatives:
+          - "activity_id"
+      - name: "idSecteur"
+        description: "Sector ID"
+        required: true
+        alternatives:
+          - "sector_id"
+
+  - id: "get_period_types"
+    text: "Get period types"
+    description: "Get list of all period types"
+    parameters: []
+
+  - id: "save_period_type"
+    text: "Save period type"
+    description: "Save a new period type"
+    parameters:
+      - name: "periodeTypeDTO"
+        description: "Period type data"
+        required: true
+        alternatives:
+          - "period_type"
+          - "period_data"
+
+  - id: "get_status"
+    text: "Get status"
+    description: "Get system status"
+    parameters: []
+
+  - id: "get_trace"
+    text: "Get trace data"
+    description: "Get trace data within date range"
+    parameters:
+      - name: "dateDebut"
+        description: "Start date"
+        required: true
+        alternatives:
+          - "start_date"
+      - name: "dateFin"
+        description: "End date"
+        required: true
+        alternatives:
+          - "end_date"
+
+  - id: "generate_trace"
+    text: "Generate trace report"
+    description: "Generate trace report for date range"
+    parameters:
+      - name: "dateDebut"
+        description: "Start date"
+        required: true
+        alternatives:
+          - "start_date"
+      - name: "dateFin"
+        description: "End date"
+        required: true
+        alternatives:
+          - "end_date"

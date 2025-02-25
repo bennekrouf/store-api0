@@ -1,0 +1,38 @@
+endpoints:
+  - id: "custom_search"
+    text: "search documents"
+    description: "Search for documents with specified criteria"
+    parameters:
+      - name: "query"
+        description: "Search query string"
+        required: true
+        alternatives:
+          - "search_term"
+          - "keyword"
+          - "search_query"
+      - name: "filter"
+        description: "Filter criteria"
+        required: false
+        alternatives:
+          - "criteria"
+          - "constraints"
+          - "conditions"
+
+  - id: "custom_export"
+    text: "export data"
+    description: "Export data in various formats"
+    parameters:
+      - name: "format"
+        description: "Export format (CSV, PDF, XLSX)"
+        required: true
+        alternatives:
+          - "file_format"
+          - "export_format"
+          - "output_format"
+      - name: "selection"
+        description: "Data selection criteria"
+        required: true
+        alternatives:
+          - "data_selection"
+          - "selected_data"
+          - "data_criteria"

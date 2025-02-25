@@ -11,6 +11,9 @@ use tower_http::cors::{Any, CorsLayer};
 use grpc_logger::setup_logging;
 use grpc_logger::load_config;
 
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 pub mod endpoint {
     tonic::include_proto!("endpoint");
 }
@@ -23,8 +26,8 @@ struct EndpointsWrapper {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging configuration
-    let config = load_config("config.yaml")?;
-    setup_logging(&config).await?;
+    // let config = load_config("config.yaml")?;
+    // setup_logging(&config).await?;
 
     // Test log generation
     // loop {
@@ -32,6 +35,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     //     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     // }
 
+    Registry::default()
+        .with(tracing_subscriber::fmt::layer())
+        .with(EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("INFO")))
+        .init();
     let mut store = EndpointStore::new("db/endpoints.db")?;
 
     // Load default endpoints from YAML and initialize DB

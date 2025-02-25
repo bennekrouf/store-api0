@@ -3,6 +3,7 @@ package endpoint;
 
 service EndpointService {
     rpc GetDefaultEndpoints (GetEndpointsRequest) returns (stream GetEndpointsResponse);
+    rpc UploadEndpoints (UploadEndpointsRequest) returns (UploadEndpointsResponse);
 }
 
 message GetEndpointsRequest {
@@ -25,4 +26,16 @@ message Endpoint {
 
 message GetEndpointsResponse {
     repeated Endpoint endpoints = 1;
+}
+
+message UploadEndpointsRequest {
+    string email = 1;
+    bytes file_content = 2;
+    string file_name = 3;
+}
+
+message UploadEndpointsResponse {
+    bool success = 1;
+    string message = 2;
+    int32 imported_count = 3;
 }
