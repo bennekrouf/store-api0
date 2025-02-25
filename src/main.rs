@@ -8,8 +8,8 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
-use grpc_logger::setup_logging;
-use grpc_logger::load_config;
+// use grpc_logger::setup_logging;
+// use grpc_logger::load_config;
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
