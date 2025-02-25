@@ -14,11 +14,19 @@ pub enum StoreError {
     Init(String),
 }
 
+// Helper function to provide default verb value
+fn default_verb() -> String {
+    "GET".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Parameter {
     pub name: String,
+    #[serde(default = "String::new")]
     pub description: String,
+    #[serde(default)]
     pub required: bool,
+    #[serde(default)]
     pub alternatives: Vec<String>,
 }
 
@@ -26,8 +34,12 @@ pub struct Parameter {
 pub struct Endpoint {
     pub id: String,
     pub text: String,
+    #[serde(default = "String::new")]
     pub description: String,
+    #[serde(default)]
     pub parameters: Vec<Parameter>,
+    #[serde(default = "default_verb")]
+    pub verb: String,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +63,8 @@ impl EndpointStore {
         id VARCHAR PRIMARY KEY,
         text VARCHAR NOT NULL,
         description VARCHAR NOT NULL,
-        is_default BOOLEAN NOT NULL DEFAULT true
+        is_default BOOLEAN NOT NULL DEFAULT true,
+        verb VARCHAR NOT NULL DEFAULT 'GET'
     );
     
     CREATE TABLE IF NOT EXISTS user_endpoints (
@@ -65,7 +78,7 @@ impl EndpointStore {
         endpoint_id VARCHAR,
         name VARCHAR NOT NULL,
         description VARCHAR NOT NULL,
-        required BOOLEAN NOT NULL,
+        required BOOLEAN NOT NULL DEFAULT false,
         FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
     );
     
@@ -104,8 +117,8 @@ impl EndpointStore {
         // Insert new endpoints
         for endpoint in default_endpoints {
             tx.execute(
-                "INSERT INTO endpoints (id, text, description, is_default) VALUES (?, ?, ?, true)",
-                &[&endpoint.id, &endpoint.text, &endpoint.description],
+                "INSERT INTO endpoints (id, text, description, is_default, verb) VALUES (?, ?, ?, true, ?)",
+                &[&endpoint.id, &endpoint.text, &endpoint.description, &endpoint.verb],
             )?;
 
             for param in &endpoint.parameters {
@@ -165,6 +178,7 @@ impl EndpointStore {
             e.id,
             e.text,
             e.description,
+            e.verb,
             p.name as param_name,
             p.description as param_description,
             p.required,
@@ -174,7 +188,7 @@ impl EndpointStore {
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE ue.email = ?
-        GROUP BY e.id, e.text, e.description, p.name, p.description, p.required
+        GROUP BY e.id, e.text, e.description, e.verb, p.name, p.description, p.required
         "#
         } else {
             tracing::debug!("Using default endpoints query");
@@ -183,6 +197,7 @@ impl EndpointStore {
             e.id,
             e.text,
             e.description,
+            e.verb,
             p.name as param_name,
             p.description as param_description,
             p.required,
@@ -191,7 +206,7 @@ impl EndpointStore {
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE e.is_default = true
-        GROUP BY e.id, e.text, e.description, p.name, p.description, p.required
+        GROUP BY e.id, e.text, e.description, e.verb, p.name, p.description, p.required
         "#
         };
 
@@ -211,10 +226,11 @@ impl EndpointStore {
                 row.get::<_, String>(0)?,         // id
                 row.get::<_, String>(1)?,         // text
                 row.get::<_, String>(2)?,         // description
-                row.get::<_, Option<String>>(3)?, // param_name
-                row.get::<_, Option<String>>(4)?, // param_description
-                row.get::<_, Option<bool>>(5)?,   // required
-                row.get::<_, Option<String>>(6)?, // alternatives as comma-separated string
+                row.get::<_, String>(3)?,         // verb
+                row.get::<_, Option<String>>(4)?, // param_name
+                row.get::<_, Option<String>>(5)?, // param_description
+                row.get::<_, Option<bool>>(6)?,   // required
+                row.get::<_, Option<String>>(7)?, // alternatives as comma-separated string
             ));
             if let Err(ref e) = result {
                 tracing::error!(error = %e, "Error reading row data");
@@ -231,7 +247,7 @@ impl EndpointStore {
         let mut endpoints_map = std::collections::HashMap::new();
         for row in rows {
             match row {
-                Ok((id, text, description, param_name, param_desc, required, alternatives_str)) => {
+                Ok((id, text, description, verb, param_name, param_desc, required, alternatives_str)) => {
                     tracing::trace!(
                         endpoint_id = %id,
                         has_parameter = param_name.is_some(),
@@ -244,6 +260,7 @@ impl EndpointStore {
                             id,
                             text,
                             description,
+                            verb,
                             parameters: Vec::new(),
                         }
                     });
@@ -313,9 +330,9 @@ impl EndpointStore {
         endpoints: Vec<Endpoint>,
     ) -> Result<usize, StoreError> {
         let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
-        
+
         tracing::info!(email = %email, "Starting complete endpoint replacement");
-        
+
         // First try the force cleanup approach
         match self.force_clean_user_data(email, &mut conn) {
             Ok(_) => {
@@ -327,7 +344,7 @@ impl EndpointStore {
                     email = %email, 
                     "Failed to clean up user data, will try fallback approach"
                 );
-                
+
                 // Try a fallback approach if the force clean fails
                 match self.fallback_clean_user_data(email, &mut conn) {
                     Ok(_) => tracing::info!(email = %email, "Fallback cleanup successful"),
@@ -358,8 +375,8 @@ impl EndpointStore {
                 // Create new endpoint
                 tracing::debug!(endpoint_id = %endpoint.id, "Creating new endpoint");
                 tx.execute(
-                    "INSERT INTO endpoints (id, text, description, is_default) VALUES (?, ?, ?, false)",
-                    &[&endpoint.id, &endpoint.text, &endpoint.description],
+                    "INSERT INTO endpoints (id, text, description, verb, is_default) VALUES (?, ?, ?, ?, false)",
+                    &[&endpoint.id, &endpoint.text, &endpoint.description, &endpoint.verb],
                 )?;
             } else {
                 // Check if it's a default endpoint
@@ -373,8 +390,8 @@ impl EndpointStore {
                     // Update existing non-default endpoint
                     tracing::debug!(endpoint_id = %endpoint.id, "Updating existing endpoint");
                     tx.execute(
-                        "UPDATE endpoints SET text = ?, description = ? WHERE id = ?",
-                        &[&endpoint.text, &endpoint.description, &endpoint.id],
+                        "UPDATE endpoints SET text = ?, description = ?, verb = ? WHERE id = ?",
+                        &[&endpoint.text, &endpoint.description, &endpoint.verb, &endpoint.id],
                     )?;
                 }
             }

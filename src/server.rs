@@ -76,6 +76,7 @@ impl EndpointService for EndpointServiceImpl {
                             alternatives: p.alternatives,
                         })
                         .collect(),
+                    verb: endpoint.verb,
                 };
 
                 current_batch.push(proto_endpoint);

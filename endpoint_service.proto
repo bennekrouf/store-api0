@@ -22,6 +22,7 @@ message Endpoint {
     string text = 2;
     string description = 3;
     repeated Parameter parameters = 4;
+    string verb = 5;
 }
 
 message GetEndpointsResponse {
