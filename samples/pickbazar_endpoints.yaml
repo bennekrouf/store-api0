@@ -1,0 +1,258 @@
+endpoints:
+  # Authentication & Users
+  - id: "register"
+    text: "Register new user"
+    description: "Create a new user account"
+    parameters:
+      - name: "name"
+        description: "User's full name"
+        required: true
+      - name: "email"
+        description: "User's email address"
+        required: true
+      - name: "password"
+        description: "User's password"
+        required: true
+      - name: "permission"
+        description: "User permission level"
+        required: false
+        default: "CUSTOMER"
+
+  - id: "login"
+    text: "User login"
+    description: "Authenticate user and get token"
+    parameters:
+      - name: "email"
+        description: "User's email address"
+        required: true
+      - name: "password"
+        description: "User's password"
+        required: true
+
+  # Products
+  - id: "create_product"
+    text: "Create product"
+    description: "Create a new product in the system"
+    parameters:
+      - name: "name"
+        description: "Product name"
+        required: true
+      - name: "description"
+        description: "Product description"
+        required: false
+      - name: "price"
+        description: "Product price"
+        required: true
+      - name: "categories"
+        description: "Product categories IDs"
+        required: false
+      - name: "variations"
+        description: "Product variations"
+        required: false
+      - name: "shop_id"
+        description: "Shop ID"
+        required: true
+
+  - id: "get_products"
+    text: "Get products list"
+    description: "Get paginated list of products"
+    parameters:
+      - name: "text"
+        description: "Search text"
+        required: false
+      - name: "first"
+        description: "Number of items per page"
+        required: false
+        default: 15
+      - name: "page"
+        description: "Page number"
+        required: false
+        default: 1
+      - name: "shop_id"
+        description: "Filter by shop ID"
+        required: false
+
+  # Orders
+  - id: "create_order"
+    text: "Create order"
+    description: "Create a new order"
+    parameters:
+      - name: "shop_id"
+        description: "Shop ID"
+        required: true
+      - name: "products"
+        description: "List of products with quantities"
+        required: true
+      - name: "amount"
+        description: "Total amount"
+        required: true
+      - name: "customer_contact"
+        description: "Customer contact info"
+        required: true
+      - name: "billing_address"
+        description: "Billing address"
+        required: true
+      - name: "shipping_address"
+        description: "Shipping address"
+        required: true
+
+  - id: "get_orders"
+    text: "Get orders list"
+    description: "Get paginated list of orders"
+    parameters:
+      - name: "first"
+        description: "Number of items per page"
+        required: false
+        default: 15
+      - name: "page"
+        description: "Page number"
+        required: false
+        default: 1
+      - name: "customer_id"
+        description: "Filter by customer ID"
+        required: false
+      - name: "shop_id"
+        description: "Filter by shop ID"
+        required: false
+
+  # Shops
+  - id: "create_shop"
+    text: "Create shop"
+    description: "Create a new shop"
+    parameters:
+      - name: "name"
+        description: "Shop name"
+        required: true
+      - name: "description"
+        description: "Shop description"
+        required: false
+      - name: "cover_image"
+        description: "Shop cover image"
+        required: false
+      - name: "logo"
+        description: "Shop logo"
+        required: false
+      - name: "address"
+        description: "Shop address"
+        required: false
+
+  - id: "get_shops"
+    text: "Get shops list"
+    description: "Get paginated list of shops"
+    parameters:
+      - name: "text"
+        description: "Search text"
+        required: false
+      - name: "first"
+        description: "Number of items per page"
+        required: false
+        default: 15
+      - name: "page"
+        description: "Page number"
+        required: false
+        default: 1
+
+  # Categories
+  - id: "create_category"
+    text: "Create category"
+    description: "Create a new product category"
+    parameters:
+      - name: "name"
+        description: "Category name"
+        required: true
+      - name: "details"
+        description: "Category details"
+        required: false
+      - name: "parent"
+        description: "Parent category ID"
+        required: false
+      - name: "type_id"
+        description: "Category type ID"
+        required: false
+
+  # Attributes
+  - id: "create_attribute"
+    text: "Create attribute"
+    description: "Create a new product attribute"
+    parameters:
+      - name: "name"
+        description: "Attribute name"
+        required: true
+      - name: "shop_id"
+        description: "Shop ID"
+        required: true
+      - name: "values"
+        description: "Attribute values"
+        required: true
+
+  # Reviews
+  - id: "create_review"
+    text: "Create review"
+    description: "Create a product review"
+    parameters:
+      - name: "product_id"
+        description: "Product ID"
+        required: true
+      - name: "rating"
+        description: "Rating value"
+        required: true
+      - name: "comment"
+        description: "Review comment"
+        required: true
+      - name: "photos"
+        description: "Review photos"
+        required: false
+
+  # Payments
+  - id: "create_payment_intent"
+    text: "Create payment intent"
+    description: "Create a payment intent for order"
+    parameters:
+      - name: "tracking_number"
+        description: "Order tracking number"
+        required: true
+      - name: "payment_gateway"
+        description: "Payment gateway type"
+        required: true
+        alternatives:
+          - "stripe"
+          - "paypal"
+
+  # Withdraws
+  - id: "create_withdraw"
+    text: "Create withdraw request"
+    description: "Create a withdrawal request"
+    parameters:
+      - name: "amount"
+        description: "Withdrawal amount"
+        required: true
+      - name: "shop_id"
+        description: "Shop ID"
+        required: true
+      - name: "payment_method"
+        description: "Payment method"
+        required: true
+      - name: "details"
+        description: "Bank/payment details"
+        required: true
+
+  # Settings
+  - id: "update_settings"
+    text: "Update settings"
+    description: "Update application settings"
+    parameters:
+      - name: "options"
+        description: "Settings options"
+        required: true
+      - name: "language"
+        description: "Settings language"
+        required: false
+
+  # File Upload
+  - id: "upload"
+    text: "Upload file"
+    description: "Upload file attachment"
+    parameters:
+      - name: "attachment"
+        description: "File to upload"
+        required: true

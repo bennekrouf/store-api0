@@ -1,6 +1,6 @@
 whoami: "api-store"
 output: grpc # console, file
-level: trace
+level: debug
 grpc:
   address: "127.0.0.1"
   port: 50052

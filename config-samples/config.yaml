@@ -1,0 +1,59 @@
+# Sensei Store Configuration
+
+# Service settings
+service:
+  name: sensei-store
+  version: 1.0.0
+  port: 50055
+  host: 0.0.0.0
+  workers: 4
+
+# DuckDB settings
+database:
+  path: ./data/sensei.db
+  cache_size_mb: 100
+  memory_limit_mb: 500
+
+# gRPC connection for logging
+grpc:
+  logger:
+    host: localhost
+    port: 50052
+    timeout_ms: 5000
+    retry_max: 3
+    retry_delay_ms: 1000
+
+# Metrics and monitoring
+metrics:
+  enabled: true
+  path: /metrics
+  collect_interval_ms: 10000
+
+# Security settings
+security:
+  tls:
+    enabled: true
+    cert_path: /etc/sensei/certs/sensei-store.crt
+    key_path: /etc/sensei/certs/sensei-store.key
+  cors:
+    allowed_origins:
+      - https://app.apisensei.ai
+      - https://apisensei.ai
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+    allowed_headers:
+      - Authorization
+      - Content-Type
+    max_age_secs: 86400
+
+# Tracing configuration
+tracing:
+  level: info
+  file_path: /var/log/sensei/sensei-store.log
+  rotation:
+    size_mb: 100
+    age_days: 7
+    files_kept: 10
