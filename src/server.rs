@@ -4,11 +4,11 @@ use crate::endpoint::{
     Parameter as ProtoParameter,
 };
 use crate::Endpoint;
-use api_store::EndpointStore;
-use std::sync::Arc;
-use tonic::{Request, Response, Status};
-use tokio_stream::Stream;
+use sensei_store::EndpointStore;
 use std::pin::Pin;
+use std::sync::Arc;
+use tokio_stream::Stream;
+use tonic::{Request, Response, Status};
 
 use crate::endpoint::UploadEndpointsRequest;
 use crate::endpoint::UploadEndpointsResponse;
@@ -29,8 +29,8 @@ impl EndpointServiceImpl {
 
 #[tonic::async_trait]
 impl EndpointService for EndpointServiceImpl {
-
-    type GetDefaultEndpointsStream = Pin<Box<dyn Stream<Item = Result<GetEndpointsResponse, Status>> + Send + 'static>>;
+    type GetDefaultEndpointsStream =
+        Pin<Box<dyn Stream<Item = Result<GetEndpointsResponse, Status>> + Send + 'static>>;
 
     async fn get_default_endpoints(
         &self,
@@ -177,7 +177,7 @@ impl EndpointService for EndpointServiceImpl {
                 "Unsupported file format"
             );
             return Err(Status::invalid_argument(
-                "Unsupported file format. Please upload a YAML (.yaml/.yml) or JSON (.json) file."
+                "Unsupported file format. Please upload a YAML (.yaml/.yml) or JSON (.json) file.",
             ));
         };
 
@@ -187,20 +187,24 @@ impl EndpointService for EndpointServiceImpl {
                 email = %email,
                 "No endpoints found in uploaded file"
             );
-            return Err(Status::invalid_argument("No endpoints found in uploaded file"));
+            return Err(Status::invalid_argument(
+                "No endpoints found in uploaded file",
+            ));
         }
 
         // Validate endpoint structure
         for (index, endpoint) in endpoints.iter().enumerate() {
             if endpoint.id.trim().is_empty() {
-                return Err(Status::invalid_argument(
-                    format!("Endpoint at index {} has an empty ID", index)
-                ));
+                return Err(Status::invalid_argument(format!(
+                    "Endpoint at index {} has an empty ID",
+                    index
+                )));
             }
             if endpoint.text.trim().is_empty() {
-                return Err(Status::invalid_argument(
-                    format!("Endpoint '{}' has an empty text", endpoint.id)
-                ));
+                return Err(Status::invalid_argument(format!(
+                    "Endpoint '{}' has an empty text",
+                    endpoint.id
+                )));
             }
         }
 
@@ -224,7 +228,10 @@ impl EndpointService for EndpointServiceImpl {
                     email = %email,
                     "Failed to import endpoints"
                 );
-                Err(Status::internal(format!("Failed to import endpoints: {}", e)))
+                Err(Status::internal(format!(
+                    "Failed to import endpoints: {}",
+                    e
+                )))
             }
         }
     }

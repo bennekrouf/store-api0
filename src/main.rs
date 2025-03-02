@@ -1,7 +1,7 @@
 mod server;
 use crate::server::EndpointServiceImpl;
-use api_store::{Endpoint, EndpointStore};
 use endpoint::endpoint_service_server::EndpointServiceServer;
+use sensei_store::{Endpoint, EndpointStore};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tonic::transport::Server;
