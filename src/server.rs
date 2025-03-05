@@ -20,9 +20,9 @@ pub struct EndpointServiceImpl {
 }
 
 impl EndpointServiceImpl {
-    pub fn new(store: EndpointStore) -> Self {
+    pub fn new(store: Arc<EndpointStore>) -> Self {
         Self {
-            store: Arc::new(store),
+            store, //: Arc::new(store),
         }
     }
 }
@@ -122,6 +122,7 @@ impl EndpointService for EndpointServiceImpl {
         &self,
         request: Request<UploadEndpointsRequest>,
     ) -> Result<Response<UploadEndpointsResponse>, Status> {
+        println!("Enter upload_endpoints");
         let req = request.into_inner();
         let email = req.email;
         let file_content = String::from_utf8(req.file_content.clone())
