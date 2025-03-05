@@ -247,7 +247,16 @@ impl EndpointStore {
         let mut endpoints_map = std::collections::HashMap::new();
         for row in rows {
             match row {
-                Ok((id, text, description, verb, param_name, param_desc, required, alternatives_str)) => {
+                Ok((
+                    id,
+                    text,
+                    description,
+                    verb,
+                    param_name,
+                    param_desc,
+                    required,
+                    alternatives_str,
+                )) => {
                     tracing::trace!(
                         endpoint_id = %id,
                         has_parameter = param_name.is_some(),
@@ -340,8 +349,8 @@ impl EndpointStore {
             }
             Err(e) => {
                 tracing::error!(
-                    error = %e, 
-                    email = %email, 
+                    error = %e,
+                    email = %email,
                     "Failed to clean up user data, will try fallback approach"
                 );
 
@@ -370,7 +379,7 @@ impl EndpointStore {
                 [&endpoint.id],
                 |row| row.get(0),
             )?;
-            
+
             if !exists {
                 // Create new endpoint
                 tracing::debug!(endpoint_id = %endpoint.id, "Creating new endpoint");
@@ -385,27 +394,32 @@ impl EndpointStore {
                     [&endpoint.id],
                     |row| row.get(0),
                 )?;
-                
+
                 if !is_default {
                     // Update existing non-default endpoint
                     tracing::debug!(endpoint_id = %endpoint.id, "Updating existing endpoint");
                     tx.execute(
                         "UPDATE endpoints SET text = ?, description = ?, verb = ? WHERE id = ?",
-                        &[&endpoint.text, &endpoint.description, &endpoint.verb, &endpoint.id],
+                        &[
+                            &endpoint.text,
+                            &endpoint.description,
+                            &endpoint.verb,
+                            &endpoint.id,
+                        ],
                     )?;
                 }
             }
-            
+
             // Link to user (ignore if already exists)
             tracing::debug!(email = %email, endpoint_id = %endpoint.id, "Linking endpoint to user");
             tx.execute(
                 "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
                 &[email, &endpoint.id],
             )?;
-            
+
             imported_count += 1;
         }
-        
+
         // Add parameters in a separate loop after all endpoints are created/updated
         for endpoint in &endpoints {
             let is_default: bool = tx.query_row(
@@ -413,38 +427,38 @@ impl EndpointStore {
                 [&endpoint.id],
                 |row| row.get(0),
             )?;
-            
+
             if !is_default {
                 // Try to clean up existing parameters first
                 let _ = tx.execute(
                     "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
                     [&endpoint.id],
                 );
-                
+
                 let _ = tx.execute(
                     "DELETE FROM parameters WHERE endpoint_id = ?",
                     [&endpoint.id],
                 );
-                
+
                 // Now add the new parameters
                 for param in &endpoint.parameters {
                     tracing::debug!(
-                        endpoint_id = %endpoint.id, 
-                        param = %param.name, 
+                        endpoint_id = %endpoint.id,
+                        param = %param.name,
                         "Adding parameter"
                     );
-                    
+
                     tx.execute(
                         "INSERT INTO parameters (endpoint_id, name, description, required) 
                         VALUES (?, ?, ?, ?)",
                         &[
-                            &endpoint.id, 
-                            &param.name, 
-                            &param.description, 
+                            &endpoint.id,
+                            &param.name,
+                            &param.description,
                             &param.required.to_string(),
                         ],
                     )?;
-                    
+
                     for alt in &param.alternatives {
                         tx.execute(
                             "INSERT INTO parameter_alternatives 
@@ -456,34 +470,38 @@ impl EndpointStore {
                 }
             }
         }
-        
+
         tx.commit()?;
-        
+
         tracing::info!(
-            email = %email, 
-            count = imported_count, 
+            email = %email,
+            count = imported_count,
             "Successfully imported endpoints"
         );
-        
+
         Ok(imported_count)
     }
 
     // Fallback cleanup approach - more conservative
-    fn fallback_clean_user_data(&self, email: &str, conn: &mut Connection) -> Result<(), StoreError> {
+    fn fallback_clean_user_data(
+        &self,
+        email: &str,
+        conn: &mut Connection,
+    ) -> Result<(), StoreError> {
         let tx = conn.transaction()?;
-        
+
         // Get all custom endpoint IDs for this user first
         let mut stmt = tx.prepare(
             "SELECT e.id 
             FROM endpoints e
             JOIN user_endpoints ue ON e.id = ue.endpoint_id
-            WHERE ue.email = ? AND e.is_default = false"
+            WHERE ue.email = ? AND e.is_default = false",
         )?;
-        
+
         let endpoint_ids: Vec<String> = stmt
             .query_map([email], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
-        
+
         // Remove user-endpoint associations
         for id in &endpoint_ids {
             let _ = tx.execute(
@@ -491,7 +509,7 @@ impl EndpointStore {
                 &[email, id],
             );
         }
-        
+
         // Now check which endpoints are no longer used
         for id in &endpoint_ids {
             let still_used: bool = tx.query_row(
@@ -499,28 +517,22 @@ impl EndpointStore {
                 [id],
                 |row| row.get(0),
             )?;
-            
+
             if !still_used {
                 // Remove parameter alternatives first
                 let _ = tx.execute(
                     "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
                     [id],
                 );
-                
+
                 // Then remove parameters
-                let _ = tx.execute(
-                    "DELETE FROM parameters WHERE endpoint_id = ?",
-                    [id],
-                );
-                
+                let _ = tx.execute("DELETE FROM parameters WHERE endpoint_id = ?", [id]);
+
                 // Finally remove the endpoint
-                let _ = tx.execute(
-                    "DELETE FROM endpoints WHERE id = ?",
-                    [id],
-                );
+                let _ = tx.execute("DELETE FROM endpoints WHERE id = ?", [id]);
             }
         }
-        
+
         tx.commit()?;
         Ok(())
     }
@@ -528,10 +540,10 @@ impl EndpointStore {
     fn force_clean_user_data(&self, email: &str, conn: &mut Connection) -> Result<(), StoreError> {
         // First turn off foreign keys
         conn.execute("PRAGMA foreign_keys=OFF;", [])?;
-        
+
         // Execute the cleaning operations in a transaction
         let tx = conn.transaction()?;
-        
+
         // Create a temporary table to track user's custom endpoints
         tx.execute(
             "CREATE TEMPORARY TABLE user_custom_endpoints AS
@@ -541,24 +553,24 @@ impl EndpointStore {
             WHERE ue.email = ? AND e.is_default = false",
             [email],
         )?;
-        
+
         // Delete parameter alternatives
         tx.execute(
             "DELETE FROM parameter_alternatives 
             WHERE endpoint_id IN (SELECT id FROM user_custom_endpoints)",
             [],
         )?;
-        
+
         // Delete parameters
         tx.execute(
             "DELETE FROM parameters
             WHERE endpoint_id IN (SELECT id FROM user_custom_endpoints)",
             [],
         )?;
-        
+
         // Delete user endpoint associations
         tx.execute("DELETE FROM user_endpoints WHERE email = ?", [email])?;
-        
+
         // Delete endpoints that are no longer referenced and not default
         tx.execute(
             "DELETE FROM endpoints 
@@ -568,16 +580,16 @@ impl EndpointStore {
             )",
             [],
         )?;
-        
+
         // Clean up temporary table
         tx.execute("DROP TABLE user_custom_endpoints", [])?;
-        
+
         // Commit the transaction
         tx.commit()?;
-        
+
         // Turn foreign keys back on
         conn.execute("PRAGMA foreign_keys=ON;", [])?;
-        
+
         Ok(())
     }
 }
