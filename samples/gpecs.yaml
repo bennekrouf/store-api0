@@ -1,0 +1,2320 @@
+# Exhaustive API Endpoints List
+
+## Case Management Module
+
+endpoints:
+  - id: "action_list"
+    text: "list actions"
+    description: "Get a list of actions for a specific application"
+    verb: "GET"
+    parameters:
+      - name: "idApplication"
+        description: "ID of the application"
+        required: true
+
+  - id: "application_get"
+    text: "get application"
+    description: "Retrieve application details by ID"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "Application ID"
+        required: true
+
+  - id: "bootstrap"
+    text: "get bootstrap data"
+    description: "Retrieve environment configuration and bootstrap data"
+    verb: "GET"
+    parameters: []
+
+  - id: "etat_list"
+    text: "list states"
+    description: "Get a list of states for a specific application"
+    verb: "GET"
+    parameters:
+      - name: "idApplication"
+        description: "ID of the application"
+        required: true
+
+  - id: "historiqueetat_list"
+    text: "list state history"
+    description: "Get history of state changes for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "pIdProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "historiqueetat_get"
+    text: "get state history"
+    description: "Get specific state history by ID"
+    verb: "GET"
+    parameters:
+      - name: "pId"
+        description: "ID of the state history"
+        required: true
+
+  - id: "procedure_create"
+    text: "create procedure"
+    description: "Create a new procedure"
+    verb: "POST"
+    parameters:
+      - name: "idApplication"
+        description: "ID of the application"
+        required: true
+      - name: "dateObjetMetier"
+        description: "Date of the business object"
+        required: true
+
+  - id: "procedure_get"
+    text: "get procedure"
+    description: "Retrieve procedure details by ID"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "Procedure ID"
+        required: true
+
+  - id: "procedure_actions_possibles"
+    text: "get possible actions"
+    description: "Get possible actions for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "procedure_informations"
+    text: "get procedure information"
+    description: "Get information for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+
+  - id: "procedure_effectuer_action"
+    text: "perform action on procedure"
+    description: "Perform an action on a procedure"
+    verb: "POST"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "idAction"
+        description: "ID of the action"
+        required: true
+      - name: "date"
+        description: "Date of the action"
+        required: true
+
+## Admin Module
+
+endpoints:
+  - id: "bannette_list"
+    text: "list bannettes"
+    description: "Get a list of bannettes"
+    verb: "GET"
+    parameters: []
+
+  - id: "bannette_download"
+    text: "download bannette document"
+    description: "Download a document from a bannette"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the document"
+        required: true
+      - name: "nom"
+        description: "Name of the document"
+        required: true
+
+  - id: "bannette_delete"
+    text: "delete bannette"
+    description: "Delete a bannette"
+    verb: "DELETE"
+    parameters:
+      - name: "id"
+        description: "ID of the bannette"
+        required: true
+
+  - id: "generer_bordereau"
+    text: "generate bordereau"
+    description: "Generate a bordereau document"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+
+  - id: "courrier_list"
+    text: "list mails"
+    description: "Get a list of mails"
+    verb: "GET"
+    parameters:
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+
+  - id: "courrier_upload"
+    text: "upload mail"
+    description: "Upload a new mail"
+    verb: "POST"
+    parameters:
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+      - name: "file"
+        description: "File to upload"
+        required: true
+
+  - id: "courrier_download"
+    text: "download mail"
+    description: "Download a mail"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the mail"
+        required: true
+      - name: "nom"
+        description: "Name of the mail"
+        required: true
+
+  - id: "courrier_delete"
+    text: "delete mail"
+    description: "Delete a mail"
+    verb: "DELETE"
+    parameters:
+      - name: "id"
+        description: "ID of the mail"
+        required: true
+
+  - id: "courrier_generate"
+    text: "generate mail"
+    description: "Generate a mail document"
+    verb: "GET"
+    parameters:
+      - name: "idCourrier"
+        description: "ID of the mail"
+        required: true
+      - name: "nomCourrier"
+        description: "Name of the mail"
+        required: true
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+      - name: "idProcedureSignalementAssocie"
+        description: "ID of the associated reporting procedure"
+        required: true
+
+  - id: "courrier_tester"
+    text: "test mail"
+    description: "Test a mail document"
+    verb: "GET"
+    parameters:
+      - name: "idCourrier"
+        description: "ID of the mail"
+        required: true
+      - name: "nomCourrier"
+        description: "Name of the mail"
+        required: true
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+
+  - id: "document_antivirus"
+    text: "check document with antivirus"
+    description: "Check a document with antivirus"
+    verb: "POST"
+    parameters:
+      - name: "file"
+        description: "File to check"
+        required: true
+
+  - id: "document_upload"
+    text: "upload document"
+    description: "Upload a new document"
+    verb: "POST"
+    parameters:
+      - name: "file"
+        description: "File to upload"
+        required: true
+      - name: "idEvenement"
+        description: "ID of the event"
+        required: true
+
+  - id: "document_download"
+    text: "download document"
+    description: "Download a document"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the document"
+        required: true
+      - name: "nom"
+        description: "Name of the document"
+        required: true
+
+  - id: "document_delete"
+    text: "delete document"
+    description: "Delete a document"
+    verb: "DELETE"
+    parameters:
+      - name: "id"
+        description: "ID of the document"
+        required: true
+
+  - id: "evenement_get"
+    text: "get event"
+    description: "Retrieve event details by ID"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "Event ID"
+        required: true
+
+  - id: "evenement_list"
+    text: "list events"
+    description: "Get a list of events"
+    verb: "GET"
+    parameters:
+      - name: "typeObjetMetier"
+        description: "Type of business object"
+        required: true
+      - name: "ids"
+        description: "List of IDs"
+        required: true
+
+  - id: "evenement_create"
+    text: "create event"
+    description: "Create a new event"
+    verb: "POST"
+    parameters:
+      - name: "evenementDto"
+        description: "Event data"
+        required: true
+
+  - id: "evenement_update"
+    text: "update event"
+    description: "Update an event"
+    verb: "PUT"
+    parameters:
+      - name: "id"
+        description: "ID of the event"
+        required: true
+      - name: "dto"
+        description: "Event data"
+        required: true
+
+  - id: "evenement_checkDroitPourModification"
+    text: "check rights for modification"
+    description: "Check rights for modifying an event"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the event"
+        required: true
+
+  - id: "evenement_delete"
+    text: "delete event"
+    description: "Delete an event"
+    verb: "DELETE"
+    parameters:
+      - name: "id"
+        description: "ID of the event"
+        required: true
+
+  - id: "recherche"
+    text: "search"
+    description: "Search for objects"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "tableauStatistiques_genererTableauStatistiquesCS"
+    text: "generate CS statistics table"
+    description: "Generate CS statistics table"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "tableauStatistiques_genererTableauStatistiquesSignalement"
+    text: "generate reporting statistics table"
+    description: "Generate reporting statistics table"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "tableauStatistiques_genererTableauStatistiquesSignalementsEtDoleances"
+    text: "generate reports and complaints statistics table"
+    description: "Generate reports and complaints statistics table"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "trace_generate"
+    text: "generate person trace"
+    description: "Generate person trace"
+    verb: "GET"
+    parameters:
+      - name: "idPersonne"
+        description: "ID of the person"
+        required: true
+
+## Person Module
+
+endpoints:
+  - id: "persons_search"
+    text: "search persons"
+    description: "Search for persons"
+    verb: "GET"
+    parameters:
+      - name: "type"
+        description: "Type of search"
+        required: true
+      - name: "q"
+        description: "Search query"
+        required: true
+
+  - id: "persons_save"
+    text: "save person"
+    description: "Save a person"
+    verb: "POST"
+    parameters:
+      - name: "personneDto"
+        description: "Person data"
+        required: true
+
+  - id: "persons_updateMembreCS"
+    text: "update CS member"
+    description: "Update a CS member"
+    verb: "PUT"
+    parameters:
+      - name: "id"
+        description: "ID of the person"
+        required: true
+      - name: "dateDebut"
+        description: "Start date"
+        required: true
+      - name: "dateFin"
+        description: "End date"
+        required: false
+
+  - id: "persons_get"
+    text: "get person"
+    description: "Retrieve person details by ID"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "Person ID"
+        required: true
+
+  - id: "persons_adressesPROGRES"
+    text: "get PROGRES addresses"
+    description: "Get PROGRES addresses for a person"
+    verb: "GET"
+    parameters:
+      - name: "idPersonne"
+        description: "ID of the person"
+        required: true
+
+  - id: "persons_specialisationsPROGRES"
+    text: "get PROGRES specializations"
+    description: "Get PROGRES specializations for a person"
+    verb: "GET"
+    parameters:
+      - name: "idPersonne"
+        description: "ID of the person"
+        required: true
+
+  - id: "persons_getMembreCS"
+    text: "get CS members"
+    description: "Get CS members"
+    verb: "GET"
+    parameters: []
+
+  - id: "persons_getMembreCSActives"
+    text: "get active CS members"
+    description: "Get active CS members"
+    verb: "GET"
+    parameters: []
+
+  - id: "persons_rechercherPersonnesByIds"
+    text: "search persons by IDs"
+    description: "Search for persons by IDs"
+    verb: "GET"
+    parameters:
+      - name: "ids"
+        description: "List of person IDs"
+        required: true
+
+  - id: "refinf_listePays"
+    text: "get countries list"
+    description: "Get list of countries"
+    verb: "GET"
+    parameters: []
+
+  - id: "refinf_localitesByNPA"
+    text: "get localities by postal code"
+    description: "Get localities by postal code"
+    verb: "GET"
+    parameters:
+      - name: "codePostal"
+        description: "Postal code"
+        required: true
+
+  - id: "refinf_localitesByLibelle"
+    text: "get localities by name"
+    description: "Get localities by name"
+    verb: "GET"
+    parameters:
+      - name: "libelle"
+        description: "Locality name"
+        required: true
+
+## Signalement (Reporting) Module
+
+endpoints:
+  - id: "commission_get"
+    text: "get commission"
+    description: "Retrieve commission details by ID"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "Commission ID"
+        required: true
+
+  - id: "commission_planifiees"
+    text: "get planned commissions"
+    description: "Get planned commissions"
+    verb: "GET"
+    parameters: []
+
+  - id: "commission_passees"
+    text: "get past commissions"
+    description: "Get past commissions"
+    verb: "GET"
+    parameters: []
+
+  - id: "commission_create"
+    text: "create commission"
+    description: "Create a new commission"
+    verb: "POST"
+    parameters:
+      - name: "commission"
+        description: "Commission data"
+        required: true
+
+  - id: "commission_reorderCommissionProcedure"
+    text: "reorder commission procedure"
+    description: "Reorder commission procedure"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the commission"
+        required: true
+      - name: "position"
+        description: "Position to remove"
+        required: true
+
+  - id: "commission_update"
+    text: "update commission"
+    description: "Update a commission"
+    verb: "PUT"
+    parameters:
+      - name: "commission"
+        description: "Commission data"
+        required: true
+
+  - id: "commission_numeroUnique"
+    text: "check unique commission number"
+    description: "Check if commission number is unique"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the commission"
+        required: true
+      - name: "dateCommission"
+        description: "Date of the commission"
+        required: true
+
+  - id: "commission_getCommissionsForProcedure"
+    text: "get commissions for procedure"
+    description: "Get commissions for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "commission_getForProcedure"
+    text: "get commission for procedure"
+    description: "Get commission for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "commission_getMisEnCauseForCommission"
+    text: "get accused for commission"
+    description: "Get accused persons for a commission"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the commission"
+        required: true
+
+  - id: "commission_sauverOrdreProcedures"
+    text: "save procedures order"
+    description: "Save the order of procedures"
+    verb: "POST"
+    parameters:
+      - name: "liste"
+        description: "List of sessions"
+        required: true
+
+  - id: "commission_exportProcedureAssociees"
+    text: "export associated procedures"
+    description: "Export associated procedures"
+    verb: "GET"
+    parameters:
+      - name: "idCommission"
+        description: "ID of the commission"
+        required: true
+
+  - id: "doleance_recherche"
+    text: "search complaints"
+    description: "Search for complaints"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "doleance_create"
+    text: "create complaint"
+    description: "Create a new complaint"
+    verb: "POST"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+
+  - id: "doleance_update"
+    text: "update complaint"
+    description: "Update a complaint"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+
+  - id: "doleance_enCours"
+    text: "get ongoing complaints"
+    description: "Get ongoing complaints"
+    verb: "GET"
+    parameters: []
+
+  - id: "doleance_forProcedure"
+    text: "get complaint for procedure"
+    description: "Get complaint for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "doleance_signalementsMemeSignalant"
+    text: "get complaints from same reporter"
+    description: "Get complaints from the same reporter"
+    verb: "GET"
+    parameters:
+      - name: "idSignalant"
+        description: "ID of the reporter"
+        required: true
+      - name: "idSignalement"
+        description: "ID of the complaint"
+        required: false
+
+  - id: "doleance_effectuerAction"
+    text: "perform action on complaint"
+    description: "Perform an action on a complaint"
+    verb: "POST"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "idAction"
+        description: "ID of the action"
+        required: true
+      - name: "date"
+        description: "Date of the action"
+        required: true
+
+  - id: "doleance_clotureN1"
+    text: "close complaint N1"
+    description: "Close a complaint at N1 level"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of closure"
+        required: false
+
+  - id: "doleance_clotureN2"
+    text: "close complaint N2"
+    description: "Close a complaint at N2 level"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of closure"
+        required: false
+
+  - id: "doleance_transmettreCommission"
+    text: "forward complaint to commission"
+    description: "Forward a complaint to a commission"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of forwarding"
+        required: false
+
+  - id: "doleance_choisirOrientation"
+    text: "choose complaint orientation"
+    description: "Choose orientation for a complaint"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of orientation"
+        required: false
+
+  - id: "doleance_orientationOmc"
+    text: "orient complaint to OMC"
+    description: "Orient a complaint to OMC"
+    verb: "POST"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of orientation"
+        required: false
+
+  - id: "doleance_orientationGenerale"
+    text: "general orientation of complaint"
+    description: "General orientation of a complaint"
+    verb: "POST"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of orientation"
+        required: false
+
+  - id: "doleance_reorienter"
+    text: "reorient complaint"
+    description: "Reorient a complaint"
+    verb: "POST"
+    parameters:
+      - name: "signalement"
+        description: "Complaint data"
+        required: true
+      - name: "date"
+        description: "Date of reorientation"
+        required: false
+
+  - id: "doleance_openForUser"
+    text: "get open complaints for user"
+    description: "Get open complaints for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "doleance_closedForUser"
+    text: "get closed complaints for user"
+    description: "Get closed complaints for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "doleance_getForEnqueteCS"
+    text: "get complaints for CS investigation"
+    description: "Get complaints for a CS investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "doleance_getForEnqueteCSResume"
+    text: "get complaint summaries for CS investigation"
+    description: "Get complaint summaries for a CS investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "doleance_getForEnquetePenale"
+    text: "get complaints for criminal investigation"
+    description: "Get complaints for a criminal investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnquetePenale"
+        description: "ID of the criminal investigation"
+        required: true
+
+  - id: "doleance_getForEnqueteCop"
+    text: "get complaints for COP investigation"
+    description: "Get complaints for a COP investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCop"
+        description: "ID of the COP investigation"
+        required: true
+
+  - id: "doleance_getForEnqueteOMC"
+    text: "get complaints for OMC investigation"
+    description: "Get complaints for an OMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteOMC"
+        description: "ID of the OMC investigation"
+        required: true
+
+  - id: "doleance_getForEnqueteAOMC"
+    text: "get complaints for AOMC investigation"
+    description: "Get complaints for an AOMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteAOMC"
+        description: "ID of the AOMC investigation"
+        required: true
+
+  - id: "doleance_getForPleniere"
+    text: "get complaints for plenary"
+    description: "Get complaints for a plenary session"
+    verb: "GET"
+    parameters:
+      - name: "idPleniere"
+        description: "ID of the plenary session"
+        required: true
+
+  - id: "doleance_getForCommission"
+    text: "get complaints for commission"
+    description: "Get complaints for a commission"
+    verb: "GET"
+    parameters:
+      - name: "idCommission"
+        description: "ID of the commission"
+        required: true
+
+  - id: "doleance_genererFicheInstructionPlainte"
+    text: "generate complaint instruction sheet"
+    description: "Generate complaint instruction sheet"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "doleance_getAllSignalement"
+    text: "get all complaints in range"
+    description: "Get all complaints in a date range"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "droitsfins_getAll"
+    text: "get all rights"
+    description: "Get all fine-grained rights"
+    verb: "GET"
+    parameters: []
+
+  - id: "echeance_nonTraitees"
+    text: "get unprocessed deadlines"
+    description: "Get unprocessed deadlines"
+    verb: "GET"
+    parameters: []
+
+  - id: "echeance_create"
+    text: "create deadline"
+    description: "Create a new deadline"
+    verb: "POST"
+    parameters:
+      - name: "echeance"
+        description: "Deadline data"
+        required: true
+
+  - id: "echeance_update"
+    text: "update deadline"
+    description: "Update a deadline"
+    verb: "PUT"
+    parameters:
+      - name: "echeance"
+        description: "Deadline data"
+        required: true
+
+  - id: "echeance_delete"
+    text: "delete deadline"
+    description: "Delete a deadline"
+    verb: "DELETE"
+    parameters:
+      - name: "id"
+        description: "ID of the deadline"
+        required: true
+
+  - id: "echeance_traiter"
+    text: "process deadline"
+    description: "Process a deadline"
+    verb: "POST"
+    parameters:
+      - name: "id"
+        description: "ID of the deadline"
+        required: true
+
+  - id: "echeance_list"
+    text: "list deadlines"
+    description: "Get a list of deadlines"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "enqueteAOMC_create"
+    text: "create AOMC investigation"
+    description: "Create a new AOMC investigation"
+    verb: "POST"
+    parameters:
+      - name: "enqueteAOMC"
+        description: "AOMC investigation data"
+        required: true
+
+  - id: "enqueteAOMC_update"
+    text: "update AOMC investigation"
+    description: "Update an AOMC investigation"
+    verb: "PUT"
+    parameters:
+      - name: "enqueteAOMC"
+        description: "AOMC investigation data"
+        required: true
+
+  - id: "enqueteAOMC_forProcedure"
+    text: "get AOMC investigation for procedure"
+    description: "Get AOMC investigation for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "enqueteAOMC_openForUser"
+    text: "get open AOMC investigations for user"
+    description: "Get open AOMC investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enqueteAOMC_closedForUser"
+    text: "get closed AOMC investigations for user"
+    description: "Get closed AOMC investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enqueteAOMC_getForSignalement"
+    text: "get AOMC investigations for report"
+    description: "Get AOMC investigations for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "enqueteAOMC_getForDoleance"
+    text: "get AOMC investigations for complaint"
+    description: "Get AOMC investigations for a complaint"
+    verb: "GET"
+    parameters:
+      - name: "idDoleance"
+        description: "ID of the complaint"
+        required: true
+
+  - id: "enqueteAOMC_getForMisEnCause"
+    text: "get AOMC investigations for accused"
+    description: "Get AOMC investigations for an accused person"
+    verb: "GET"
+    parameters:
+      - name: "idMisEnCause"
+        description: "ID of the accused person"
+        required: true
+
+  - id: "enqueteAOMC_getForMesureCDSAS"
+    text: "get AOMC investigations for CDSAS measure"
+    description: "Get AOMC investigations for a CDSAS measure"
+    verb: "GET"
+    parameters:
+      - name: "idMesureCDSAS"
+        description: "ID of the CDSAS measure"
+        required: true
+
+  - id: "enqueteAOMC_recherche"
+    text: "search AOMC investigations"
+    description: "Search for AOMC investigations"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "enqueteAOMC_decider"
+    text: "decide on AOMC investigation"
+    description: "Make a decision on an AOMC investigation"
+    verb: "POST"
+    parameters:
+      - name: "deciderResponseDTO"
+        description: "Decision data"
+        required: true
+
+  - id: "enqueteAOMC_getForCommission"
+    text: "get AOMC investigations for commission"
+    description: "Get AOMC investigations for a commission"
+    verb: "GET"
+    parameters:
+      - name: "idCommission"
+        description: "ID of the commission"
+        required: true
+
+  - id: "conseilsante_recherche"
+    text: "search health council investigations"
+    description: "Search for health council investigations"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "conseilsante_enCours"
+    text: "get ongoing health council investigations"
+    description: "Get ongoing health council investigations"
+    verb: "GET"
+    parameters: []
+
+  - id: "conseilsante_forProcedure"
+    text: "get health council investigation for procedure"
+    description: "Get health council investigation for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "conseilsante_openForUser"
+    text: "get open health council investigations for user"
+    description: "Get open health council investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "conseilsante_closedForUser"
+    text: "get closed health council investigations for user"
+    description: "Get closed health council investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "conseilsante_getForSignalement"
+    text: "get health council investigations for report"
+    description: "Get health council investigations for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "conseilsante_getForDoleance"
+    text: "get health council investigations for complaint"
+    description: "Get health council investigations for a complaint"
+    verb: "GET"
+    parameters:
+      - name: "idDoleance"
+        description: "ID of the complaint"
+        required: true
+
+  - id: "conseilsante_getForMesureCDSAS"
+    text: "get health council investigations for CDSAS measure"
+    description: "Get health council investigations for a CDSAS measure"
+    verb: "GET"
+    parameters:
+      - name: "idMesureCDSAS"
+        description: "ID of the CDSAS measure"
+        required: true
+
+  - id: "conseilsante_getForPleniere"
+    text: "get health council investigations for plenary"
+    description: "Get health council investigations for a plenary session"
+    verb: "GET"
+    parameters:
+      - name: "idPleniere"
+        description: "ID of the plenary session"
+        required: true
+
+  - id: "conseilsante_getForMisEnCause"
+    text: "get health council investigations for accused"
+    description: "Get health council investigations for an accused person"
+    verb: "GET"
+    parameters:
+      - name: "idMisEnCause"
+        description: "ID of the accused person"
+        required: true
+
+  - id: "conseilsante_create"
+    text: "create health council investigation"
+    description: "Create a new health council investigation"
+    verb: "POST"
+    parameters:
+      - name: "enqueteConseilSante"
+        description: "Health council investigation data"
+        required: true
+
+  - id: "conseilsante_effectuerAction"
+    text: "perform action on health council investigation"
+    description: "Perform an action on a health council investigation"
+    verb: "POST"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "idAction"
+        description: "ID of the action"
+        required: true
+      - name: "date"
+        description: "Date of the action"
+        required: true
+
+  - id: "conseilsante_update"
+    text: "update health council investigation"
+    description: "Update a health council investigation"
+    verb: "PUT"
+    parameters:
+      - name: "enqueteConseilSante"
+        description: "Health council investigation data"
+        required: true
+
+  - id: "conseilsante_updatePersonne"
+    text: "update person in health council investigation"
+    description: "Update a person in a health council investigation"
+    verb: "POST"
+    parameters:
+      - name: "idPersonne"
+        description: "ID of the person"
+        required: true
+      - name: "libelle"
+        description: "Label"
+        required: true
+
+  - id: "conseilsante_rendreDecision"
+    text: "make decision on health council investigation"
+    description: "Make a decision on a health council investigation"
+    verb: "POST"
+    parameters:
+      - name: "rendreDecisionResponseDTO"
+        description: "Decision data"
+        required: true
+
+  - id: "conseilsante_getAllEnqueteConseilSante"
+    text: "get all health council investigations in range"
+    description: "Get all health council investigations in a date range"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "enqueteCop_create"
+    text: "create COP investigation"
+    description: "Create a new COP investigation"
+    verb: "POST"
+    parameters:
+      - name: "enqueteCOP"
+        description: "COP investigation data"
+        required: true
+
+  - id: "enqueteCop_update"
+    text: "update COP investigation"
+    description: "Update a COP investigation"
+    verb: "PUT"
+    parameters:
+      - name: "enqueteCOP"
+        description: "COP investigation data"
+        required: true
+
+  - id: "enqueteCop_forProcedure"
+    text: "get COP investigation for procedure"
+    description: "Get COP investigation for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "enqueteCop_numeroUnique"
+    text: "check unique COP investigation number"
+    description: "Check if COP investigation number is unique"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the COP investigation"
+        required: true
+      - name: "numero"
+        description: "Number of the COP investigation"
+        required: true
+
+  - id: "enqueteCop_openForUser"
+    text: "get open COP investigations for user"
+    description: "Get open COP investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enqueteCop_closedForUser"
+    text: "get closed COP investigations for user"
+    description: "Get closed COP investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enqueteCop_getForSignalement"
+    text: "get COP investigations for report"
+    description: "Get COP investigations for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "enqueteCop_getForDoleance"
+    text: "get COP investigations for complaint"
+    description: "Get COP investigations for a complaint"
+    verb: "GET"
+    parameters:
+      - name: "idDoleance"
+        description: "ID of the complaint"
+        required: true
+
+  - id: "enqueteCop_getForSignalementResume"
+    text: "get COP investigation summaries for report"
+    description: "Get COP investigation summaries for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "enqueteCop_recherche"
+    text: "search COP investigations"
+    description: "Search for COP investigations"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "enqueteOMC_create"
+    text: "create OMC investigation"
+    description: "Create a new OMC investigation"
+    verb: "POST"
+    parameters:
+      - name: "enqueteOMC"
+        description: "OMC investigation data"
+        required: true
+
+  - id: "enqueteOMC_update"
+    text: "update OMC investigation"
+    description: "Update an OMC investigation"
+    verb: "PUT"
+    parameters:
+      - name: "enqueteOMC"
+        description: "OMC investigation data"
+        required: true
+
+  - id: "enqueteOMC_forProcedure"
+    text: "get OMC investigation for procedure"
+    description: "Get OMC investigation for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "enqueteOMC_openForUser"
+    text: "get open OMC investigations for user"
+    description: "Get open OMC investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enqueteOMC_closedForUser"
+    text: "get closed OMC investigations for user"
+    description: "Get closed OMC investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enqueteOMC_getForSignalement"
+    text: "get OMC investigations for report"
+    description: "Get OMC investigations for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "enqueteOMC_getForDoleance"
+    text: "get OMC investigations for complaint"
+    description: "Get OMC investigations for a complaint"
+    verb: "GET"
+    parameters:
+      - name: "idDoleance"
+        description: "ID of the complaint"
+        required: true
+
+  - id: "enqueteOMC_getForMisEnCause"
+    text: "get OMC investigations for accused"
+    description: "Get OMC investigations for an accused person"
+    verb: "GET"
+    parameters:
+      - name: "idMisEnCause"
+        description: "ID of the accused person"
+        required: true
+
+  - id: "enqueteOMC_getForMesureMC"
+    text: "get OMC investigations for MC measure"
+    description: "Get OMC investigations for an MC measure"
+    verb: "GET"
+    parameters:
+      - name: "idMesureMC"
+        description: "ID of the MC measure"
+        required: true
+
+  - id: "enqueteOMC_effectuerAction"
+    text: "perform action on OMC investigation"
+    description: "Perform an action on an OMC investigation"
+    verb: "POST"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "idAction"
+        description: "ID of the action"
+        required: true
+      - name: "date"
+        description: "Date of the action"
+        required: true
+
+  - id: "enqueteOMC_conclure"
+    text: "conclude OMC investigation"
+    description: "Conclude an OMC investigation"
+    verb: "POST"
+    parameters:
+      - name: "conclureResponseDTO"
+        description: "Conclusion data"
+        required: true
+
+  - id: "enqueteOMC_recherche"
+    text: "search OMC investigations"
+    description: "Search for OMC investigations"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "enqueteOMC_getForCommission"
+    text: "get OMC investigations for commission"
+    description: "Get OMC investigations for a commission"
+    verb: "GET"
+    parameters:
+      - name: "idCommission"
+        description: "ID of the commission"
+        required: true
+
+  - id: "enquetePenale_recherche"
+    text: "search criminal investigations"
+    description: "Search for criminal investigations"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "enquetePenale_create"
+    text: "create criminal investigation"
+    description: "Create a new criminal investigation"
+    verb: "POST"
+    parameters:
+      - name: "enquetePenale"
+        description: "Criminal investigation data"
+        required: true
+
+  - id: "enquetePenale_update"
+    text: "update criminal investigation"
+    description: "Update a criminal investigation"
+    verb: "PUT"
+    parameters:
+      - name: "enquetePenale"
+        description: "Criminal investigation data"
+        required: true
+
+  - id: "enquetePenale_forProcedure"
+    text: "get criminal investigation for procedure"
+    description: "Get criminal investigation for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "enquetePenale_numeroUnique"
+    text: "check unique criminal investigation number"
+    description: "Check if criminal investigation number is unique"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the criminal investigation"
+        required: true
+      - name: "numero"
+        description: "Number of the criminal investigation"
+        required: true
+
+  - id: "enquetePenale_openForUser"
+    text: "get open criminal investigations for user"
+    description: "Get open criminal investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enquetePenale_closedForUser"
+    text: "get closed criminal investigations for user"
+    description: "Get closed criminal investigations for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "enquetePenale_getForSignalement"
+    text: "get criminal investigations for report"
+    description: "Get criminal investigations for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "enquetePenale_getForDoleance"
+    text: "get criminal investigations for complaint"
+    description: "Get criminal investigations for a complaint"
+    verb: "GET"
+    parameters:
+      - name: "idDoleance"
+        description: "ID of the complaint"
+        required: true
+
+  - id: "enquetePenale_getForSignalementResume"
+    text: "get criminal investigation summaries for report"
+    description: "Get criminal investigation summaries for a report"
+    verb: "GET"
+    parameters:
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: true
+
+  - id: "listeElement_getAll"
+    text: "get all list elements"
+    description: "Get all elements of a list"
+    verb: "GET"
+    parameters:
+      - name: "idListe"
+        description: "ID of the list"
+        required: true
+
+  - id: "listeElement_getAllProcessed"
+    text: "get all processed elements"
+    description: "Get all processed elements"
+    verb: "GET"
+    parameters: []
+
+  - id: "listeElement_getAllRestricted"
+    text: "get all restricted list elements"
+    description: "Get all restricted elements of a list"
+    verb: "GET"
+    parameters:
+      - name: "idListe"
+        description: "ID of the list"
+        required: true
+
+  - id: "listeElement_saveAll"
+    text: "save all list elements"
+    description: "Save all elements of a list"
+    verb: "POST"
+    parameters:
+      - name: "listeElements"
+        description: "List elements data"
+        required: true
+
+  - id: "listeElement_save"
+    text: "save list element"
+    description: "Save an element of a list"
+    verb: "POST"
+    parameters:
+      - name: "listeElement"
+        description: "List element data"
+        required: true
+
+  - id: "liste_getAllExceptCategories"
+    text: "get all lists except categories"
+    description: "Get all lists except categories"
+    verb: "GET"
+    parameters: []
+
+  - id: "liste_getAllCategories"
+    text: "get all categories"
+    description: "Get all categories"
+    verb: "GET"
+    parameters: []
+
+  - id: "mesureCDSAS_create"
+    text: "create CDSAS measure"
+    description: "Create a new CDSAS measure"
+    verb: "POST"
+    parameters:
+      - name: "mesureCDSAS"
+        description: "CDSAS measure data"
+        required: true
+
+  - id: "mesureCDSAS_update"
+    text: "update CDSAS measure"
+    description: "Update a CDSAS measure"
+    verb: "PUT"
+    parameters:
+      - name: "mesureCDSAS"
+        description: "CDSAS measure data"
+        required: true
+
+  - id: "mesureCDSAS_forProcedure"
+    text: "get CDSAS measure for procedure"
+    description: "Get CDSAS measure for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "mesureCDSAS_getCDSASForEnqueteCsCDSAS"
+    text: "get CDSAS measures for CS investigation"
+    description: "Get CDSAS measures for a CS investigation and accused person"
+    verb: "GET"
+    parameters:
+      - name: "idMisEnCause"
+        description: "ID of the accused person"
+        required: true
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "mesureCDSAS_openForUser"
+    text: "get open CDSAS measures for user"
+    description: "Get open CDSAS measures for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "mesureCDSAS_closedForUser"
+    text: "get closed CDSAS measures for user"
+    description: "Get closed CDSAS measures for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "mesureCDSAS_getForEnqueteCS"
+    text: "get CDSAS measures for CS investigation"
+    description: "Get CDSAS measures for a CS investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "mesureCDSAS_getForEnqueteAOMC"
+    text: "get CDSAS measures for AOMC investigation"
+    description: "Get CDSAS measures for an AOMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteAOMC"
+        description: "ID of the AOMC investigation"
+        required: true
+
+  - id: "mesureCDSAS_getForEnqueteCSResume"
+    text: "get CDSAS measure summaries for CS investigation"
+    description: "Get CDSAS measure summaries for a CS investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "mesureCDSAS_getCDSASForEnqueteAOMCCDSAS"
+    text: "get CDSAS measures for AOMC investigation"
+    description: "Get CDSAS measures for an AOMC investigation and accused person"
+    verb: "GET"
+    parameters:
+      - name: "idMisEnCause"
+        description: "ID of the accused person"
+        required: true
+      - name: "idEnqueteAOMC"
+        description: "ID of the AOMC investigation"
+        required: true
+
+  - id: "mesureMedecinCantonal_create"
+    text: "create cantonal doctor measure"
+    description: "Create a new cantonal doctor measure"
+    verb: "POST"
+    parameters:
+      - name: "mesureMedecinCantonal"
+        description: "Cantonal doctor measure data"
+        required: true
+
+  - id: "mesureMedecinCantonal_update"
+    text: "update cantonal doctor measure"
+    description: "Update a cantonal doctor measure"
+    verb: "PUT"
+    parameters:
+      - name: "mesureMedecinCantonal"
+        description: "Cantonal doctor measure data"
+        required: true
+
+  - id: "mesureMedecinCantonal_forProcedure"
+    text: "get cantonal doctor measure for procedure"
+    description: "Get cantonal doctor measure for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "mesureMedecinCantonal_getMMCForEnqueteOMCMMC"
+    text: "get cantonal doctor measures for OMC investigation"
+    description: "Get cantonal doctor measures for an OMC investigation and accused person"
+    verb: "GET"
+    parameters:
+      - name: "idMisEnCause"
+        description: "ID of the accused person"
+        required: true
+      - name: "idEnqueteOMC"
+        description: "ID of the OMC investigation"
+        required: true
+
+  - id: "mesureMedecinCantonal_openForUser"
+    text: "get open cantonal doctor measures for user"
+    description: "Get open cantonal doctor measures for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "mesureMedecinCantonal_closedForUser"
+    text: "get closed cantonal doctor measures for user"
+    description: "Get closed cantonal doctor measures for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "mesureMedecinCantonal_getForEnqueteOMC"
+    text: "get cantonal doctor measures for OMC investigation"
+    description: "Get cantonal doctor measures for an OMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteOMC"
+        description: "ID of the OMC investigation"
+        required: true
+
+  - id: "mesureMedecinCantonal_getForEnqueteOMCResume"
+    text: "get cantonal doctor measure summaries for OMC investigation"
+    description: "Get cantonal doctor measure summaries for an OMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteOMC"
+        description: "ID of the OMC investigation"
+        required: true
+
+  - id: "pleniere_get"
+    text: "get plenary"
+    description: "Retrieve plenary details by ID"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "Plenary ID"
+        required: true
+      - name: "userPrincipalName"
+        description: "User principal name"
+        required: true
+
+  - id: "pleniere_planifiees"
+    text: "get planned plenaries"
+    description: "Get planned plenaries"
+    verb: "GET"
+    parameters: []
+
+  - id: "pleniere_passees"
+    text: "get past plenaries"
+    description: "Get past plenaries"
+    verb: "GET"
+    parameters: []
+
+  - id: "pleniere_create"
+    text: "create plenary"
+    description: "Create a new plenary"
+    verb: "POST"
+    parameters:
+      - name: "pleniere"
+        description: "Plenary data"
+        required: true
+
+  - id: "pleniere_update"
+    text: "update plenary"
+    description: "Update a plenary"
+    verb: "PUT"
+    parameters:
+      - name: "pleniere"
+        description: "Plenary data"
+        required: true
+
+  - id: "pleniere_numeroUnique"
+    text: "check unique plenary number"
+    description: "Check if plenary number is unique"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the plenary"
+        required: true
+      - name: "datePleniere"
+        description: "Date of the plenary"
+        required: true
+
+  - id: "pleniere_getPlenieresForProcedure"
+    text: "get plenaries for procedure"
+    description: "Get plenaries for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "pleniere_getForProcedure"
+    text: "get plenary summaries for procedure"
+    description: "Get plenary summaries for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "pleniere_getMisEnCauseForPleniere"
+    text: "get accused for plenary"
+    description: "Get accused persons for a plenary"
+    verb: "GET"
+    parameters:
+      - name: "id"
+        description: "ID of the plenary"
+        required: true
+
+  - id: "pleniere_exportProcedureAssociees"
+    text: "export associated procedures"
+    description: "Export associated procedures"
+    verb: "GET"
+    parameters:
+      - name: "idPleniere"
+        description: "ID of the plenary"
+        required: true
+
+  - id: "pleniere_exportPleniere"
+    text: "export plenary"
+    description: "Export plenary"
+    verb: "GET"
+    parameters:
+      - name: "idPleniere"
+        description: "ID of the plenary"
+        required: true
+
+  - id: "signalement_recherche"
+    text: "search reports"
+    description: "Search for reports"
+    verb: "GET"
+    parameters:
+      - name: "recherche"
+        description: "Search query"
+        required: true
+
+  - id: "signalement_create"
+    text: "create report"
+    description: "Create a new report"
+    verb: "POST"
+    parameters:
+      - name: "signalement"
+        description: "Report data"
+        required: true
+
+  - id: "signalement_update"
+    text: "update report"
+    description: "Update a report"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Report data"
+        required: true
+
+  - id: "signalement_enCours"
+    text: "get ongoing reports"
+    description: "Get ongoing reports"
+    verb: "GET"
+    parameters: []
+
+  - id: "signalement_forProcedure"
+    text: "get report for procedure"
+    description: "Get report for a procedure"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "signalement_signalementsMemeSignalant"
+    text: "get reports from same reporter"
+    description: "Get reports from the same reporter"
+    verb: "GET"
+    parameters:
+      - name: "idSignalant"
+        description: "ID of the reporter"
+        required: true
+      - name: "idSignalement"
+        description: "ID of the report"
+        required: false
+
+  - id: "signalement_effectuerAction"
+    text: "perform action on report"
+    description: "Perform an action on a report"
+    verb: "POST"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+      - name: "idAction"
+        description: "ID of the action"
+        required: true
+      - name: "date"
+        description: "Date of the action"
+        required: true
+
+  - id: "signalement_transmettreCommission"
+    text: "forward report to commission"
+    description: "Forward a report to a commission"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Report data"
+        required: true
+      - name: "date"
+        description: "Date of forwarding"
+        required: false
+
+  - id: "signalement_choisirOrientation"
+    text: "choose report orientation"
+    description: "Choose orientation for a report"
+    verb: "PUT"
+    parameters:
+      - name: "signalement"
+        description: "Report data"
+        required: true
+      - name: "date"
+        description: "Date of orientation"
+        required: false
+
+  - id: "signalement_openForUser"
+    text: "get open reports for user"
+    description: "Get open reports for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "signalement_closedForUser"
+    text: "get closed reports for user"
+    description: "Get closed reports for a user"
+    verb: "GET"
+    parameters:
+      - name: "idUtilisateur"
+        description: "ID of the user"
+        required: false
+      - name: "idMisEnCause"
+        description: "ID of the accused"
+        required: false
+      - name: "idPersonneConcernee"
+        description: "ID of the concerned person"
+        required: false
+
+  - id: "signalement_getForEnqueteCS"
+    text: "get reports for CS investigation"
+    description: "Get reports for a CS investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "signalement_getForEnqueteCSResume"
+    text: "get report summaries for CS investigation"
+    description: "Get report summaries for a CS investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCS"
+        description: "ID of the CS investigation"
+        required: true
+
+  - id: "signalement_getForEnquetePenale"
+    text: "get reports for criminal investigation"
+    description: "Get reports for a criminal investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnquetePenale"
+        description: "ID of the criminal investigation"
+        required: true
+
+  - id: "signalement_getForEnqueteCop"
+    text: "get reports for COP investigation"
+    description: "Get reports for a COP investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteCop"
+        description: "ID of the COP investigation"
+        required: true
+
+  - id: "signalement_getForEnqueteOMC"
+    text: "get reports for OMC investigation"
+    description: "Get reports for an OMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteOMC"
+        description: "ID of the OMC investigation"
+        required: true
+
+  - id: "signalement_getForEnqueteAOMC"
+    text: "get reports for AOMC investigation"
+    description: "Get reports for an AOMC investigation"
+    verb: "GET"
+    parameters:
+      - name: "idEnqueteAOMC"
+        description: "ID of the AOMC investigation"
+        required: true
+
+  - id: "signalement_getForPleniere"
+    text: "get reports for plenary"
+    description: "Get reports for a plenary session"
+    verb: "GET"
+    parameters:
+      - name: "idPleniere"
+        description: "ID of the plenary session"
+        required: true
+
+  - id: "signalement_getForCommission"
+    text: "get reports for commission"
+    description: "Get reports for a commission"
+    verb: "GET"
+    parameters:
+      - name: "idCommission"
+        description: "ID of the commission"
+        required: true
+
+  - id: "signalement_genererFicheInstructionPlainte"
+    text: "generate complaint instruction sheet"
+    description: "Generate complaint instruction sheet"
+    verb: "GET"
+    parameters:
+      - name: "idProcedure"
+        description: "ID of the procedure"
+        required: true
+
+  - id: "signalement_getAllSignalement"
+    text: "get all reports in range"
+    description: "Get all reports in a date range"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getSignalementByEtatFilterByPeriode"
+    text: "get reports by state filtered by period"
+    description: "Get reports by state filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getLienSignalantPatientFilterByPeriode"
+    text: "get reporter-patient links filtered by period"
+    description: "Get reporter-patient links filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getMotifsPlaintesFilterByPeriode"
+    text: "get complaint motifs filtered by period"
+    description: "Get complaint motifs filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getSubMotifsPlaintesFilterByPeriode"
+    text: "get complaint sub-motifs filtered by period"
+    description: "Get complaint sub-motifs filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getSignalementByTypePersonneFilterByPeriode"
+    text: "get reports by person type filtered by period"
+    description: "Get reports by person type filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getCDSASByTypeFilterByPeriode"
+    text: "get CDSAS by type filtered by period"
+    description: "Get CDSAS by type filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getCDSASByProfessionFilterByPeriode"
+    text: "get CDSAS by profession filtered by period"
+    description: "Get CDSAS by profession filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getEnqueteCSByProfessionOuvertureByPeriode"
+    text: "get CS investigations by profession opening by period"
+    description: "Get CS investigations by profession opening by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getEnqueteCSByAgeMECByPeriode"
+    text: "get CS investigations by accused age by period"
+    description: "Get CS investigations by accused age by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+      - name: "civilite"
+        description: "Civility"
+        required: true
+
+  - id: "statistique_getEnqueteCSByProvenanceDiplomeByPeriode"
+    text: "get CS investigations by diploma origin by period"
+    description: "Get CS investigations by diploma origin by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getEnqueteCSByCategorieEvtByPeriode"
+    text: "get CS investigations by event category by period"
+    description: "Get CS investigations by event category by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+
+  - id: "statistique_getEnqueteCSByEtatFilterByPeriode"
+    text: "get CS investigations by state filtered by period"
+    description: "Get CS investigations by state filtered by period"
+    verb: "GET"
+    parameters:
+      - name: "periodeDu"
+        description: "Start date period"
+        required: true
+      - name: "periodeAu"
+        description: "End date period"
+        required: true
+      - name: "userPrincipalName"
+        description: "User principal name"
+        required: true
+
+  - id: "trigramme_getAll"
+    text: "get all trigrams"
+    description: "Get all user trigrams"
+    verb: "GET"
+    parameters: []
+
+  - id: "trigramme_create"
+    text: "create trigram"
+    description: "Create a new user trigram"
+    verb: "POST"
+    parameters:
+      - name: "userTrigramme"
+        description: "User trigram data"
+        required: true
+
+  - id: "trigramme_update"
+    text: "update trigram"
+    description: "Update a user trigram"
+    verb: "PUT"
+    parameters:
+      - name: "userTrigramme"
+        description: "User trigram data"
+        required: true
+
+  - id: "trigramme_delete"
+    text: "delete trigram"
+    description: "Delete a user trigram"
+    verb: "DELETE"
+    parameters:
+      - name: "id"
+        description: "ID of the user trigram"
+        required: true
