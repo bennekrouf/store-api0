@@ -20,9 +20,9 @@ pub struct EndpointServiceImpl {
 }
 
 impl EndpointServiceImpl {
-    pub fn new(store: EndpointStore) -> Self {
+    pub fn new(store: Arc<EndpointStore>) -> Self {
         Self {
-            store: Arc::new(store),
+            store, //: Arc::new(store),
         }
     }
 }
@@ -44,10 +44,16 @@ impl EndpointService for EndpointServiceImpl {
 
         // Create the stream
         let stream = async_stream::try_stream! {
-            let endpoints = store.get_endpoints_by_email(&email).map_err(|e| {
-                tracing::error!(error = %e, "Failed to get endpoints from store");
-                Status::internal(e.to_string())
-            })?;
+            // Add error handling for endpoint retrieval
+            let endpoints = match store.get_endpoints_by_email(&email) {
+                Ok(eps) => eps,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to get endpoints from store");
+                    // Yield an empty response instead of returning an error
+                    yield GetEndpointsResponse { endpoints: vec![] };
+                    return;
+                }
+            };
 
             const BATCH_SIZE: usize = 10;
             let mut current_batch = Vec::with_capacity(BATCH_SIZE);
@@ -56,7 +62,7 @@ impl EndpointService for EndpointServiceImpl {
 
             for endpoint in endpoints {
                 let param_count = endpoint.parameters.len();
-                tracing::info!(
+                tracing::debug!(
                     endpoint_id = %endpoint.id,
                     parameter_count = param_count,
                     "Transforming endpoint"
@@ -116,6 +122,7 @@ impl EndpointService for EndpointServiceImpl {
         &self,
         request: Request<UploadEndpointsRequest>,
     ) -> Result<Response<UploadEndpointsResponse>, Status> {
+        println!("Enter upload_endpoints");
         let req = request.into_inner();
         let email = req.email;
         let file_content = String::from_utf8(req.file_content.clone())

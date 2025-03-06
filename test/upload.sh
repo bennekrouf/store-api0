@@ -2,7 +2,7 @@
 
 HOST="0.0.0.0:50055"
 EMAIL="mohamed.bennekrouf@gmail.com"
-FILE_PATH="../semantic/samples/divess.yaml"
+FILE_PATH="samples/divess.yaml"
 
 # Test uploading endpoints
 echo "Testing endpoint upload..."
