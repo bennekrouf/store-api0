@@ -1,7 +1,3 @@
-# Exhaustive API Endpoints List
-
-## Case Management Module
-
 endpoints:
   - id: "action_list"
     text: "list actions"
@@ -111,9 +107,6 @@ endpoints:
         description: "Date of the action"
         required: true
 
-## Admin Module
-
-endpoints:
   - id: "bannette_list"
     text: "list bannettes"
     description: "Get a list of bannettes"
@@ -387,9 +380,6 @@ endpoints:
         description: "ID of the person"
         required: true
 
-## Person Module
-
-endpoints:
   - id: "persons_search"
     text: "search persons"
     description: "Search for persons"
@@ -498,9 +488,6 @@ endpoints:
         description: "Locality name"
         required: true
 
-## Signalement (Reporting) Module
-
-endpoints:
   - id: "commission_get"
     text: "get commission"
     description: "Retrieve commission details by ID"

@@ -19,7 +19,7 @@ fn default_verb() -> String {
     "GET".to_string()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Parameter {
     pub name: String,
     #[serde(default = "String::new")]
@@ -30,7 +30,7 @@ pub struct Parameter {
     pub alternatives: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Endpoint {
     pub id: String,
     pub text: String,
@@ -480,6 +480,332 @@ impl EndpointStore {
         );
 
         Ok(imported_count)
+    }
+
+    pub async fn add_user_endpoint(
+        &self,
+        email: &str,
+        endpoint: Endpoint,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+        let tx = conn.transaction()?;
+
+        tracing::info!(
+            email = %email,
+            endpoint_id = %endpoint.id,
+            "Starting endpoint addition"
+        );
+
+        // Check if endpoint with this ID already exists
+        let endpoint_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
+            [&endpoint.id],
+            |row| row.get(0),
+        )?;
+
+        if endpoint_exists {
+            // Check if it's a default endpoint
+            let is_default: bool = tx.query_row(
+                "SELECT is_default FROM endpoints WHERE id = ?",
+                [&endpoint.id],
+                |row| row.get(0),
+            )?;
+
+            if is_default {
+                // For default endpoints, just create the association
+                tx.execute(
+                    "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                    [email, &endpoint.id],
+                )?;
+
+                tracing::info!(
+                    email = %email,
+                    endpoint_id = %endpoint.id,
+                    "Added association to existing default endpoint"
+                );
+            } else {
+                // For non-default endpoints, check if the user already has it
+                let user_has_endpoint: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE email = ? AND endpoint_id = ?)",
+                [email, &endpoint.id],
+                |row| row.get(0),
+            )?;
+
+                if user_has_endpoint {
+                    // User already has this endpoint, update it
+                    tx.execute(
+                        "UPDATE endpoints SET text = ?, description = ?, verb = ? WHERE id = ?",
+                        &[
+                            &endpoint.text,
+                            &endpoint.description,
+                            &endpoint.verb,
+                            &endpoint.id,
+                        ],
+                    )?;
+
+                    tracing::info!(
+                        email = %email,
+                        endpoint_id = %endpoint.id,
+                        "Updated existing user endpoint"
+                    );
+                } else {
+                    // User doesn't have this endpoint, create the association
+                    tx.execute(
+                        "INSERT INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                        [email, &endpoint.id],
+                    )?;
+
+                    tracing::info!(
+                        email = %email,
+                        endpoint_id = %endpoint.id,
+                        "Added association to existing non-default endpoint"
+                    );
+                }
+            }
+        } else {
+            // Endpoint doesn't exist, create it
+            tx.execute(
+            "INSERT INTO endpoints (id, text, description, verb, is_default) VALUES (?, ?, ?, ?, false)",
+            &[
+                &endpoint.id,
+                &endpoint.text,
+                &endpoint.description,
+                &endpoint.verb,
+            ],
+        )?;
+
+            // Create the user association
+            tx.execute(
+                "INSERT INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                [email, &endpoint.id],
+            )?;
+
+            tracing::info!(
+                email = %email,
+                endpoint_id = %endpoint.id,
+                "Created new endpoint and association"
+            );
+        }
+
+        // Clean up existing parameters if it's not a default endpoint
+        let is_default: bool = tx.query_row(
+            "SELECT is_default FROM endpoints WHERE id = ?",
+            [&endpoint.id],
+            |row| row.get(0),
+        )?;
+
+        if !is_default {
+            // Delete existing parameter alternatives
+            tx.execute(
+                "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
+                [&endpoint.id],
+            )?;
+
+            // Delete existing parameters
+            tx.execute(
+                "DELETE FROM parameters WHERE endpoint_id = ?",
+                [&endpoint.id],
+            )?;
+
+            // Add new parameters
+            for param in &endpoint.parameters {
+                tx.execute(
+                    "INSERT INTO parameters (endpoint_id, name, description, required) 
+                VALUES (?, ?, ?, ?)",
+                    &[
+                        &endpoint.id,
+                        &param.name,
+                        &param.description,
+                        &param.required.to_string(),
+                    ],
+                )?;
+
+                // Add parameter alternatives
+                for alt in &param.alternatives {
+                    tx.execute(
+                    "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
+                    VALUES (?, ?, ?)",
+                    &[&endpoint.id, &param.name, alt],
+                )?;
+                }
+            }
+
+            tracing::debug!(
+                endpoint_id = %endpoint.id,
+                param_count = endpoint.parameters.len(),
+                "Added parameters to endpoint"
+            );
+        }
+
+        tx.commit()?;
+
+        tracing::info!(
+            email = %email,
+            endpoint_id = %endpoint.id,
+            "Successfully processed endpoint addition"
+        );
+
+        Ok(true)
+    }
+
+    pub async fn delete_user_endpoint(
+        &self,
+        email: &str,
+        endpoint_id: &str,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+
+        tracing::info!(
+            email = %email,
+            endpoint_id = %endpoint_id,
+            "Starting endpoint deletion"
+        );
+
+        // First, check if we can find out all the tables with foreign key references to endpoints
+        let tables = vec!["parameter_alternatives", "parameters", "user_endpoints"];
+
+        // Remove just the user-endpoint association first
+        match conn.execute(
+            "DELETE FROM user_endpoints WHERE email = ? AND endpoint_id = ?",
+            [email, endpoint_id],
+        ) {
+            Ok(_) => {
+                tracing::info!(
+                    email = %email,
+                    endpoint_id = %endpoint_id,
+                    "Removed user-endpoint association"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    email = %email,
+                    endpoint_id = %endpoint_id,
+                    "Failed to remove user-endpoint association"
+                );
+                return Err(StoreError::Database(e));
+            }
+        }
+
+        // Check if the endpoint is still used by any user
+        let still_used: bool = match conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE endpoint_id = ?)",
+            [endpoint_id],
+            |row| row.get(0),
+        ) {
+            Ok(exists) => exists,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    endpoint_id = %endpoint_id,
+                    "Failed to check if endpoint is still used"
+                );
+                return Err(StoreError::Database(e));
+            }
+        };
+
+        if still_used {
+            tracing::info!(
+                endpoint_id = %endpoint_id,
+                "Endpoint still used by other users, keeping it but removing user association"
+            );
+            return Ok(true);
+        }
+
+        // If we get here, no user is using this endpoint anymore, so we should delete it
+        tracing::info!(
+            endpoint_id = %endpoint_id,
+            "No users left using this endpoint, attempting to delete it"
+        );
+
+        // Try to remove related data with explicit error handling for each step
+        let mut success = true;
+
+        // Delete from parameter_alternatives
+        match conn.execute(
+            "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
+            [endpoint_id],
+        ) {
+            Ok(count) => {
+                tracing::info!(
+                    endpoint_id = %endpoint_id,
+                    count = count,
+                    "Deleted parameter alternatives"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    endpoint_id = %endpoint_id,
+                    "Failed to delete parameter alternatives"
+                );
+                success = false;
+            }
+        }
+
+        // Only proceed if previous step was successful
+        if success {
+            // Delete from parameters
+            match conn.execute(
+                "DELETE FROM parameters WHERE endpoint_id = ?",
+                [endpoint_id],
+            ) {
+                Ok(count) => {
+                    tracing::info!(
+                        endpoint_id = %endpoint_id,
+                        count = count,
+                        "Deleted parameters"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        endpoint_id = %endpoint_id,
+                        "Failed to delete parameters"
+                    );
+                    success = false;
+                }
+            }
+        }
+
+        // Only proceed if previous steps were successful
+        if success {
+            // Finally, delete the endpoint itself
+            match conn.execute("DELETE FROM endpoints WHERE id = ?", [endpoint_id]) {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!(
+                            endpoint_id = %endpoint_id,
+                            "Successfully deleted endpoint"
+                        );
+                    } else {
+                        tracing::warn!(
+                            endpoint_id = %endpoint_id,
+                            "Endpoint not found for deletion"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        endpoint_id = %endpoint_id,
+                        "Failed to delete endpoint"
+                    );
+                    success = false;
+                }
+            }
+        }
+
+        // If any step failed, log a warning
+        if !success {
+            tracing::warn!(
+                endpoint_id = %endpoint_id,
+                "Could not completely delete endpoint and all its related data due to constraints"
+            );
+        }
+
+        // We successfully removed the user-endpoint association at minimum
+        Ok(true)
     }
 
     // Fallback cleanup approach - more conservative
