@@ -26,6 +26,7 @@ pub struct UploadResponse {
 pub struct EndpointsResponse {
     success: bool,
     endpoints: Vec<Endpoint>,
+    message: String,
 }
 
 // Handler for uploading endpoints
@@ -270,28 +271,29 @@ async fn get_endpoints(
     let email = email.into_inner();
     tracing::info!(email = %email, "Received HTTP get endpoints request");
 
-    match store.get_endpoints_by_email(&email) {
+    match store.get_or_create_user_endpoints(&email).await {
         Ok(endpoints) => {
             tracing::info!(
                 email = %email,
                 endpoint_count = endpoints.len(),
-                "Successfully retrieved endpoints via HTTP API"
+                "Successfully retrieved or created endpoints"
             );
             HttpResponse::Ok().json(EndpointsResponse {
                 success: true,
                 endpoints,
+                message: "Endpoints successfully retrieved".to_string(), // Add this
             })
         }
         Err(e) => {
             tracing::error!(
                 error = %e,
                 email = %email,
-                "Failed to retrieve endpoints via HTTP API"
+                "Failed to retrieve endpoints"
             );
-            // Return empty list on error
-            HttpResponse::Ok().json(EndpointsResponse {
+            HttpResponse::InternalServerError().json(EndpointsResponse {
                 success: false,
                 endpoints: vec![],
+                message: format!("Error: {}", e),
             })
         }
     }

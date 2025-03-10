@@ -33,7 +33,7 @@ EOF
   response=$(grpcurl -plaintext \
     -d "$REQUEST_PAYLOAD" \
     $HOST \
-    endpoint.EndpointService/GetDefaultEndpoints 2>&1)
+    endpoint.EndpointService/GetEndpoints 2>&1)
 
   if [ $? -eq 0 ]; then
     echo -e "${GREEN}Success:${NC}"

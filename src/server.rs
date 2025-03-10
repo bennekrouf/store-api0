@@ -29,13 +29,13 @@ impl EndpointServiceImpl {
 
 #[tonic::async_trait]
 impl EndpointService for EndpointServiceImpl {
-    type GetDefaultEndpointsStream =
+    type GetEndpointsStream =
         Pin<Box<dyn Stream<Item = Result<GetEndpointsResponse, Status>> + Send + 'static>>;
 
-    async fn get_default_endpoints(
+    async fn get_endpoints(
         &self,
         request: Request<GetEndpointsRequest>,
-    ) -> Result<Response<Self::GetDefaultEndpointsStream>, Status> {
+    ) -> Result<Response<Self::GetEndpointsStream>, Status> {
         let email = request.into_inner().email;
         tracing::info!(email = %email, "Received get_default_endpoints request");
 
@@ -45,7 +45,7 @@ impl EndpointService for EndpointServiceImpl {
         // Create the stream
         let stream = async_stream::try_stream! {
             // Add error handling for endpoint retrieval
-            let endpoints = match store.get_endpoints_by_email(&email) {
+            let endpoints = match store.get_or_create_user_endpoints(&email).await {
                 Ok(eps) => eps,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to get endpoints from store");

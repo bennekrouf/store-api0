@@ -90,7 +90,7 @@ cd test
 
 The service exposes two gRPC endpoints:
 
-1. `GetDefaultEndpoints`: Fetch endpoints for a user
+1. `GetEndpoints`: Fetch endpoints for a user
 2. `UploadEndpoints`: Upload a new endpoints configuration file
 
 ## License

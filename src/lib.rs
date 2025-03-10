@@ -147,6 +147,125 @@ impl EndpointStore {
         Ok(())
     }
 
+    pub async fn get_or_create_user_endpoints(
+        &self,
+        email: &str,
+    ) -> Result<Vec<Endpoint>, StoreError> {
+        // Check if user has custom endpoints
+        let has_custom: bool = {
+            let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE email = ?)",
+                [email],
+                |row| row.get(0),
+            )?
+        };
+
+        // If user doesn't have custom endpoints, create them from defaults
+        if !has_custom {
+            tracing::info!(email = %email, "User has no endpoints, creating defaults");
+
+            // Get default endpoints
+            let default_endpoints: Vec<Endpoint> = {
+                let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+
+                // Get the default endpoints
+                let mut stmt = conn.prepare(r#"
+                SELECT 
+                    e.id,
+                    e.text,
+                    e.description,
+                    e.verb,
+                    p.name as param_name,
+                    p.description as param_description,
+                    p.required,
+                    STRING_AGG(pa.alternative, ',') as alternatives
+                FROM endpoints e
+                LEFT JOIN parameters p ON e.id = p.endpoint_id
+                LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
+                WHERE e.is_default = true
+                GROUP BY e.id, e.text, e.description, e.verb, p.name, p.description, p.required
+            "#)?;
+
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,         // id
+                        row.get::<_, String>(1)?,         // text
+                        row.get::<_, String>(2)?,         // description
+                        row.get::<_, String>(3)?,         // verb
+                        row.get::<_, Option<String>>(4)?, // param_name
+                        row.get::<_, Option<String>>(5)?, // param_description
+                        row.get::<_, Option<bool>>(6)?,   // required
+                        row.get::<_, Option<String>>(7)?, // alternatives
+                    ))
+                })?;
+
+                // Process rows into endpoints
+                let mut endpoints_map = std::collections::HashMap::new();
+                for row in rows {
+                    let (
+                        id,
+                        text,
+                        description,
+                        verb,
+                        param_name,
+                        param_desc,
+                        required,
+                        alternatives_str,
+                    ) = row?;
+
+                    let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| Endpoint {
+                        id,
+                        text,
+                        description,
+                        verb,
+                        parameters: Vec::new(),
+                    });
+
+                    if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required)
+                    {
+                        let alternatives = alternatives_str
+                            .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
+                            .unwrap_or_default();
+
+                        endpoint.parameters.push(Parameter {
+                            name,
+                            description: desc,
+                            required: req,
+                            alternatives,
+                        });
+                    }
+                }
+
+                endpoints_map.into_values().collect()
+            };
+
+            // Create user associations for each default endpoint
+            {
+                let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+                let tx = conn.transaction()?;
+
+                for endpoint in &default_endpoints {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                        &[email, &endpoint.id],
+                    )?;
+                }
+
+                tx.commit()?;
+            }
+
+            tracing::info!(
+                email = %email,
+                count = default_endpoints.len(),
+                "Created default endpoints for user"
+            );
+        }
+
+        // Now get and return the user's endpoints
+        self.get_endpoints_by_email(email)
+    }
+
     pub fn get_endpoints_by_email(&self, email: &str) -> Result<Vec<Endpoint>, StoreError> {
         tracing::info!(email = %email, "Starting to fetch endpoints");
 
