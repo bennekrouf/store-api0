@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .init();
 
     // Create and initialize the endpoint store
-    let mut store = EndpointStore::new("db/endpoints.db")?;
+    let mut store = EndpointStore::new("../db/endpoints.db")?;
 
     // Load default endpoints from YAML and initialize DB
     let config_content = std::fs::read_to_string("endpoints.yaml")?;
