@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_store = Arc::clone(&store_arc);
 
     // Try different ports for HTTP server
-    let http_ports = [8000]; // , 8080, 9090, 3333];
+    let http_ports = [9090]; // , 8080, 9090, 3333];
     let mut http_port = http_ports[0];
 
     // Find an available port
