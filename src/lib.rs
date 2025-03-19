@@ -772,7 +772,7 @@ impl EndpointStore {
         email: &str,
         endpoint_id: &str,
     ) -> Result<bool, StoreError> {
-        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+        let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
 
         tracing::info!(
             email = %email,
@@ -781,7 +781,7 @@ impl EndpointStore {
         );
 
         // First, check if we can find out all the tables with foreign key references to endpoints
-        let tables = vec!["parameter_alternatives", "parameters", "user_endpoints"];
+        let _tables = vec!["parameter_alternatives", "parameters", "user_endpoints"];
 
         // Remove just the user-endpoint association first
         match conn.execute(
