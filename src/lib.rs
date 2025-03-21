@@ -309,16 +309,17 @@ impl EndpointStore {
             e.text,
             e.description,
             e.verb,
+            e.base_url,
             p.name as param_name,
             p.description as param_description,
-            p.required,
+            CASE WHEN p.required IS NULL THEN 'false' ELSE p.required END as required,
             STRING_AGG(pa.alternative, ',') as alternatives
         FROM endpoints e
         INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE ue.email = ?
-        GROUP BY e.id, e.text, e.description, e.verb, p.name, p.description, p.required
+        GROUP BY e.id, e.text, e.description, e.verb, e.base_url, p.name, p.description, p.required
         "#
         } else {
             tracing::debug!("Using default endpoints query");
@@ -328,15 +329,16 @@ impl EndpointStore {
             e.text,
             e.description,
             e.verb,
+            e.base_url,
             p.name as param_name,
             p.description as param_description,
-            p.required,
+            CASE WHEN p.required IS NULL THEN 'false' ELSE p.required END as required,
             STRING_AGG(pa.alternative, ',') as alternatives
         FROM endpoints e
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE e.is_default = true
-        GROUP BY e.id, e.text, e.description, e.verb, p.name, p.description, p.required
+        GROUP BY e.id, e.text, e.description, e.verb, e.base_url, p.name, p.description, p.required
         "#
         };
 
@@ -352,21 +354,20 @@ impl EndpointStore {
         tracing::debug!(has_params = has_custom, "Executing query");
 
         let rows = match stmt.query_map(params, |row| {
-            let result = Ok((
+            let required: String = row.get(7).unwrap_or_else(|_| "false".to_string());
+            let required_bool = required == "true" || required == "1";
+
+            Ok((
                 row.get::<_, String>(0)?,         // id
                 row.get::<_, String>(1)?,         // text
                 row.get::<_, String>(2)?,         // description
                 row.get::<_, String>(3)?,         // verb
-                row.get::<_, String>(4)?,                                 // base url
+                row.get::<_, String>(4)?,         // base_url
                 row.get::<_, Option<String>>(5)?, // param_name
                 row.get::<_, Option<String>>(6)?, // param_description
-                row.get::<_, Option<bool>>(7)?,   // required
-                row.get::<_, Option<String>>(8)?, // alternatives as comma-separated string
-            ));
-            if let Err(ref e) = result {
-                tracing::error!(error = %e, "Error reading row data");
-            }
-            result
+                required_bool,                    // required (converted to bool)
+                row.get::<_, Option<String>>(8)?, // alternatives
+            ))
         }) {
             Ok(rows) => rows,
             Err(e) => {
@@ -407,8 +408,7 @@ impl EndpointStore {
                         }
                     });
 
-                    if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required)
-                    {
+                    if let (Some(name), Some(desc), req) = (param_name, param_desc, required) {
                         let alternatives = alternatives_str
                             .map(|s| {
                                 let alts = s.split(',').map(String::from).collect::<Vec<_>>();
@@ -424,7 +424,7 @@ impl EndpointStore {
                         endpoint.parameters.push(Parameter {
                             name: name.clone(),
                             description: desc,
-                            required: req,
+                            required,
                             alternatives,
                         });
                         tracing::trace!(
@@ -589,7 +589,7 @@ impl EndpointStore {
                             &endpoint.id,
                             &param.name,
                             &param.description,
-                            &param.required.to_string(),
+                            &(if param.required { "1" } else { "0" }).to_string(),
                         ],
                     )?;
 
