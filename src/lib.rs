@@ -30,6 +30,10 @@ pub struct Parameter {
     pub alternatives: Vec<String>,
 }
 
+fn default_base_url() -> String {
+    "http://localhost:3000".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Endpoint {
     pub id: String,
@@ -40,6 +44,8 @@ pub struct Endpoint {
     pub parameters: Vec<Parameter>,
     #[serde(default = "default_verb")]
     pub verb: String,
+    #[serde(default = "default_base_url")]
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +70,8 @@ impl EndpointStore {
         text VARCHAR NOT NULL,
         description VARCHAR NOT NULL,
         is_default BOOLEAN NOT NULL DEFAULT true,
-        verb VARCHAR NOT NULL DEFAULT 'GET'
+        verb VARCHAR NOT NULL DEFAULT 'GET',
+        base_url VARCHAR NOT NULL DEFAULT 'http://localhost:3000'
     );
     
     CREATE TABLE IF NOT EXISTS user_endpoints (
@@ -117,8 +124,8 @@ impl EndpointStore {
         // Insert new endpoints
         for endpoint in default_endpoints {
             tx.execute(
-                "INSERT INTO endpoints (id, text, description, is_default, verb) VALUES (?, ?, ?, true, ?)",
-                &[&endpoint.id, &endpoint.text, &endpoint.description, &endpoint.verb],
+                "INSERT INTO endpoints (id, text, description, is_default, verb, base_url) VALUES (?, ?, ?, true, ?, ?)",
+                &[&endpoint.id, &endpoint.text, &endpoint.description, &endpoint.verb, &endpoint.base_url],
             )?;
 
             for param in &endpoint.parameters {
@@ -176,6 +183,7 @@ impl EndpointStore {
                     e.text,
                     e.description,
                     e.verb,
+                    e.base_url,
                     p.name as param_name,
                     p.description as param_description,
                     p.required,
@@ -184,7 +192,7 @@ impl EndpointStore {
                 LEFT JOIN parameters p ON e.id = p.endpoint_id
                 LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
                 WHERE e.is_default = true
-                GROUP BY e.id, e.text, e.description, e.verb, p.name, p.description, p.required
+                GROUP BY e.id, e.text, e.description, e.verb, e.base_url, p.name, p.description, p.required
             "#)?;
 
                 let rows = stmt.query_map([], |row| {
@@ -193,10 +201,11 @@ impl EndpointStore {
                         row.get::<_, String>(1)?,         // text
                         row.get::<_, String>(2)?,         // description
                         row.get::<_, String>(3)?,         // verb
-                        row.get::<_, Option<String>>(4)?, // param_name
-                        row.get::<_, Option<String>>(5)?, // param_description
-                        row.get::<_, Option<bool>>(6)?,   // required
-                        row.get::<_, Option<String>>(7)?, // alternatives
+                        row.get::<_, String>(4)?,         // base_url
+                        row.get::<_, Option<String>>(5)?, // param_name
+                        row.get::<_, Option<String>>(6)?, // param_description
+                        row.get::<_, Option<bool>>(7)?,   // required
+                        row.get::<_, Option<String>>(8)?, // alternatives
                     ))
                 })?;
 
@@ -208,6 +217,7 @@ impl EndpointStore {
                         text,
                         description,
                         verb,
+                        base_url,
                         param_name,
                         param_desc,
                         required,
@@ -219,6 +229,7 @@ impl EndpointStore {
                         text,
                         description,
                         verb,
+                        base_url,
                         parameters: Vec::new(),
                     });
 
@@ -346,10 +357,11 @@ impl EndpointStore {
                 row.get::<_, String>(1)?,         // text
                 row.get::<_, String>(2)?,         // description
                 row.get::<_, String>(3)?,         // verb
-                row.get::<_, Option<String>>(4)?, // param_name
-                row.get::<_, Option<String>>(5)?, // param_description
-                row.get::<_, Option<bool>>(6)?,   // required
-                row.get::<_, Option<String>>(7)?, // alternatives as comma-separated string
+                row.get::<_, String>(4)?,                                 // base url
+                row.get::<_, Option<String>>(5)?, // param_name
+                row.get::<_, Option<String>>(6)?, // param_description
+                row.get::<_, Option<bool>>(7)?,   // required
+                row.get::<_, Option<String>>(8)?, // alternatives as comma-separated string
             ));
             if let Err(ref e) = result {
                 tracing::error!(error = %e, "Error reading row data");
@@ -371,6 +383,7 @@ impl EndpointStore {
                     text,
                     description,
                     verb,
+                    base_url,
                     param_name,
                     param_desc,
                     required,
@@ -389,6 +402,7 @@ impl EndpointStore {
                             text,
                             description,
                             verb,
+                            base_url,
                             parameters: Vec::new(),
                         }
                     });
@@ -518,11 +532,12 @@ impl EndpointStore {
                     // Update existing non-default endpoint
                     tracing::debug!(endpoint_id = %endpoint.id, "Updating existing endpoint");
                     tx.execute(
-                        "UPDATE endpoints SET text = ?, description = ?, verb = ? WHERE id = ?",
+                        "UPDATE endpoints SET text = ?, description = ?, verb = ?, base_url = ? WHERE id = ?",
                         &[
                             &endpoint.text,
                             &endpoint.description,
                             &endpoint.verb,
+                            &endpoint.base_url,
                             &endpoint.id,
                         ],
                     )?;
@@ -684,14 +699,15 @@ impl EndpointStore {
         } else {
             // Endpoint doesn't exist, create it
             tx.execute(
-            "INSERT INTO endpoints (id, text, description, verb, is_default) VALUES (?, ?, ?, ?, false)",
-            &[
-                &endpoint.id,
-                &endpoint.text,
-                &endpoint.description,
-                &endpoint.verb,
-            ],
-        )?;
+                "INSERT INTO endpoints (id, text, description, verb, base_url, is_default) VALUES (?, ?, ?, ?, ?, false)",
+                &[
+                    &endpoint.id,
+                    &endpoint.text,
+                    &endpoint.description,
+                    &endpoint.verb,
+                    &endpoint.base_url,
+                ],
+            )?;
 
             // Create the user association
             tx.execute(

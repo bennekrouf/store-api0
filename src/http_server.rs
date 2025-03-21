@@ -29,6 +29,13 @@ pub struct EndpointsResponse {
     message: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEndpointRequest {
+    email: String,
+    endpoint_id: String,
+    endpoint: Endpoint,
+}
+
 // Handler for uploading endpoints
 async fn upload_endpoints(
     store: web::Data<Arc<EndpointStore>>,
@@ -146,6 +153,95 @@ async fn upload_endpoints(
     }
 }
 
+async fn update_endpoint(
+    store: web::Data<Arc<EndpointStore>>,
+    update_data: web::Json<UpdateEndpointRequest>,
+) -> impl Responder {
+    let email = &update_data.email;
+    let endpoint_id = &update_data.endpoint_id;
+    let endpoint = &update_data.endpoint;
+
+    tracing::info!(
+        email = %email,
+        endpoint_id = %endpoint_id,
+        "Received HTTP update endpoint request"
+    );
+
+    // Validate that endpoint ID in path matches endpoint in body
+    if endpoint_id != &endpoint.id {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Endpoint ID in URL must match endpoint ID in request body"
+        }));
+    }
+
+    if endpoint.base_url.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Base URL cannot be empty"
+        }));
+    }
+
+    // Validate endpoint data
+    if endpoint.text.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Endpoint text cannot be empty"
+        }));
+    }
+
+    // Delete the old endpoint first
+    match store.delete_user_endpoint(email, endpoint_id).await {
+        Ok(_) => {
+            tracing::info!(
+                email = %email,
+                endpoint_id = %endpoint_id,
+                "Successfully deleted old endpoint before update"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                endpoint_id = %endpoint_id,
+                "Failed to delete old endpoint before update"
+            );
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to update endpoint: {}", e)
+            }));
+        }
+    }
+
+    // Add the updated endpoint
+    match store.add_user_endpoint(email, endpoint.clone()).await {
+        Ok(_) => {
+            tracing::info!(
+                email = %email,
+                endpoint_id = %endpoint_id,
+                "Successfully updated endpoint"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "Endpoint successfully updated",
+                "endpoint_id": endpoint.id
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                endpoint_id = %endpoint_id,
+                "Failed to add updated endpoint"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to update endpoint: {}", e)
+            }))
+        }
+    }
+}
+
 // Handler for deleting a specific endpoint
 async fn delete_endpoint(
     store: web::Data<Arc<EndpointStore>>,
@@ -224,6 +320,13 @@ async fn add_endpoint(
         return HttpResponse::BadRequest().json(serde_json::json!({
             "success": false,
             "message": "Endpoint ID cannot be empty"
+        }));
+    }
+
+    if endpoint.base_url.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Base URL cannot be empty"
         }));
     }
 
@@ -345,6 +448,7 @@ pub async fn start_http_server(
                             .route("/upload", web::post().to(upload_endpoints))
                             .route("/endpoints/{email}", web::get().to(get_endpoints))
                             .route("/endpoint", web::post().to(add_endpoint))
+                            .route("/endpoint", web::put().to(update_endpoint))
                             .route(
                                 "/endpoints/{email}/{endpoint_id}",
                                 web::delete().to(delete_endpoint),
