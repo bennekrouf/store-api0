@@ -1,8 +1,10 @@
 use duckdb::ToSql;
 use duckdb::{Connection, Result as DuckResult};
 use serde::{Deserialize, Serialize};
+use slug::slugify;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -36,6 +38,7 @@ fn default_base_url() -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Endpoint {
+    #[serde(default = "generate_uuid")]
     pub id: String,
     pub text: String,
     #[serde(default = "String::new")]
@@ -43,9 +46,59 @@ pub struct Endpoint {
     #[serde(default)]
     pub parameters: Vec<Parameter>,
     #[serde(default = "default_verb")]
+    #[serde(alias = "method")] // Allow 'method' as an alternative name
     pub verb: String,
     #[serde(default = "default_base_url")]
-    pub base_url: String,
+    #[serde(alias = "base")] // Handle camelCase from frontend
+    pub base: String,
+    #[serde(default = "String::new")]
+    pub path: String,
+    #[serde(default = "String::new")]
+    pub group_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApiGroup {
+    #[serde(default = "generate_uuid")]
+    pub id: String,
+    pub name: String,
+    #[serde(default = "String::new")]
+    pub description: String,
+    #[serde(default = "default_base_url")]
+    pub base: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApiGroupWithEndpoints {
+    #[serde(flatten)]
+    pub group: ApiGroup,
+    pub endpoints: Vec<Endpoint>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApiStorage {
+    pub api_groups: Vec<ApiGroupWithEndpoints>,
+}
+
+fn generate_uuid() -> String {
+    Uuid::new_v4().to_string()
+}
+
+// Generate ID from text using slugify and UUID for uniqueness
+pub fn generate_id_from_text(text: &str) -> String {
+    let slug = slugify(text);
+    if slug.is_empty() {
+        return generate_uuid();
+    }
+
+    // Create a shorter UUID suffix (first 8 chars)
+    let uuid_short = Uuid::new_v4()
+        .to_string()
+        .split('-')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    format!("{}-{}", slug, uuid_short)
 }
 
 #[derive(Debug, Clone)]
@@ -62,41 +115,8 @@ impl EndpointStore {
         let conn = Connection::open(db_path)?;
         tracing::debug!("DuckDB connection established");
 
-        // Create tables if they don't exist
-        conn.execute_batch(
-            "
-    CREATE TABLE IF NOT EXISTS endpoints (
-        id VARCHAR PRIMARY KEY,
-        text VARCHAR NOT NULL,
-        description VARCHAR NOT NULL,
-        is_default BOOLEAN NOT NULL DEFAULT true,
-        verb VARCHAR NOT NULL DEFAULT 'GET',
-        base_url VARCHAR NOT NULL DEFAULT 'http://localhost:3000'
-    );
-    
-    CREATE TABLE IF NOT EXISTS user_endpoints (
-        email VARCHAR NOT NULL,
-        endpoint_id VARCHAR NOT NULL,
-        FOREIGN KEY (endpoint_id) REFERENCES endpoints(id),
-        PRIMARY KEY (email, endpoint_id)
-    );
-    
-    CREATE TABLE IF NOT EXISTS parameters (
-        endpoint_id VARCHAR,
-        name VARCHAR NOT NULL,
-        description VARCHAR NOT NULL,
-        required BOOLEAN NOT NULL DEFAULT false,
-        FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
-    );
-    
-    CREATE TABLE IF NOT EXISTS parameter_alternatives (
-        endpoint_id VARCHAR,
-        parameter_name VARCHAR,
-        alternative VARCHAR NOT NULL,
-        FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
-    );
-    ",
-        )?;
+        // Create tables with the new schema
+        conn.execute_batch(include_str!("../sql/schema.sql"))?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -105,132 +125,513 @@ impl EndpointStore {
 
     pub fn initialize_if_empty(
         &mut self,
-        default_endpoints: &[Endpoint],
+        default_api_groups: &[ApiGroupWithEndpoints],
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+
         // Check if we already have default endpoints
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM endpoints WHERE is_default = true",
+            "SELECT COUNT(*) FROM api_groups WHERE is_default = true",
             [],
             |row| row.get(0),
         )?;
 
         if count > 0 {
+            // Default API groups already exist, no need to create them
+            tracing::info!("Default API groups already exist. Skipping initialization.");
             return Ok(());
         }
 
+        tracing::info!("Initializing database with default API groups and endpoints");
+
+        // Start a transaction for the entire initialization process
         let tx = conn.transaction()?;
 
-        // Insert new endpoints
-        for endpoint in default_endpoints {
+        // Create default API groups and endpoints
+        for group_with_endpoints in default_api_groups {
+            let group = &group_with_endpoints.group;
+
+            // Insert the API group
             tx.execute(
-                "INSERT INTO endpoints (id, text, description, is_default, verb, base_url) VALUES (?, ?, ?, true, ?, ?)",
-                &[&endpoint.id, &endpoint.text, &endpoint.description, &endpoint.verb, &endpoint.base_url],
+            "INSERT INTO api_groups (id, name, description, base, is_default) VALUES (?, ?, ?, ?, true)",
+            &[
+                &group.id,
+                &group.name,
+                &group.description,
+                &group.base,
+            ],
+        )?;
+
+            tracing::debug!(
+                group_id = %group.id,
+                group_name = %group.name,
+                "Inserted API group"
+            );
+
+            // Insert endpoints for this group
+            for endpoint in &group_with_endpoints.endpoints {
+                // Generate ID if not provided
+                let endpoint_id = if endpoint.id.is_empty() {
+                    generate_id_from_text(&endpoint.text)
+                } else {
+                    endpoint.id.clone()
+                };
+
+                // Insert endpoint
+                tx.execute(
+                "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, is_default) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, true)",
+                &[
+                    &endpoint_id,
+                    &endpoint.text,
+                    &endpoint.description,
+                    &endpoint.verb,
+                    &endpoint.base,
+                    &endpoint.path,
+                    &group.id,
+                ],
             )?;
 
-            for param in &endpoint.parameters {
-                tx.execute(
-                    "INSERT INTO parameters (endpoint_id, name, description, required) 
-                    VALUES (?, ?, ?, ?)",
-                    &[
-                        &endpoint.id,
-                        &param.name,
-                        &param.description,
-                        &param.required.to_string(),
-                    ],
-                )?;
+                tracing::debug!(
+                    endpoint_id = %endpoint_id,
+                    endpoint_text = %endpoint.text,
+                    "Inserted endpoint"
+                );
 
-                for alt in &param.alternatives {
+                // Insert parameters
+                for param in &endpoint.parameters {
                     tx.execute(
-                        "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
-                        VALUES (?, ?, ?)",
-                        &[&endpoint.id, &param.name, alt],
+                        "INSERT INTO parameters (endpoint_id, name, description, required) 
+                     VALUES (?, ?, ?, ?)",
+                        &[
+                            &endpoint_id,
+                            &param.name,
+                            &param.description,
+                            &param.required.to_string(),
+                        ],
                     )?;
+
+                    // Insert parameter alternatives
+                    for alt in &param.alternatives {
+                        tx.execute(
+                        "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
+                         VALUES (?, ?, ?)",
+                        &[&endpoint_id, &param.name, alt],
+                    )?;
+                    }
                 }
             }
         }
 
+        // Create a default user for testing if none exists
+        // This is optional but helpful during development
+        let default_email = "default@example.com";
+
+        // Associate default groups with the default user
+        for group_with_endpoints in default_api_groups {
+            // Associate group with default user
+            tx.execute(
+                "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
+                &[default_email, &group_with_endpoints.group.id],
+            )?;
+
+            // Associate endpoints with default user
+            for endpoint in &group_with_endpoints.endpoints {
+                tx.execute(
+                    "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                    &[default_email, &endpoint.id],
+                )?;
+            }
+        }
+
+        // Commit the transaction
         tx.commit()?;
+
+        tracing::info!(
+            group_count = default_api_groups.len(),
+            "Successfully initialized database with default API groups and endpoints"
+        );
+
         Ok(())
     }
 
-    pub async fn get_or_create_user_endpoints(
+    // Add this method to ensure any user has access to default groups
+    pub async fn ensure_user_has_default_groups(&self, email: &str) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+
+        // Check if user already has groups
+        let has_groups: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_groups WHERE email = ?)",
+            [email],
+            |row| row.get(0),
+        )?;
+
+        if has_groups {
+            // User already has group associations
+            return Ok(());
+        }
+
+        tracing::info!(email = %email, "Creating default group associations for user");
+
+        // Get all default group IDs
+        let mut stmt = conn.prepare("SELECT id FROM api_groups WHERE is_default = true")?;
+
+        let group_ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+
+        if group_ids.is_empty() {
+            tracing::warn!("No default API groups found in database");
+            return Ok(());
+        }
+
+        // Create associations in a transaction
+        let tx = conn.transaction()?;
+
+        for group_id in &group_ids {
+            tx.execute(
+                "INSERT INTO user_groups (email, group_id) VALUES (?, ?)",
+                &[email, group_id],
+            )?;
+
+            // Also associate the user with all endpoints in this group
+            let mut endpoint_stmt = tx.prepare("SELECT id FROM endpoints WHERE group_id = ?")?;
+
+            let endpoint_ids: Vec<String> = endpoint_stmt
+                .query_map([group_id], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()?;
+
+            for endpoint_id in &endpoint_ids {
+                tx.execute(
+                    "INSERT INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                    &[email, endpoint_id],
+                )?;
+            }
+        }
+
+        tx.commit()?;
+
+        tracing::info!(
+            email = %email,
+            group_count = group_ids.len(),
+            "Successfully created default group associations"
+        );
+
+        Ok(())
+    }
+
+    // Get or create user groups and endpoints
+    pub async fn get_or_create_user_api_groups(
         &self,
         email: &str,
-    ) -> Result<Vec<Endpoint>, StoreError> {
-        // Check if user has custom endpoints
-        let has_custom: bool = {
-            let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
-            conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE email = ?)",
-                [email],
-                |row| row.get(0),
-            )?
+    ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+
+        // Check if user has custom groups
+        let has_custom: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_groups WHERE email = ?)",
+            [email],
+            |row| row.get(0),
+        )?;
+
+        // If user doesn't have custom groups, create them from defaults
+        if !has_custom {
+            tracing::info!(email = %email, "User has no API groups, creating defaults");
+
+            // Get default groups
+            let default_groups = self.get_default_api_groups(&conn)?;
+
+            // Debug log to check if defaults are found
+            tracing::info!(
+                email = %email,
+                group_count = default_groups.len(),
+                "Found default API groups to create"
+            );
+
+            if default_groups.is_empty() {
+                tracing::warn!(email = %email, "No default API groups found");
+                // You might want to create at least one basic default group here
+            }
+
+            // Create user associations within a transaction
+            let tx = conn.transaction()?;
+            for group in &default_groups {
+                // Associate group with user
+                tx.execute(
+                    "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
+                    &[email, &group.group.id],
+                )?;
+
+                // Associate each endpoint with user
+                for endpoint in &group.endpoints {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                        &[email, &endpoint.id],
+                    )?;
+                }
+            }
+            tx.commit()?;
+
+            tracing::info!(
+                email = %email,
+                count = default_groups.len(),
+                "Created default API groups for user"
+            );
+        }
+
+        // Now get and return the user's groups using the same connection
+        self.get_api_groups_by_email(email, &conn)
+    }
+
+    // Get default API groups and their endpoints
+    fn get_default_api_groups(
+        &self,
+        conn: &Connection,
+    ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
+        tracing::info!("Fetching default API groups from database");
+
+        // First check if there are any default groups
+        let default_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM api_groups WHERE is_default = true",
+            [],
+            |row| row.get(0),
+        )?;
+
+        tracing::info!(
+            count = default_count,
+            "Found default API groups in database"
+        );
+
+        if default_count == 0 {
+            tracing::warn!("No default API groups found in database");
+            return Ok(Vec::new());
+        }
+
+        // Get all default groups
+        let mut stmt = match conn
+            .prepare("SELECT id, name, description, base FROM api_groups WHERE is_default = true")
+        {
+            Ok(stmt) => stmt,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to prepare statement for fetching default groups");
+                return Err(StoreError::Database(e));
+            }
         };
 
-        // If user doesn't have custom endpoints, create them from defaults
-        if !has_custom {
-            tracing::info!(email = %email, "User has no endpoints, creating defaults");
+        let groups = match stmt.query_map([], |row| {
+            Ok(ApiGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                base: row.get(3)?,
+            })
+        }) {
+            Ok(groups) => groups,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to query default groups");
+                return Err(StoreError::Database(e));
+            }
+        };
 
-            // Get default endpoints
-            let default_endpoints: Vec<Endpoint> = {
-                let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+        let mut result = Vec::new();
+        for group_result in groups {
+            match group_result {
+                Ok(group) => {
+                    tracing::debug!(
+                        group_id = %group.id,
+                        group_name = %group.name,
+                        "Processing default group"
+                    );
 
-                // Get the default endpoints
-                let mut stmt = conn.prepare(r#"
-                SELECT 
-                    e.id,
-                    e.text,
-                    e.description,
-                    e.verb,
-                    e.base_url,
-                    p.name as param_name,
-                    p.description as param_description,
-                    p.required,
-                    STRING_AGG(pa.alternative, ',') as alternatives
-                FROM endpoints e
-                LEFT JOIN parameters p ON e.id = p.endpoint_id
-                LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
-                WHERE e.is_default = true
-                GROUP BY e.id, e.text, e.description, e.verb, e.base_url, p.name, p.description, p.required
-            "#)?;
+                    // For each group, get its endpoints
+                    match self.get_endpoints_by_group_id(&group.id, &conn) {
+                        Ok(endpoints) => {
+                            tracing::debug!(
+                                group_id = %group.id,
+                                endpoint_count = endpoints.len(),
+                                "Retrieved endpoints for group"
+                            );
 
-                let rows = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,         // id
-                        row.get::<_, String>(1)?,         // text
-                        row.get::<_, String>(2)?,         // description
-                        row.get::<_, String>(3)?,         // verb
-                        row.get::<_, String>(4)?,         // base_url
-                        row.get::<_, Option<String>>(5)?, // param_name
-                        row.get::<_, Option<String>>(6)?, // param_description
-                        row.get::<_, Option<bool>>(7)?,   // required
-                        row.get::<_, Option<String>>(8)?, // alternatives
-                    ))
-                })?;
+                            result.push(ApiGroupWithEndpoints { group, endpoints });
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                group_id = %group.id,
+                                "Failed to get endpoints for group"
+                            );
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to process group result");
+                    return Err(StoreError::Database(e));
+                }
+            }
+        }
 
-                // Process rows into endpoints
-                let mut endpoints_map = std::collections::HashMap::new();
-                for row in rows {
-                    let (
-                        id,
-                        text,
-                        description,
-                        verb,
-                        base_url,
-                        param_name,
-                        param_desc,
-                        required,
-                        alternatives_str,
-                    ) = row?;
+        tracing::info!(
+            group_count = result.len(),
+            "Successfully retrieved default API groups"
+        );
 
-                    let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| Endpoint {
-                        id,
-                        text,
-                        description,
-                        verb,
-                        base_url,
-                        parameters: Vec::new(),
+        // Log details of each group for debugging
+        for (i, group_with_endpoints) in result.iter().enumerate() {
+            tracing::debug!(
+                index = i,
+                group_id = %group_with_endpoints.group.id,
+                group_name = %group_with_endpoints.group.name,
+                endpoint_count = group_with_endpoints.endpoints.len(),
+                "Default group details"
+            );
+        }
+
+        Ok(result)
+    }
+
+    // Get endpoints for a specific group
+    fn get_endpoints_by_group_id(
+        &self,
+        group_id: &str,
+        conn: &Connection,
+    ) -> Result<Vec<Endpoint>, StoreError> {
+        tracing::debug!(
+            group_id = %group_id,
+            "Fetching endpoints for group"
+        );
+
+        //let conn = self.conn.lock().map_err(|_| {
+        //    tracing::error!("Failed to acquire database lock in get_endpoints_by_group_id");
+        //    StoreError::Lock
+        //})?;
+
+        println!("After the conn lock");
+
+        // Check if there are any endpoints for this group
+        let endpoint_count: i64 = match conn.query_row(
+            "SELECT COUNT(*) FROM endpoints WHERE group_id = ?",
+            [group_id],
+            |row| row.get(0),
+        ) {
+            Ok(count) => count,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    group_id = %group_id,
+                    "Failed to count endpoints for group"
+                );
+                return Err(StoreError::Database(e));
+            }
+        };
+
+        tracing::debug!(
+            group_id = %group_id,
+            count = endpoint_count,
+            "Found endpoints for group"
+        );
+
+        if endpoint_count == 0 {
+            tracing::warn!(
+                group_id = %group_id,
+                "No endpoints found for group"
+            );
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = match conn.prepare(r#"
+        SELECT 
+            e.id,
+            e.text,
+            e.description,
+            e.verb,
+            e.base,
+            e.path,
+            p.name as param_name,
+            p.description as param_description,
+            p.required,
+            STRING_AGG(pa.alternative, ',') as alternatives
+        FROM endpoints e
+        LEFT JOIN parameters p ON e.id = p.endpoint_id
+        LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
+        WHERE e.group_id = ?
+        GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required
+    "#) {
+        Ok(stmt) => stmt,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                group_id = %group_id,
+                "Failed to prepare statement for fetching endpoints"
+            );
+            return Err(StoreError::Database(e));
+        }
+    };
+
+        let rows = match stmt.query_map([group_id], |row| {
+            let id: String = row.get(0)?;
+            tracing::trace!(
+                endpoint_id = %id,
+                "Processing endpoint row from database"
+            );
+
+            Ok((
+                id,
+                row.get::<_, String>(1)?,         // text
+                row.get::<_, String>(2)?,         // description
+                row.get::<_, String>(3)?,         // verb
+                row.get::<_, String>(4)?,         // base
+                row.get::<_, String>(5)?,         // path
+                row.get::<_, Option<String>>(6)?, // param_name
+                row.get::<_, Option<String>>(7)?, // param_description
+                row.get::<_, Option<bool>>(8)?,   // required
+                row.get::<_, Option<String>>(9)?, // alternatives
+            ))
+        }) {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    group_id = %group_id,
+                    "Failed to query endpoints for group"
+                );
+                return Err(StoreError::Database(e));
+            }
+        };
+
+        // Process rows into endpoints
+        let mut endpoints_map = std::collections::HashMap::new();
+        for row_result in rows {
+            match row_result {
+                Ok((
+                    id,
+                    text,
+                    description,
+                    verb,
+                    base,
+                    path_value,
+                    param_name,
+                    param_desc,
+                    required,
+                    alternatives_str,
+                )) => {
+                    let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
+                        tracing::debug!(
+                            endpoint_id = %id,
+                            endpoint_text = %text,
+                            "Creating endpoint object"
+                        );
+
+                        Endpoint {
+                            id,
+                            text,
+                            description,
+                            verb,
+                            base,
+                            path: path_value,
+                            parameters: Vec::new(),
+                            group_id: group_id.to_string(),
+                        }
                     });
 
                     if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required)
@@ -238,6 +639,12 @@ impl EndpointStore {
                         let alternatives = alternatives_str
                             .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
                             .unwrap_or_default();
+
+                        tracing::trace!(
+                            endpoint_id = %endpoint.id,
+                            param_name = %name,
+                            "Adding parameter to endpoint"
+                        );
 
                         endpoint.parameters.push(Parameter {
                             name,
@@ -247,235 +654,205 @@ impl EndpointStore {
                         });
                     }
                 }
-
-                endpoints_map.into_values().collect()
-            };
-
-            // Create user associations for each default endpoint
-            {
-                let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
-                let tx = conn.transaction()?;
-
-                for endpoint in &default_endpoints {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-                        &[email, &endpoint.id],
-                    )?;
-                }
-
-                tx.commit()?;
-            }
-
-            tracing::info!(
-                email = %email,
-                count = default_endpoints.len(),
-                "Created default endpoints for user"
-            );
-        }
-
-        // Now get and return the user's endpoints
-        self.get_endpoints_by_email(email)
-    }
-
-    pub fn get_endpoints_by_email(&self, email: &str) -> Result<Vec<Endpoint>, StoreError> {
-        tracing::info!(email = %email, "Starting to fetch endpoints");
-
-        let conn = self.conn.lock().map_err(|_e| {
-            tracing::error!("Failed to acquire database lock");
-            StoreError::Lock
-        })?;
-
-        // Check if user has custom endpoints
-        let has_custom: bool = match conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE email = ?)",
-            [email],
-            |row| row.get(0),
-        ) {
-            Ok(result) => {
-                tracing::debug!(email = %email, has_custom = %result, "Checked custom endpoints");
-                result
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to check for custom endpoints");
-                return Err(StoreError::Database(e));
-            }
-        };
-
-        let query = if has_custom {
-            tracing::debug!(email = %email, "Using custom endpoints query");
-            r#"
-        SELECT 
-            e.id,
-            e.text,
-            e.description,
-            e.verb,
-            e.base_url,
-            p.name as param_name,
-            p.description as param_description,
-            CASE WHEN p.required IS NULL THEN 'false' ELSE p.required END as required,
-            STRING_AGG(pa.alternative, ',') as alternatives
-        FROM endpoints e
-        INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
-        LEFT JOIN parameters p ON e.id = p.endpoint_id
-        LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
-        WHERE ue.email = ?
-        GROUP BY e.id, e.text, e.description, e.verb, e.base_url, p.name, p.description, p.required
-        "#
-        } else {
-            tracing::debug!("Using default endpoints query");
-            r#"
-        SELECT 
-            e.id,
-            e.text,
-            e.description,
-            e.verb,
-            e.base_url,
-            p.name as param_name,
-            p.description as param_description,
-            CASE WHEN p.required IS NULL THEN 'false' ELSE p.required END as required,
-            STRING_AGG(pa.alternative, ',') as alternatives
-        FROM endpoints e
-        LEFT JOIN parameters p ON e.id = p.endpoint_id
-        LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
-        WHERE e.is_default = true
-        GROUP BY e.id, e.text, e.description, e.verb, e.base_url, p.name, p.description, p.required
-        "#
-        };
-
-        let mut stmt = match conn.prepare(query) {
-            Ok(stmt) => stmt,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to prepare SQL statement");
-                return Err(StoreError::Database(e));
-            }
-        };
-
-        let params: &[&dyn ToSql] = if has_custom { &[&email] } else { &[] };
-        tracing::debug!(has_params = has_custom, "Executing query");
-
-        let rows = match stmt.query_map(params, |row| {
-            let required: String = row.get(7).unwrap_or_else(|_| "false".to_string());
-            let required_bool = required == "true" || required == "1";
-
-            Ok((
-                row.get::<_, String>(0)?,         // id
-                row.get::<_, String>(1)?,         // text
-                row.get::<_, String>(2)?,         // description
-                row.get::<_, String>(3)?,         // verb
-                row.get::<_, String>(4)?,         // base_url
-                row.get::<_, Option<String>>(5)?, // param_name
-                row.get::<_, Option<String>>(6)?, // param_description
-                required_bool,                    // required (converted to bool)
-                row.get::<_, Option<String>>(8)?, // alternatives
-            ))
-        }) {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to execute query");
-                return Err(StoreError::Database(e));
-            }
-        };
-
-        let mut endpoints_map = std::collections::HashMap::new();
-        for row in rows {
-            match row {
-                Ok((
-                    id,
-                    text,
-                    description,
-                    verb,
-                    base_url,
-                    param_name,
-                    param_desc,
-                    required,
-                    alternatives_str,
-                )) => {
-                    tracing::trace!(
-                        endpoint_id = %id,
-                        has_parameter = param_name.is_some(),
-                        "Processing endpoint row"
-                    );
-
-                    let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
-                        tracing::debug!(endpoint_id = %id, "Creating new endpoint entry");
-                        Endpoint {
-                            id,
-                            text,
-                            description,
-                            verb,
-                            base_url,
-                            parameters: Vec::new(),
-                        }
-                    });
-
-                    if let (Some(name), Some(desc), req) = (param_name, param_desc, required) {
-                        let alternatives = alternatives_str
-                            .map(|s| {
-                                let alts = s.split(',').map(String::from).collect::<Vec<_>>();
-                                tracing::trace!(
-                                    param = %name,
-                                    alt_count = alts.len(),
-                                    "Processed parameter alternatives"
-                                );
-                                alts
-                            })
-                            .unwrap_or_default();
-
-                        endpoint.parameters.push(Parameter {
-                            name: name.clone(),
-                            description: desc,
-                            required,
-                            alternatives,
-                        });
-                        tracing::trace!(
-                            endpoint_id = %endpoint.id,
-                            parameter = %name,
-                            required = req,
-                            "Added parameter to endpoint"
-                        );
-                    }
-                }
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to process row");
+                    tracing::error!(
+                        error = %e,
+                        group_id = %group_id,
+                        "Failed to process endpoint row"
+                    );
                     return Err(StoreError::Database(e));
                 }
             }
         }
 
-        let endpoints = endpoints_map.into_values().collect::<Vec<_>>();
-        tracing::info!(
-            endpoint_count = endpoints.len(),
-            email = %email,
-            "Successfully fetched endpoints"
+        let result: Vec<Endpoint> = endpoints_map.into_values().collect();
+
+        tracing::debug!(
+            group_id = %group_id,
+            endpoint_count = result.len(),
+            "Successfully retrieved endpoints for group"
         );
 
-        // Only log endpoint details if we have any
-        if !endpoints.is_empty() {
-            for endpoint in &endpoints {
-                tracing::debug!(
-                    id = %endpoint.id,
-                    text = %endpoint.text,
-                    param_count = endpoint.parameters.len(),
-                    "Endpoint details"
-                );
-            }
-        } else {
-            tracing::warn!(email = %email, "No endpoints found");
-        }
-
-        Ok(endpoints)
+        Ok(result)
     }
 
-    pub async fn replace_user_endpoints(
+    // Get all API groups and endpoints for a user
+    pub fn get_api_groups_by_email(
         &self,
         email: &str,
-        endpoints: Vec<Endpoint>,
+        conn: &Connection,
+    ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
+        tracing::info!(email = %email, "Starting to fetch API groups and endpoints");
+
+        //let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+
+        // Check if user has custom groups
+        let has_custom: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_groups WHERE email = ?)",
+            [email],
+            |row| row.get(0),
+        )?;
+
+        // Get user's groups (either custom or default)
+        let groups_query = if has_custom {
+            r#"
+            SELECT g.id, g.name, g.description, g.base
+            FROM api_groups g
+            INNER JOIN user_groups ug ON g.id = ug.group_id
+            WHERE ug.email = ?
+            "#
+        } else {
+            r#"
+            SELECT g.id, g.name, g.description, g.base
+            FROM api_groups g
+            WHERE g.is_default = true
+            "#
+        };
+
+        let mut stmt = conn.prepare(groups_query)?;
+        let params: &[&dyn ToSql] = if has_custom { &[&email] } else { &[] };
+
+        let groups = stmt.query_map(params, |row| {
+            Ok(ApiGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                base: row.get(3)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for group_result in groups {
+            let group = group_result?;
+
+            tracing::debug!(
+                group_id = %group.id,
+                group_name = %group.name,
+                "Processing group"
+            );
+
+            // Get endpoints for this group
+            let endpoints_query = if has_custom {
+                r#"
+                SELECT 
+                    e.id, e.text, e.description, e.verb, e.base, e.path,
+                    p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives
+                FROM endpoints e
+                INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
+                LEFT JOIN parameters p ON e.id = p.endpoint_id
+                LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
+                WHERE ue.email = ? AND e.group_id = ?
+                GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required
+                "#
+            } else {
+                r#"
+                SELECT 
+                    e.id, e.text, e.description, e.verb, e.base, e.path,
+                    p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives
+                FROM endpoints e
+                LEFT JOIN parameters p ON e.id = p.endpoint_id
+                LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
+                WHERE e.is_default = true AND e.group_id = ?
+                GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required
+                "#
+            };
+
+            let mut endpoints_stmt = conn.prepare(endpoints_query)?;
+            let endpoints_params: Vec<&dyn ToSql> = if has_custom {
+                vec![&email, &group.id]
+            } else {
+                vec![&group.id]
+            };
+
+            let endpoint_rows = endpoints_stmt.query_map(&endpoints_params[..], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,         // id
+                    row.get::<_, String>(1)?,         // text
+                    row.get::<_, String>(2)?,         // description
+                    row.get::<_, String>(3)?,         // verb
+                    row.get::<_, String>(4)?,         // base
+                    row.get::<_, String>(5)?,         // path
+                    row.get::<_, Option<String>>(6)?, // param_name
+                    row.get::<_, Option<String>>(7)?, // param_description
+                    row.get::<_, Option<bool>>(8)?,   // required
+                    row.get::<_, Option<String>>(9)?, // alternatives
+                ))
+            })?;
+
+            // Process endpoint rows
+            let mut endpoints_map = std::collections::HashMap::new();
+            for row_result in endpoint_rows {
+                let (
+                    id,
+                    text,
+                    description,
+                    verb,
+                    base,
+                    path,
+                    param_name,
+                    param_desc,
+                    required,
+                    alternatives_str,
+                ) = row_result?;
+
+                let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| Endpoint {
+                    id,
+                    text,
+                    description,
+                    verb,
+                    base,
+                    path,
+                    parameters: Vec::new(),
+                    group_id: group.id.clone(),
+                });
+
+                if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {
+                    let alternatives = alternatives_str
+                        .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
+                        .unwrap_or_default();
+
+                    endpoint.parameters.push(Parameter {
+                        name,
+                        description: desc,
+                        required: req,
+                        alternatives,
+                    });
+                }
+            }
+
+            let group_endpoints: Vec<Endpoint> = endpoints_map.into_values().collect();
+            tracing::debug!(
+                group_id = %group.id,
+                endpoint_count = group_endpoints.len(),
+                "Added endpoints to group"
+            );
+
+            result.push(ApiGroupWithEndpoints {
+                group,
+                endpoints: group_endpoints,
+            });
+        }
+
+        tracing::info!(
+            group_count = result.len(),
+            email = %email,
+            "Successfully fetched API groups and endpoints"
+        );
+
+        Ok(result)
+    }
+
+    // Replace all user API groups and endpoints
+    pub async fn replace_user_api_groups(
+        &self,
+        email: &str,
+        api_groups: Vec<ApiGroupWithEndpoints>,
     ) -> Result<usize, StoreError> {
         let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
 
-        tracing::info!(email = %email, "Starting complete endpoint replacement");
+        tracing::info!(email = %email, "Starting complete API group replacement");
 
-        // First try the force cleanup approach
+        // Clean up existing user data
         match self.force_clean_user_data(email, &mut conn) {
             Ok(_) => {
                 tracing::info!(email = %email, "Successfully cleaned up user data");
@@ -487,7 +864,7 @@ impl EndpointStore {
                     "Failed to clean up user data, will try fallback approach"
                 );
 
-                // Try a fallback approach if the force clean fails
+                // Fallback approach
                 match self.fallback_clean_user_data(email, &mut conn) {
                     Ok(_) => tracing::info!(email = %email, "Fallback cleanup successful"),
                     Err(e) => {
@@ -501,24 +878,264 @@ impl EndpointStore {
             }
         }
 
-        // Now that we've tried to clean up, proceed with adding the new endpoints
+        // Add new groups and endpoints
         let tx = conn.transaction()?;
         let mut imported_count = 0;
 
-        for endpoint in &endpoints {
+        for group_with_endpoints in &api_groups {
+            let group = &group_with_endpoints.group;
+
+            // Generate ID if not provided
+            let group_id = if group.id.is_empty() {
+                generate_id_from_text(&group.name)
+            } else {
+                group.id.clone()
+            };
+
+            // Check if group exists
+            let group_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM api_groups WHERE id = ?)",
+                [&group_id],
+                |row| row.get(0),
+            )?;
+
+            if !group_exists {
+                // Create new group
+                tracing::debug!(group_id = %group_id, "Creating new API group");
+                tx.execute(
+                    "INSERT INTO api_groups (id, name, description, base, is_default) VALUES (?, ?, ?, ?, false)",
+                    &[&group_id, &group.name, &group.description, &group.base],
+                )?;
+            } else {
+                // Check if it's a default group
+                let is_default: bool = tx.query_row(
+                    "SELECT is_default FROM api_groups WHERE id = ?",
+                    [&group_id],
+                    |row| row.get(0),
+                )?;
+
+                if !is_default {
+                    // Update existing non-default group
+                    tracing::debug!(group_id = %group_id, "Updating existing API group");
+                    tx.execute(
+                        "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+                        &[&group.name, &group.description, &group.base, &group_id],
+                    )?;
+                }
+            }
+
+            // Link group to user
+            tx.execute(
+                "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
+                &[email, &group_id],
+            )?;
+
+            // Process endpoints for this group
+            for endpoint in &group_with_endpoints.endpoints {
+                // Generate ID if not provided
+                let endpoint_id = if endpoint.id.is_empty() {
+                    generate_id_from_text(&endpoint.text)
+                } else {
+                    endpoint.id.clone()
+                };
+
+                // Check if endpoint exists
+                let endpoint_exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
+                    [&endpoint_id],
+                    |row| row.get(0),
+                )?;
+
+                if !endpoint_exists {
+                    // Create new endpoint
+                    tracing::debug!(endpoint_id = %endpoint_id, "Creating new endpoint");
+                    tx.execute(
+                        "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, is_default) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?, false)",
+                        &[
+                            &endpoint_id,
+                            &endpoint.text,
+                            &endpoint.description,
+                            &endpoint.verb,
+                            &endpoint.base,
+                            &endpoint.path,
+                            &group_id,
+                        ],
+                    )?;
+                } else {
+                    // Check if it's a default endpoint
+                    let is_default: bool = tx.query_row(
+                        "SELECT is_default FROM endpoints WHERE id = ?",
+                        [&endpoint_id],
+                        |row| row.get(0),
+                    )?;
+
+                    if !is_default {
+                        // Update existing non-default endpoint
+                        tracing::debug!(endpoint_id = %endpoint_id, "Updating existing endpoint");
+                        tx.execute(
+                            "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
+                            &[
+                                &endpoint.text,
+                                &endpoint.description,
+                                &endpoint.verb,
+                                &endpoint.base,
+                                &endpoint.path,
+                                &group_id,
+                                &endpoint_id,
+                            ],
+                        )?;
+                    }
+                }
+
+                // Link endpoint to user
+                tx.execute(
+                    "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
+                    &[email, &endpoint_id],
+                )?;
+
+                // Process parameters for non-default endpoints
+                let is_default: bool = tx.query_row(
+                    "SELECT is_default FROM endpoints WHERE id = ?",
+                    [&endpoint_id],
+                    |row| row.get(0),
+                )?;
+
+                if !is_default {
+                    // Clean up existing parameters first
+                    tx.execute(
+                        "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
+                        [&endpoint_id],
+                    )?;
+
+                    tx.execute(
+                        "DELETE FROM parameters WHERE endpoint_id = ?",
+                        [&endpoint_id],
+                    )?;
+
+                    // Add new parameters
+                    for param in &endpoint.parameters {
+                        tx.execute(
+                            "INSERT INTO parameters (endpoint_id, name, description, required) 
+                             VALUES (?, ?, ?, ?)",
+                            &[
+                                &endpoint_id,
+                                &param.name,
+                                &param.description,
+                                &param.required.to_string(),
+                            ],
+                        )?;
+
+                        // Add parameter alternatives
+                        for alt in &param.alternatives {
+                            tx.execute(
+                                "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
+                                 VALUES (?, ?, ?)",
+                                &[&endpoint_id, &param.name, alt],
+                            )?;
+                        }
+                    }
+                }
+
+                imported_count += 1;
+            }
+        }
+
+        tx.commit()?;
+
+        tracing::info!(
+            email = %email,
+            group_count = api_groups.len(),
+            endpoint_count = imported_count,
+            "Successfully imported API groups and endpoints"
+        );
+
+        Ok(imported_count)
+    }
+
+    pub async fn add_user_api_group(
+        &self,
+        email: &str,
+        api_group: &ApiGroupWithEndpoints,
+    ) -> Result<usize, StoreError> {
+        let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
+        let tx = conn.transaction()?;
+
+        let group = &api_group.group;
+        let group_id = &group.id;
+
+        tracing::info!(
+            email = %email,
+            group_id = %group_id,
+            "Adding API group"
+        );
+
+        // Check if group exists
+        let group_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM api_groups WHERE id = ?)",
+            [group_id],
+            |row| row.get(0),
+        )?;
+
+        if !group_exists {
+            // Insert new group
+            tx.execute(
+                "INSERT INTO api_groups (id, name, description, base, is_default) VALUES (?, ?, ?, ?, false)",
+                &[
+                    group_id,
+                    &group.name,
+                    &group.description,
+                    &group.base,
+                ],
+            )?;
+        } else {
+            // Check if it's a default group
+            let is_default: bool = tx.query_row(
+                "SELECT is_default FROM api_groups WHERE id = ?",
+                [group_id],
+                |row| row.get(0),
+            )?;
+
+            if !is_default {
+                // Update existing non-default group
+                tx.execute(
+                    "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+                    &[&group.name, &group.description, &group.base, group_id],
+                )?;
+            }
+        }
+
+        // Associate group with user
+        tx.execute(
+            "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
+            &[email, group_id],
+        )?;
+
+        // Add endpoints
+        let mut endpoint_count = 0;
+
+        for endpoint in &api_group.endpoints {
             // Check if endpoint exists
-            let exists: bool = tx.query_row(
+            let endpoint_exists: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
                 [&endpoint.id],
                 |row| row.get(0),
             )?;
 
-            if !exists {
-                // Create new endpoint
-                tracing::debug!(endpoint_id = %endpoint.id, "Creating new endpoint");
+            if !endpoint_exists {
+                // Insert new endpoint
                 tx.execute(
-                    "INSERT INTO endpoints (id, text, description, verb, is_default) VALUES (?, ?, ?, ?, false)",
-                    &[&endpoint.id, &endpoint.text, &endpoint.description, &endpoint.verb],
+                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, is_default) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, false)",
+                    &[
+                        &endpoint.id,
+                        &endpoint.text,
+                        &endpoint.description,
+                        &endpoint.verb,
+                        &endpoint.base,
+                        &endpoint.path,
+                        group_id,
+                    ],
                 )?;
             } else {
                 // Check if it's a default endpoint
@@ -530,32 +1147,28 @@ impl EndpointStore {
 
                 if !is_default {
                     // Update existing non-default endpoint
-                    tracing::debug!(endpoint_id = %endpoint.id, "Updating existing endpoint");
                     tx.execute(
-                        "UPDATE endpoints SET text = ?, description = ?, verb = ?, base_url = ? WHERE id = ?",
+                        "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
                         &[
                             &endpoint.text,
                             &endpoint.description,
                             &endpoint.verb,
-                            &endpoint.base_url,
+                            &endpoint.base,
+                            &endpoint.path,
+                            group_id,
                             &endpoint.id,
                         ],
                     )?;
                 }
             }
 
-            // Link to user (ignore if already exists)
-            tracing::debug!(email = %email, endpoint_id = %endpoint.id, "Linking endpoint to user");
+            // Associate endpoint with user
             tx.execute(
                 "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
                 &[email, &endpoint.id],
             )?;
 
-            imported_count += 1;
-        }
-
-        // Add parameters in a separate loop after all endpoints are created/updated
-        for endpoint in &endpoints {
+            // Handle parameters for non-default endpoints
             let is_default: bool = tx.query_row(
                 "SELECT is_default FROM endpoints WHERE id = ?",
                 [&endpoint.id],
@@ -563,383 +1176,153 @@ impl EndpointStore {
             )?;
 
             if !is_default {
-                // Try to clean up existing parameters first
-                let _ = tx.execute(
+                // Clean up existing parameters
+                tx.execute(
                     "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
                     [&endpoint.id],
-                );
+                )?;
 
-                let _ = tx.execute(
+                tx.execute(
                     "DELETE FROM parameters WHERE endpoint_id = ?",
                     [&endpoint.id],
-                );
+                )?;
 
-                // Now add the new parameters
+                // Add parameters
                 for param in &endpoint.parameters {
-                    tracing::debug!(
-                        endpoint_id = %endpoint.id,
-                        param = %param.name,
-                        "Adding parameter"
-                    );
-
                     tx.execute(
                         "INSERT INTO parameters (endpoint_id, name, description, required) 
-                        VALUES (?, ?, ?, ?)",
+                         VALUES (?, ?, ?, ?)",
                         &[
                             &endpoint.id,
                             &param.name,
                             &param.description,
-                            &(if param.required { "1" } else { "0" }).to_string(),
+                            &param.required.to_string(),
                         ],
                     )?;
 
+                    // Add parameter alternatives
                     for alt in &param.alternatives {
                         tx.execute(
-                            "INSERT INTO parameter_alternatives 
-                            (endpoint_id, parameter_name, alternative) 
-                            VALUES (?, ?, ?)",
+                            "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
+                             VALUES (?, ?, ?)",
                             &[&endpoint.id, &param.name, alt],
                         )?;
                     }
                 }
             }
+
+            endpoint_count += 1;
         }
 
         tx.commit()?;
 
         tracing::info!(
             email = %email,
-            count = imported_count,
-            "Successfully imported endpoints"
+            group_id = %group_id,
+            endpoint_count = endpoint_count,
+            "API group successfully added"
         );
 
-        Ok(imported_count)
+        Ok(endpoint_count)
     }
 
-    pub async fn add_user_endpoint(
+    // Delete an API group and all its endpoints
+    pub async fn delete_user_api_group(
         &self,
         email: &str,
-        endpoint: Endpoint,
+        group_id: &str,
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
-        let tx = conn.transaction()?;
 
         tracing::info!(
             email = %email,
-            endpoint_id = %endpoint.id,
-            "Starting endpoint addition"
+            group_id = %group_id,
+            "Deleting API group"
         );
 
-        // Check if endpoint with this ID already exists
-        let endpoint_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
-            [&endpoint.id],
-            |row| row.get(0),
+        // First, get all endpoint IDs for this group
+        let mut stmt = conn.prepare(
+            "SELECT e.id 
+             FROM endpoints e
+             JOIN user_endpoints ue ON e.id = ue.endpoint_id
+             WHERE ue.email = ? AND e.group_id = ?",
         )?;
 
-        if endpoint_exists {
-            // Check if it's a default endpoint
-            let is_default: bool = tx.query_row(
-                "SELECT is_default FROM endpoints WHERE id = ?",
-                [&endpoint.id],
-                |row| row.get(0),
-            )?;
+        let endpoint_ids: Vec<String> = stmt
+            .query_map([email, group_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
 
-            if is_default {
-                // For default endpoints, just create the association
-                tx.execute(
-                    "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-                    [email, &endpoint.id],
-                )?;
+        // Start transaction
+        let tx = conn.transaction()?;
 
-                tracing::info!(
-                    email = %email,
-                    endpoint_id = %endpoint.id,
-                    "Added association to existing default endpoint"
-                );
-            } else {
-                // For non-default endpoints, check if the user already has it
-                let user_has_endpoint: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE email = ? AND endpoint_id = ?)",
-                [email, &endpoint.id],
-                |row| row.get(0),
-            )?;
+        // Remove user-group association
+        tx.execute(
+            "DELETE FROM user_groups WHERE email = ? AND group_id = ?",
+            [email, group_id],
+        )?;
 
-                if user_has_endpoint {
-                    // User already has this endpoint, update it
-                    tx.execute(
-                        "UPDATE endpoints SET text = ?, description = ?, verb = ? WHERE id = ?",
-                        &[
-                            &endpoint.text,
-                            &endpoint.description,
-                            &endpoint.verb,
-                            &endpoint.id,
-                        ],
-                    )?;
-
-                    tracing::info!(
-                        email = %email,
-                        endpoint_id = %endpoint.id,
-                        "Updated existing user endpoint"
-                    );
-                } else {
-                    // User doesn't have this endpoint, create the association
-                    tx.execute(
-                        "INSERT INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-                        [email, &endpoint.id],
-                    )?;
-
-                    tracing::info!(
-                        email = %email,
-                        endpoint_id = %endpoint.id,
-                        "Added association to existing non-default endpoint"
-                    );
-                }
-            }
-        } else {
-            // Endpoint doesn't exist, create it
+        // Remove user-endpoint associations for all endpoints in this group
+        for endpoint_id in &endpoint_ids {
             tx.execute(
-                "INSERT INTO endpoints (id, text, description, verb, base_url, is_default) VALUES (?, ?, ?, ?, ?, false)",
-                &[
-                    &endpoint.id,
-                    &endpoint.text,
-                    &endpoint.description,
-                    &endpoint.verb,
-                    &endpoint.base_url,
-                ],
+                "DELETE FROM user_endpoints WHERE email = ? AND endpoint_id = ?",
+                [email, endpoint_id],
             )?;
-
-            // Create the user association
-            tx.execute(
-                "INSERT INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-                [email, &endpoint.id],
-            )?;
-
-            tracing::info!(
-                email = %email,
-                endpoint_id = %endpoint.id,
-                "Created new endpoint and association"
-            );
         }
 
-        // Clean up existing parameters if it's not a default endpoint
-        let is_default: bool = tx.query_row(
-            "SELECT is_default FROM endpoints WHERE id = ?",
-            [&endpoint.id],
+        // Check if the group is still associated with any user
+        let group_still_used: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_groups WHERE group_id = ?)",
+            [group_id],
             |row| row.get(0),
         )?;
 
-        if !is_default {
-            // Delete existing parameter alternatives
-            tx.execute(
-                "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
-                [&endpoint.id],
-            )?;
-
-            // Delete existing parameters
-            tx.execute(
-                "DELETE FROM parameters WHERE endpoint_id = ?",
-                [&endpoint.id],
-            )?;
-
-            // Add new parameters
-            for param in &endpoint.parameters {
-                tx.execute(
-                    "INSERT INTO parameters (endpoint_id, name, description, required) 
-                VALUES (?, ?, ?, ?)",
-                    &[
-                        &endpoint.id,
-                        &param.name,
-                        &param.description,
-                        &param.required.to_string(),
-                    ],
+        // If no user is using this group anymore, delete it and its endpoints
+        if !group_still_used {
+            // For each endpoint that's no longer used by any user, delete its data
+            for endpoint_id in &endpoint_ids {
+                let endpoint_still_used: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE endpoint_id = ?)",
+                    [endpoint_id],
+                    |row| row.get(0),
                 )?;
 
-                // Add parameter alternatives
-                for alt in &param.alternatives {
+                if !endpoint_still_used {
+                    // Delete parameter alternatives
                     tx.execute(
-                    "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
-                    VALUES (?, ?, ?)",
-                    &[&endpoint.id, &param.name, alt],
-                )?;
+                        "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
+                        [endpoint_id],
+                    )?;
+
+                    // Delete parameters
+                    tx.execute(
+                        "DELETE FROM parameters WHERE endpoint_id = ?",
+                        [endpoint_id],
+                    )?;
+
+                    // Delete endpoint
+                    tx.execute(
+                        "DELETE FROM endpoints WHERE id = ? AND is_default = false",
+                        [endpoint_id],
+                    )?;
                 }
             }
 
-            tracing::debug!(
-                endpoint_id = %endpoint.id,
-                param_count = endpoint.parameters.len(),
-                "Added parameters to endpoint"
-            );
+            // Delete the group itself (if it's not a default group)
+            tx.execute(
+                "DELETE FROM api_groups WHERE id = ? AND is_default = false",
+                [group_id],
+            )?;
         }
 
         tx.commit()?;
 
         tracing::info!(
             email = %email,
-            endpoint_id = %endpoint.id,
-            "Successfully processed endpoint addition"
+            group_id = %group_id,
+            endpoint_count = endpoint_ids.len(),
+            "API group successfully deleted"
         );
 
-        Ok(true)
-    }
-
-    pub async fn delete_user_endpoint(
-        &self,
-        email: &str,
-        endpoint_id: &str,
-    ) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().map_err(|_| StoreError::Lock)?;
-
-        tracing::info!(
-            email = %email,
-            endpoint_id = %endpoint_id,
-            "Starting endpoint deletion"
-        );
-
-        // First, check if we can find out all the tables with foreign key references to endpoints
-        let _tables = vec!["parameter_alternatives", "parameters", "user_endpoints"];
-
-        // Remove just the user-endpoint association first
-        match conn.execute(
-            "DELETE FROM user_endpoints WHERE email = ? AND endpoint_id = ?",
-            [email, endpoint_id],
-        ) {
-            Ok(_) => {
-                tracing::info!(
-                    email = %email,
-                    endpoint_id = %endpoint_id,
-                    "Removed user-endpoint association"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    email = %email,
-                    endpoint_id = %endpoint_id,
-                    "Failed to remove user-endpoint association"
-                );
-                return Err(StoreError::Database(e));
-            }
-        }
-
-        // Check if the endpoint is still used by any user
-        let still_used: bool = match conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM user_endpoints WHERE endpoint_id = ?)",
-            [endpoint_id],
-            |row| row.get(0),
-        ) {
-            Ok(exists) => exists,
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    endpoint_id = %endpoint_id,
-                    "Failed to check if endpoint is still used"
-                );
-                return Err(StoreError::Database(e));
-            }
-        };
-
-        if still_used {
-            tracing::info!(
-                endpoint_id = %endpoint_id,
-                "Endpoint still used by other users, keeping it but removing user association"
-            );
-            return Ok(true);
-        }
-
-        // If we get here, no user is using this endpoint anymore, so we should delete it
-        tracing::info!(
-            endpoint_id = %endpoint_id,
-            "No users left using this endpoint, attempting to delete it"
-        );
-
-        // Try to remove related data with explicit error handling for each step
-        let mut success = true;
-
-        // Delete from parameter_alternatives
-        match conn.execute(
-            "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
-            [endpoint_id],
-        ) {
-            Ok(count) => {
-                tracing::info!(
-                    endpoint_id = %endpoint_id,
-                    count = count,
-                    "Deleted parameter alternatives"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    endpoint_id = %endpoint_id,
-                    "Failed to delete parameter alternatives"
-                );
-                success = false;
-            }
-        }
-
-        // Only proceed if previous step was successful
-        if success {
-            // Delete from parameters
-            match conn.execute(
-                "DELETE FROM parameters WHERE endpoint_id = ?",
-                [endpoint_id],
-            ) {
-                Ok(count) => {
-                    tracing::info!(
-                        endpoint_id = %endpoint_id,
-                        count = count,
-                        "Deleted parameters"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        endpoint_id = %endpoint_id,
-                        "Failed to delete parameters"
-                    );
-                    success = false;
-                }
-            }
-        }
-
-        // Only proceed if previous steps were successful
-        if success {
-            // Finally, delete the endpoint itself
-            match conn.execute("DELETE FROM endpoints WHERE id = ?", [endpoint_id]) {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(
-                            endpoint_id = %endpoint_id,
-                            "Successfully deleted endpoint"
-                        );
-                    } else {
-                        tracing::warn!(
-                            endpoint_id = %endpoint_id,
-                            "Endpoint not found for deletion"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        endpoint_id = %endpoint_id,
-                        "Failed to delete endpoint"
-                    );
-                    success = false;
-                }
-            }
-        }
-
-        // If any step failed, log a warning
-        if !success {
-            tracing::warn!(
-                endpoint_id = %endpoint_id,
-                "Could not completely delete endpoint and all its related data due to constraints"
-            );
-        }
-
-        // We successfully removed the user-endpoint association at minimum
         Ok(true)
     }
 

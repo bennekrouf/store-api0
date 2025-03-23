@@ -1,9 +1,8 @@
-use crate::EndpointsWrapper;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use base64::{engine::general_purpose, Engine as _};
-use sensei_store::{Endpoint, EndpointStore};
+use sensei_store::{generate_id_from_text, ApiGroupWithEndpoints, ApiStorage, EndpointStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -20,24 +19,31 @@ pub struct UploadResponse {
     success: bool,
     message: String,
     imported_count: i32,
+    group_count: i32,
 }
 
 #[derive(Debug, Serialize)]
-pub struct EndpointsResponse {
+pub struct ApiGroupsResponse {
     success: bool,
-    endpoints: Vec<Endpoint>,
+    api_groups: Vec<ApiGroupWithEndpoints>,
     message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct UpdateEndpointRequest {
+pub struct AddApiGroupRequest {
     email: String,
-    endpoint_id: String,
-    endpoint: Endpoint,
+    api_group: ApiGroupWithEndpoints,
 }
 
-// Handler for uploading endpoints
-async fn upload_endpoints(
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateApiGroupRequest {
+    email: String,
+    group_id: String,
+    api_group: ApiGroupWithEndpoints,
+}
+
+// Handler for uploading API configuration
+async fn upload_api_config(
     store: web::Data<Arc<EndpointStore>>,
     upload_data: web::Json<UploadRequest>,
 ) -> impl Responder {
@@ -56,6 +62,7 @@ async fn upload_endpoints(
                 success: false,
                 message: format!("Invalid base64 encoding: {}", e),
                 imported_count: 0,
+                group_count: 0,
             });
         }
     };
@@ -69,48 +76,41 @@ async fn upload_endpoints(
                 success: false,
                 message: "File content must be valid UTF-8 text".to_string(),
                 imported_count: 0,
+                group_count: 0,
             });
         }
     };
 
     // Parse based on file extension
-    let endpoints =
+    let api_storage =
         if upload_data.file_name.ends_with(".yaml") || upload_data.file_name.ends_with(".yml") {
             // Parse YAML
-            match serde_yaml::from_str::<EndpointsWrapper>(&file_content) {
-                Ok(wrapper) => wrapper.endpoints,
+            match serde_yaml::from_str::<ApiStorage>(&file_content) {
+                Ok(storage) => storage,
                 Err(e) => {
-                    // Try parsing as a list directly
-                    match serde_yaml::from_str::<Vec<Endpoint>>(&file_content) {
-                        Ok(endpoints) => endpoints,
-                        Err(_) => {
-                            tracing::error!(error = %e, "Failed to parse YAML content");
-                            return HttpResponse::BadRequest().json(UploadResponse {
-                                success: false,
-                                message: "Invalid YAML format".to_string(),
-                                imported_count: 0,
-                            });
-                        }
-                    }
+                    tracing::error!(error = %e, "Failed to parse YAML content");
+                    return HttpResponse::BadRequest().json(UploadResponse {
+                        success: false,
+                        message: "Invalid YAML format. Expected structure with 'api_groups'."
+                            .to_string(),
+                        imported_count: 0,
+                        group_count: 0,
+                    });
                 }
             }
         } else if upload_data.file_name.ends_with(".json") {
             // Parse JSON
-            match serde_json::from_str::<EndpointsWrapper>(&file_content) {
-                Ok(wrapper) => wrapper.endpoints,
+            match serde_json::from_str::<ApiStorage>(&file_content) {
+                Ok(storage) => storage,
                 Err(e) => {
-                    // Try parsing as a list directly
-                    match serde_json::from_str::<Vec<Endpoint>>(&file_content) {
-                        Ok(endpoints) => endpoints,
-                        Err(_) => {
-                            tracing::error!(error = %e, "Failed to parse JSON content");
-                            return HttpResponse::BadRequest().json(UploadResponse {
-                                success: false,
-                                message: "Invalid JSON format".to_string(),
-                                imported_count: 0,
-                            });
-                        }
-                    }
+                    tracing::error!(error = %e, "Failed to parse JSON content");
+                    return HttpResponse::BadRequest().json(UploadResponse {
+                        success: false,
+                        message: "Invalid JSON format. Expected structure with 'api_groups'."
+                            .to_string(),
+                        imported_count: 0,
+                        group_count: 0,
+                    });
                 }
             }
         } else {
@@ -118,164 +118,324 @@ async fn upload_endpoints(
                 success: false,
                 message: "Unsupported file format. Use YAML or JSON.".to_string(),
                 imported_count: 0,
+                group_count: 0,
             });
         };
 
-    // Replace user endpoints
+    // Process and validate each API group
+    let group_count = api_storage.api_groups.len();
+
+    if group_count == 0 {
+        return HttpResponse::BadRequest().json(UploadResponse {
+            success: false,
+            message: "No API groups found in the file".to_string(),
+            imported_count: 0,
+            group_count: 0,
+        });
+    }
+
+    // Generate IDs for groups and endpoints if needed
+    let mut processed_groups = Vec::new();
+
+    for mut group in api_storage.api_groups {
+        // Generate ID for group if not provided
+        if group.group.id.is_empty() {
+            group.group.id = generate_id_from_text(&group.group.name);
+        }
+
+        // Process endpoints
+        let mut processed_endpoints = Vec::new();
+        for mut endpoint in group.endpoints {
+            // Generate ID for endpoint if not provided
+            if endpoint.id.is_empty() {
+                endpoint.id = generate_id_from_text(&endpoint.text);
+            }
+
+            // Set group_id reference
+            endpoint.group_id = group.group.id.clone();
+
+            processed_endpoints.push(endpoint);
+        }
+
+        let processed_group = ApiGroupWithEndpoints {
+            group: group.group,
+            endpoints: processed_endpoints,
+        };
+
+        processed_groups.push(processed_group);
+    }
+
+    // Replace user API groups
     match store
-        .replace_user_endpoints(&upload_data.email, endpoints)
+        .replace_user_api_groups(&upload_data.email, processed_groups)
         .await
     {
-        Ok(count) => {
+        Ok(endpoint_count) => {
             tracing::info!(
                 email = %upload_data.email,
-                imported_count = count,
-                "Successfully imported endpoints via HTTP API"
+                endpoint_count = endpoint_count,
+                group_count = group_count,
+                "Successfully imported API groups and endpoints via HTTP API"
             );
             HttpResponse::Ok().json(UploadResponse {
                 success: true,
-                message: "Endpoints successfully imported".to_string(),
-                imported_count: count as i32,
+                message: "API groups and endpoints successfully imported".to_string(),
+                imported_count: endpoint_count as i32,
+                group_count: group_count as i32,
             })
         }
         Err(e) => {
             tracing::error!(
                 error = %e,
                 email = %upload_data.email,
-                "Failed to import endpoints via HTTP API"
+                "Failed to import API groups via HTTP API"
             );
             HttpResponse::InternalServerError().json(UploadResponse {
                 success: false,
-                message: format!("Failed to import endpoints: {}", e),
+                message: format!("Failed to import API groups: {}", e),
                 imported_count: 0,
+                group_count: 0,
             })
         }
     }
 }
 
-async fn update_endpoint(
+// Handler for getting API groups
+async fn get_api_groups(
     store: web::Data<Arc<EndpointStore>>,
-    update_data: web::Json<UpdateEndpointRequest>,
+    email: web::Path<String>,
 ) -> impl Responder {
-    let email = &update_data.email;
-    let endpoint_id = &update_data.endpoint_id;
-    let endpoint = &update_data.endpoint;
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP get API groups request");
+
+    match store.get_or_create_user_api_groups(&email).await {
+        Ok(api_groups) => {
+            tracing::info!(
+                email = %email,
+                group_count = api_groups.len(),
+                "Successfully retrieved API groups"
+            );
+            HttpResponse::Ok().json(ApiGroupsResponse {
+                success: true,
+                api_groups,
+                message: "API groups successfully retrieved".to_string(),
+            })
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to retrieve API groups"
+            );
+            HttpResponse::InternalServerError().json(ApiGroupsResponse {
+                success: false,
+                api_groups: vec![],
+                message: format!("Error: {}", e),
+            })
+        }
+    }
+}
+
+// Handler for adding a new API group
+async fn add_api_group(
+    store: web::Data<Arc<EndpointStore>>,
+    add_data: web::Json<AddApiGroupRequest>,
+) -> impl Responder {
+    let email = &add_data.email;
+    let mut api_group = add_data.api_group.clone();
 
     tracing::info!(
         email = %email,
-        endpoint_id = %endpoint_id,
-        "Received HTTP update endpoint request"
+        group_name = %api_group.group.name,
+        "Received HTTP add API group request"
     );
 
-    // Validate that endpoint ID in path matches endpoint in body
-    if endpoint_id != &endpoint.id {
+    // Validate group data
+    if api_group.group.name.trim().is_empty() {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "success": false,
-            "message": "Endpoint ID in URL must match endpoint ID in request body"
+            "message": "API group name cannot be empty"
         }));
     }
 
-    if endpoint.base_url.trim().is_empty() {
+    if api_group.group.base.trim().is_empty() {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "success": false,
             "message": "Base URL cannot be empty"
         }));
     }
 
-    // Validate endpoint data
-    if endpoint.text.trim().is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Endpoint text cannot be empty"
-        }));
+    // Generate ID if not provided
+    if api_group.group.id.trim().is_empty() {
+        api_group.group.id = generate_id_from_text(&api_group.group.name);
     }
 
-    // Delete the old endpoint first
-    match store.delete_user_endpoint(email, endpoint_id).await {
-        Ok(_) => {
-            tracing::info!(
-                email = %email,
-                endpoint_id = %endpoint_id,
-                "Successfully deleted old endpoint before update"
-            );
+    // Set group_id on all endpoints
+    for endpoint in &mut api_group.endpoints {
+        // Generate endpoint ID if not provided
+        if endpoint.id.trim().is_empty() {
+            endpoint.id = generate_id_from_text(&endpoint.text);
         }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                email = %email,
-                endpoint_id = %endpoint_id,
-                "Failed to delete old endpoint before update"
-            );
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "success": false,
-                "message": format!("Failed to update endpoint: {}", e)
-            }));
-        }
+        endpoint.group_id = api_group.group.id.clone();
     }
 
-    // Add the updated endpoint
-    match store.add_user_endpoint(email, endpoint.clone()).await {
-        Ok(_) => {
+    // Add the API group
+    let groups = vec![api_group.clone()];
+    match store.replace_user_api_groups(email, groups).await {
+        Ok(endpoint_count) => {
             tracing::info!(
                 email = %email,
-                endpoint_id = %endpoint_id,
-                "Successfully updated endpoint"
+                group_id = %api_group.group.id,
+                endpoint_count = endpoint_count,
+                "Successfully added API group"
             );
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
-                "message": "Endpoint successfully updated",
-                "endpoint_id": endpoint.id
+                "message": "API group successfully added",
+                "group_id": api_group.group.id,
+                "endpoint_count": endpoint_count
             }))
         }
         Err(e) => {
             tracing::error!(
                 error = %e,
                 email = %email,
-                endpoint_id = %endpoint_id,
-                "Failed to add updated endpoint"
+                group_id = %api_group.group.id,
+                "Failed to add API group"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
-                "message": format!("Failed to update endpoint: {}", e)
+                "message": format!("Failed to add API group: {}", e)
             }))
         }
     }
 }
 
-// Handler for deleting a specific endpoint
-async fn delete_endpoint(
+// Handler for updating an API group
+async fn update_api_group(
     store: web::Data<Arc<EndpointStore>>,
-    path_params: web::Path<(String, String)>,
+    update_data: web::Json<UpdateApiGroupRequest>,
 ) -> impl Responder {
-    let (email, endpoint_id) = path_params.into_inner();
+    let email = &update_data.email;
+    let group_id = &update_data.group_id;
+    let mut api_group = update_data.api_group.clone();
 
     tracing::info!(
         email = %email,
-        endpoint_id = %endpoint_id,
-        "Received HTTP delete endpoint request"
+        group_id = %group_id,
+        "Received HTTP update API group request"
     );
 
-    match store.delete_user_endpoint(&email, &endpoint_id).await {
+    // Validate group data
+    if api_group.group.name.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "API group name cannot be empty"
+        }));
+    }
+
+    if api_group.group.base.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Base URL cannot be empty"
+        }));
+    }
+
+    // Ensure group ID is consistent
+    api_group.group.id = group_id.clone();
+
+    // Set group_id on all endpoints
+    for endpoint in &mut api_group.endpoints {
+        // Generate endpoint ID if not provided
+        if endpoint.id.trim().is_empty() {
+            endpoint.id = generate_id_from_text(&endpoint.text);
+        }
+        endpoint.group_id = group_id.clone();
+    }
+
+    // Update API group by first deleting and then adding
+    match store.delete_user_api_group(email, group_id).await {
+        Ok(_) => {
+            // Now add the updated group
+            //let groups = vec![api_group.clone()];
+            match store.add_user_api_group(email, &api_group).await {
+                Ok(endpoint_count) => {
+                    tracing::info!(
+                        email = %email,
+                        group_id = %group_id,
+                        endpoint_count = endpoint_count,
+                        "Successfully updated API group"
+                    );
+                    HttpResponse::Ok().json(serde_json::json!({
+                        "success": true,
+                        "message": "API group successfully updated",
+                        "group_id": group_id,
+                        "endpoint_count": endpoint_count
+                    }))
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        email = %email,
+                        group_id = %group_id,
+                        "Failed to add updated API group"
+                    );
+                    HttpResponse::InternalServerError().json(serde_json::json!({
+                        "success": false,
+                        "message": format!("Failed to update API group: {}", e)
+                    }))
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                group_id = %group_id,
+                "Failed to delete API group before update"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to update API group: {}", e)
+            }))
+        }
+    }
+}
+
+// Handler for deleting an API group
+async fn delete_api_group(
+    store: web::Data<Arc<EndpointStore>>,
+    path_params: web::Path<(String, String)>,
+) -> impl Responder {
+    let (email, group_id) = path_params.into_inner();
+
+    tracing::info!(
+        email = %email,
+        group_id = %group_id,
+        "Received HTTP delete API group request"
+    );
+
+    match store.delete_user_api_group(&email, &group_id).await {
         Ok(deleted) => {
             if deleted {
                 tracing::info!(
                     email = %email,
-                    endpoint_id = %endpoint_id,
-                    "Successfully deleted endpoint"
+                    group_id = %group_id,
+                    "Successfully deleted API group"
                 );
                 HttpResponse::Ok().json(serde_json::json!({
                     "success": true,
-                    "message": "Endpoint successfully deleted"
+                    "message": "API group and its endpoints successfully deleted"
                 }))
             } else {
                 tracing::warn!(
                     email = %email,
-                    endpoint_id = %endpoint_id,
-                    "Endpoint not found or not deletable"
+                    group_id = %group_id,
+                    "API group not found or not deletable"
                 );
                 HttpResponse::NotFound().json(serde_json::json!({
                     "success": false,
-                    "message": "Endpoint not found or is a default endpoint that cannot be deleted"
+                    "message": "API group not found or is a default group that cannot be deleted"
                 }))
             }
         }
@@ -283,121 +443,13 @@ async fn delete_endpoint(
             tracing::error!(
                 error = %e,
                 email = %email,
-                endpoint_id = %endpoint_id,
-                "Failed to delete endpoint"
+                group_id = %group_id,
+                "Failed to delete API group"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
-                "message": format!("Failed to delete endpoint: {}", e)
+                "message": format!("Failed to delete API group: {}", e)
             }))
-        }
-    }
-}
-
-// Request model for adding a single endpoint
-#[derive(Debug, Clone, Deserialize)]
-pub struct AddEndpointRequest {
-    email: String,
-    endpoint: Endpoint,
-}
-
-// Handler for adding a single endpoint
-async fn add_endpoint(
-    store: web::Data<Arc<EndpointStore>>,
-    add_data: web::Json<AddEndpointRequest>,
-) -> impl Responder {
-    let email = &add_data.email;
-    let endpoint = &add_data.endpoint;
-
-    tracing::info!(
-        email = %email,
-        endpoint_id = %endpoint.id,
-        "Received HTTP add endpoint request"
-    );
-
-    // Validate endpoint data
-    if endpoint.id.trim().is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Endpoint ID cannot be empty"
-        }));
-    }
-
-    if endpoint.base_url.trim().is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Base URL cannot be empty"
-        }));
-    }
-
-    if endpoint.text.trim().is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Endpoint text cannot be empty"
-        }));
-    }
-
-    // Add the endpoint
-    match store.add_user_endpoint(email, endpoint.clone()).await {
-        Ok(_added) => {
-            tracing::info!(
-                email = %email,
-                endpoint_id = %endpoint.id,
-                "Successfully added endpoint"
-            );
-            HttpResponse::Ok().json(serde_json::json!({
-                "success": true,
-                "message": "Endpoint successfully added",
-                "endpoint_id": endpoint.id
-            }))
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                email = %email,
-                endpoint_id = %endpoint.id,
-                "Failed to add endpoint"
-            );
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "success": false,
-                "message": format!("Failed to add endpoint: {}", e)
-            }))
-        }
-    }
-}
-
-// Handler for getting endpoints
-async fn get_endpoints(
-    store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
-) -> impl Responder {
-    let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get endpoints request");
-
-    match store.get_or_create_user_endpoints(&email).await {
-        Ok(endpoints) => {
-            tracing::info!(
-                email = %email,
-                endpoint_count = endpoints.len(),
-                "Successfully retrieved or created endpoints"
-            );
-            HttpResponse::Ok().json(EndpointsResponse {
-                success: true,
-                endpoints,
-                message: "Endpoints successfully retrieved".to_string(), // Add this
-            })
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                email = %email,
-                "Failed to retrieve endpoints"
-            );
-            HttpResponse::InternalServerError().json(EndpointsResponse {
-                success: false,
-                endpoints: vec![],
-                message: format!("Error: {}", e),
-            })
         }
     }
 }
@@ -415,7 +467,6 @@ use std::net::SocketAddr;
 use tokio::task;
 
 // Server startup function
-// In http_server.rs
 pub async fn start_http_server(
     store: Arc<EndpointStore>,
     host: &str,
@@ -445,13 +496,14 @@ pub async fn start_http_server(
                     .app_data(web::Data::new(store_clone.clone()))
                     .service(
                         web::scope("/api")
-                            .route("/upload", web::post().to(upload_endpoints))
-                            .route("/endpoints/{email}", web::get().to(get_endpoints))
-                            .route("/endpoint", web::post().to(add_endpoint))
-                            .route("/endpoint", web::put().to(update_endpoint))
+                            // API groups endpoints
+                            .route("/upload", web::post().to(upload_api_config))
+                            .route("/groups/{email}", web::get().to(get_api_groups))
+                            .route("/group", web::post().to(add_api_group))
+                            .route("/group", web::put().to(update_api_group))
                             .route(
-                                "/endpoints/{email}/{endpoint_id}",
-                                web::delete().to(delete_endpoint),
+                                "/groups/{email}/{group_id}",
+                                web::delete().to(delete_api_group),
                             )
                             .route("/health", web::get().to(health_check)),
                     )

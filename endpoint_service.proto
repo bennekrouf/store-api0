@@ -2,11 +2,11 @@ syntax = "proto3";
 package endpoint;
 
 service EndpointService {
-    rpc GetEndpoints (GetEndpointsRequest) returns (stream GetEndpointsResponse);
-    rpc UploadEndpoints (UploadEndpointsRequest) returns (UploadEndpointsResponse);
+    rpc GetApiGroups (GetApiGroupsRequest) returns (stream GetApiGroupsResponse);
+    rpc UploadApiGroups (UploadApiGroupsRequest) returns (UploadApiGroupsResponse);
 }
 
-message GetEndpointsRequest {
+message GetApiGroupsRequest {
     string email = 1;
 }
 
@@ -21,24 +21,34 @@ message Endpoint {
     string id = 1;
     string text = 2;
     string description = 3;
-    repeated Parameter parameters = 4;
-    string verb = 5;
-    string base_url = 6;
-    string path = 7;
+    string verb = 4;
+    string base = 5;
+    string path = 6;
+    repeated Parameter parameters = 7;
+    string group_id = 8;
 }
 
-message GetEndpointsResponse {
-    repeated Endpoint endpoints = 1;
+message ApiGroup {
+    string id = 1;
+    string name = 2;
+    string description = 3;
+    string base = 4;
+    repeated Endpoint endpoints = 5;
 }
 
-message UploadEndpointsRequest {
+message GetApiGroupsResponse {
+    repeated ApiGroup api_groups = 1;
+}
+
+message UploadApiGroupsRequest {
     string email = 1;
     bytes file_content = 2;
     string file_name = 3;
 }
 
-message UploadEndpointsResponse {
+message UploadApiGroupsResponse {
     bool success = 1;
     string message = 2;
     int32 imported_count = 3;
+    int32 group_count = 4;
 }
