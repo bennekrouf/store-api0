@@ -2,6 +2,9 @@ endpoints:
   - id: "send_email"
     text: "send email"
     description: "Send an email with possible attachments"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/messaging/emails"
     parameters:
       - name: "to"
         description: "Recipient's email address"
@@ -39,6 +42,9 @@ endpoints:
   - id: "create_ticket"
     text: "Create a new support ticket for tracking and resolving customer issues"
     description: "Create a new support ticket for tracking and resolving customer issues"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/support/tickets"
     parameters:
       - name: "title"
         description: "Ticket title"
@@ -69,6 +75,9 @@ endpoints:
   - id: "schedule_meeting"
     text: "schedule meeting"
     description: "Schedule a meeting or appointment"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/calendar/meetings"
     parameters:
       - name: "date"
         description: "Meeting date"
@@ -116,6 +125,9 @@ endpoints:
   - id: "analyze_logs"
     text: "analyze logs"
     description: "Analyze application logs"
+    verb: "GET"
+    base_url: "https://api.example.com"
+    path: "/monitoring/logs/analysis"
     parameters:
       - name: "app_name"
         description: "Application name"
@@ -153,6 +165,9 @@ endpoints:
   - id: "deploy_app"
     text: "deploy application"
     description: "Deploy an application to production"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/deployment/applications"
     parameters:
       - name: "app_name"
         description: "Application name to deploy"
@@ -190,6 +205,9 @@ endpoints:
   - id: "generate_report"
     text: "generate report"
     description: "Generate analysis or statistics report"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/reports/generate"
     parameters:
       - name: "report_type"
         description: "Report type (sales, traffic, performance)"
@@ -219,6 +237,9 @@ endpoints:
   - id: "backup_database"
     text: "backup database"
     description: "Create a database backup"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/databases/backups"
     parameters:
       - name: "database"
         description: "Database name"
@@ -248,6 +269,9 @@ endpoints:
   - id: "process_payment"
     text: "process payment"
     description: "Process a customer payment"
+    verb: "POST"
+    base_url: "https://api.example.com"
+    path: "/payments/process"
     parameters:
       - name: "amount"
         description: "Payment amount"

@@ -23,6 +23,8 @@ message Endpoint {
     string description = 3;
     repeated Parameter parameters = 4;
     string verb = 5;
+    string base_url = 6;
+    string path = 7;
 }
 
 message GetEndpointsResponse {
