@@ -2,7 +2,7 @@ use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use base64::{engine::general_purpose, Engine as _};
-use sensei_store::{generate_id_from_text, ApiGroupWithEndpoints, ApiStorage, EndpointStore};
+use crate::endpoint_store::{ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -356,8 +356,6 @@ async fn update_api_group(
     // Update API group by first deleting and then adding
     match store.delete_user_api_group(email, group_id).await {
         Ok(_) => {
-            // Now add the updated group
-            //let groups = vec![api_group.clone()];
             match store.add_user_api_group(email, &api_group).await {
                 Ok(endpoint_count) => {
                     tracing::info!(

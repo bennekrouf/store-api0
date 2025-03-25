@@ -4,13 +4,12 @@ use crate::endpoint::{
     GetApiGroupsResponse, Parameter as ProtoParameter, UploadApiGroupsRequest,
     UploadApiGroupsResponse,
 };
-use crate::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore};
-use sensei_store::generate_id_from_text;
+use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EndpointServiceImpl {
     store: Arc<EndpointStore>,
 }

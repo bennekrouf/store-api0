@@ -1,9 +1,10 @@
 mod http_server;
-mod server;
+mod grpc_server;
+mod endpoint_store;
 
-use crate::server::EndpointServiceImpl;
+use crate::grpc_server::EndpointServiceImpl;
 use endpoint::endpoint_service_server::EndpointServiceServer;
-use sensei_store::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore};
+use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore, generate_id_from_text};
 use serde::Deserialize;
 use std::error::Error;
 use std::sync::Arc;
@@ -98,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 };
 
                 // Create group
-                let group_id = sensei_store::generate_id_from_text(&name);
+                let group_id = generate_id_from_text(&name);
                 let mut processed_endpoints = Vec::new();
 
                 // Process endpoints to set group_id
