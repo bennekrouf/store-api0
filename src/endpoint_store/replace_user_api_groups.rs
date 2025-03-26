@@ -7,13 +7,11 @@ pub async fn replace_user_api_groups(
     email: &str,
     api_groups: Vec<ApiGroupWithEndpoints>,
 ) -> Result<usize, StoreError> {
-    let mut conn = store.get_conn()?;
-    let tx = conn.transaction().to_store_error()?;
 
     tracing::info!(email = %email, "Starting complete API group replacement");
 
     // Clean up existing user data
-    match store.force_clean_user_data(email) {
+    match store.force_clean_user_data(email).await {
         Ok(_) => {
             tracing::info!(email = %email, "Successfully cleaned up user data");
         }
@@ -25,7 +23,7 @@ pub async fn replace_user_api_groups(
             );
 
             // Fallback approach
-            match store.fallback_clean_user_data(email) {
+            match store.fallback_clean_user_data(email).await {
                 Ok(_) => tracing::info!(email = %email, "Fallback cleanup successful"),
                 Err(e) => {
                     tracing::error!(
@@ -40,6 +38,8 @@ pub async fn replace_user_api_groups(
 
     // Add new groups and endpoints
     let mut imported_count = 0;
+    let mut conn = store.get_conn().await?;
+    let tx = conn.transaction().to_store_error()?;
 
     for group_with_endpoints in &api_groups {
         let group = &group_with_endpoints.group;

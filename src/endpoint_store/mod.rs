@@ -1,3 +1,4 @@
+// src/endpoint_store/mod.rs
 pub mod models;
 mod errors;
 mod utils;
@@ -11,55 +12,63 @@ mod add_user_api_group;
 mod delete_user_api_group;
 mod cleanup;
 mod db_helpers;
+
 // Re-export everything needed for the public API
 pub use models::*;
 pub use errors::*;
 pub use utils::*;
 
+use crate::db_pool::{create_db_pool, MobcDuckDBConnection, MobcDuckDBPool};
 use std::path::Path;
-use r2d2::Pool;
-use r2d2_duckdb::DuckDBConnectionManager;
+use std::time::Duration;
+
 /// The main EndpointStore struct that provides access to all functionality
 #[derive(Clone)]
 pub struct EndpointStore {
-    pool: Pool<DuckDBConnectionManager>,
+    pool: MobcDuckDBPool,
 }
 
 impl EndpointStore {
     /// Creates a new EndpointStore instance with the given database path
-    pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
+    pub async fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
         tracing::info!(
             "Initializing EndpointStore with path: {:?}",
             db_path.as_ref()
         );
 
-        let manager = DuckDBConnectionManager::file(db_path.as_ref());        
-        let pool = Pool::builder()
-            .max_size(10)
-            .build(manager)
-            .map_err(|e| StoreError::Pool(e.to_string()))?;
+        let pool = create_db_pool(
+            db_path, 
+            10, // max pool size
+            Some(Duration::from_secs(60)) // max idle timeout
+        ).map_err(|e| StoreError::Pool(format!("Failed to create connection pool: {:?}", e)))?;
 
-
-        // Initialize schema if needed
-        let conn = pool.get()
-            .map_err(|e| StoreError::Pool(e.to_string()))?;
-
+        let store = Self { pool };
+        // Get a connection to initialize the schema
+        let conn = store.get_conn().await?;
+        
         // Create tables with the schema
-        conn.execute_batch(include_str!("../../sql/schema.sql"));
-        Ok(Self { pool })
+        conn.execute_batch(include_str!("../../sql/schema.sql"))
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(store)
     }
 
     /// Get a connection from the pool
-    pub fn get_conn(&self) -> Result<r2d2::PooledConnection<DuckDBConnectionManager>, StoreError> {
-        self.pool.get().map_err(|e| StoreError::Pool(e.to_string()))
+    pub async fn get_conn(&self) -> Result<MobcDuckDBConnection, StoreError> {
+        self.pool.get().await.map_err(|e| StoreError::Pool(e.to_string()))
     }
 
+    /// Static helper to get a connection from a pool
+    // async fn get_conn_from_pool(pool: &MobcDuckDBPool) -> Result<MobcDuckDBConnection, StoreError> {
+    //     pool.get().await.map_err(|e| StoreError::Pool(e.to_string()))
+    // }
+
     /// Initializes the database with default API groups if it's empty
-    pub fn initialize_if_empty(
+    pub async fn initialize_if_empty(
         &mut self,
         default_api_groups: &[ApiGroupWithEndpoints],
     ) -> Result<(), StoreError> {
-        init::initialize_if_empty(self, default_api_groups)
+        init::initialize_if_empty(self, default_api_groups).await
     }
 
     /// Gets or creates API groups for a user
@@ -71,27 +80,26 @@ impl EndpointStore {
     }
 
     /// Gets the default API groups from the database
-    pub(crate) fn get_default_api_groups(
+    pub(crate) async fn get_default_api_groups(
         &self,
     ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-        get_default_api_groups::get_default_api_groups(self)
+        get_default_api_groups::get_default_api_groups(self).await
     }
 
     /// Gets the endpoints for a specific group
-    pub(crate) fn get_endpoints_by_group_id(
+    pub(crate) async fn get_endpoints_by_group_id(
         &self,
         group_id: &str,
-        // conn: &Connection,
     ) -> Result<Vec<Endpoint>, StoreError> {
-        get_endpoints_by_group_id::get_endpoints_by_group_id(self, group_id)
+        get_endpoints_by_group_id::get_endpoints_by_group_id(self, group_id).await
     }
 
     /// Gets all API groups and endpoints for a user
-    pub fn get_api_groups_by_email(
+    pub async fn get_api_groups_by_email(
         &self,
         email: &str,
     ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-        get_api_groups_by_email::get_api_groups_by_email(self, email)
+        get_api_groups_by_email::get_api_groups_by_email(self, email).await
     }
 
     /// Replaces all API groups and endpoints for a user
@@ -122,16 +130,15 @@ impl EndpointStore {
     }
 
     /// Cleans up user data in a forced way (internal use)
-    pub(crate) fn force_clean_user_data(&self, email: &str) -> Result<(), StoreError> {
-        cleanup::force_clean_user_data(self, email)
+    pub(crate) async fn force_clean_user_data(&self, email: &str) -> Result<(), StoreError> {
+        cleanup::force_clean_user_data(self, email).await
     }
 
     /// Cleans up user data in a more conservative way (fallback)
-    pub(crate) fn fallback_clean_user_data(
+    pub(crate) async fn fallback_clean_user_data(
         &self,
         email: &str,
-        // conn: &mut Connection,
     ) -> Result<(), StoreError> {
-        cleanup::fallback_clean_user_data(self, email)
+        cleanup::fallback_clean_user_data(self, email).await
     }
 }

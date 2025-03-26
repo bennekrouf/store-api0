@@ -1,44 +1,13 @@
+// src/endpoint_store/init.rs
 use crate::endpoint_store::{EndpointStore, StoreError, ApiGroupWithEndpoints, generate_id_from_text};
-// use duckdb::Connection;
-use std::path::Path;
-use r2d2_duckdb::DuckDBConnectionManager;
-use r2d2::Pool;
-
 use crate::endpoint_store::db_helpers::ResultExt;
-/// Creates a new EndpointStore instance
-pub(crate) fn new_endpoint_store<P: AsRef<Path>>(db_path: P) -> Result<EndpointStore, StoreError> {
-    tracing::info!(
-        "Initializing EndpointStore with path: {:?}",
-        db_path.as_ref()
-    );
-
-    // Create the connection manager
-    let manager = DuckDBConnectionManager::file(db_path.as_ref());
-    
-    // Build the connection pool
-    let pool = Pool::builder()
-        .max_size(10)
-        .build(manager)
-        .map_err(|e| StoreError::Pool(e.to_string()))?;
-
-     let conn = pool.get()
-        .map_err(|e| StoreError::Pool(e.to_string()))?;
-    
-    tracing::debug!("DuckDB connection established");
-    
-    // Create tables with the schema
-    conn.execute_batch(include_str!("../../sql/schema.sql"))
-        .to_store_error()?;
-    
-    Ok(EndpointStore { pool })
-}
 
 /// Initializes the database with default API groups if it's empty
-pub(crate) fn initialize_if_empty(
+pub async fn initialize_if_empty(
     store: &mut EndpointStore,
     default_api_groups: &[ApiGroupWithEndpoints],
 ) -> Result<(), StoreError> {
-    let mut conn = store.get_conn()?;
+    let mut conn = store.get_conn().await?;
     let tx = conn.transaction().to_store_error()?;
 
     // Check if we already have default endpoints

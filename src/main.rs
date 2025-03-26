@@ -1,6 +1,8 @@
+// src/main.rs
 mod http_server;
 mod grpc_server;
 mod endpoint_store;
+mod db_pool;
 
 use crate::grpc_server::EndpointServiceImpl;
 use endpoint::endpoint_service_server::EndpointServiceServer;
@@ -29,7 +31,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .init();
 
     // Create and initialize the endpoint store
-    let mut store = EndpointStore::new("../db/endpoints.db")?;
+    let path = "../db/";
+    std::fs::create_dir_all(&path).expect("Failed to create database directory");
+    let db_file = format!("{}endpoints.db", &path);
+    let mut store = EndpointStore::new(&db_file).await?;
 
     // Load default API groups from YAML and initialize DB
     let config_content = std::fs::read_to_string("endpoints.yaml")?;
@@ -127,7 +132,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     };
 
     // Initialize the store with the default API groups
-    store.initialize_if_empty(&api_storage.api_groups)?;
+    store.initialize_if_empty(&api_storage.api_groups).await?;
 
     // Wrap the store in an Arc for sharing between servers
     let store_arc = Arc::new(store);

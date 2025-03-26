@@ -1,13 +1,13 @@
 use crate::endpoint_store::{EndpointStore, StoreError, Endpoint, Parameter};
-use crate::endpoint_store::db_helpers::ResultExt;
 use std::collections::HashMap;
 
+use crate::endpoint_store::db_helpers::ResultExt;
 /// Gets all endpoints for a specific group
-pub(crate) fn get_endpoints_by_group_id(
+pub(crate) async fn get_endpoints_by_group_id(
     store: &EndpointStore,
     group_id: &str,
 ) -> Result<Vec<Endpoint>, StoreError> {
-    let mut conn = store.get_conn()?;
+    let mut conn = store.get_conn().await?;
     let tx = conn.transaction().to_store_error()?;
 
         tracing::debug!(

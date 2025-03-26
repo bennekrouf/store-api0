@@ -7,13 +7,13 @@ use crate::endpoint_store::db_helpers::ResultExt;
 type DbTransaction<'a> = duckdb::Transaction<'a>;
 
 /// Gets all API groups and endpoints for a user
-pub fn get_api_groups_by_email(
+pub async fn get_api_groups_by_email(
     store: &EndpointStore,
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
     tracing::info!(email = %email, "Starting to fetch API groups and endpoints");
-    let mut conn = store.get_conn()?;
-    let tx: DbTransaction = conn.transaction().to_store_error()?;
+    let mut conn = store.get_conn().await?;
+    let tx = conn.transaction().to_store_error()?;
 
     // Check if user has custom groups
     let has_custom: bool = tx.query_row(
