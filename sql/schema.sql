@@ -1,6 +1,5 @@
 -- New schema for API groups and endpoints
 
-
 -- User preferences table to store hidden default endpoints
 CREATE TABLE IF NOT EXISTS user_preferences (
     email VARCHAR NOT NULL,
@@ -62,3 +61,28 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
     alternative VARCHAR NOT NULL,
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
+
+-- Modify the user_preferences table to include API key fields
+-- Migration to add API key fields to user_preferences table
+-- Split into individual ALTER statements to work with DuckDB
+
+-- Add api_key_hash
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_hash TEXT;
+
+-- Add api_key_prefix
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_prefix TEXT;
+
+-- Add api_key_name
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_name TEXT;
+
+-- Add api_key_generated_at
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_generated_at TIMESTAMP;
+
+-- Add api_key_last_used
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_last_used TIMESTAMP;
+
+-- Add api_key_usage_count
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_usage_count INTEGER DEFAULT 0;
+
+-- Add credit_balance
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN credit_balance INTEGER DEFAULT 0;

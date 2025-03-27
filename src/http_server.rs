@@ -5,7 +5,9 @@ use base64::{engine::general_purpose, Engine as _};
 use crate::endpoint_store::{ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use crate::middleware::api_key_auth::ApiKeyAuth;
 use crate::endpoint_store::UpdatePreferenceRequest;
+use crate::endpoint_store::GenerateKeyRequest;
 
 // Request and Response models
 #[derive(Debug, Clone, Deserialize)]
@@ -550,6 +552,7 @@ pub async fn start_http_server(
                 App::new()
                     .wrap(Logger::default())
                     .wrap(cors)
+                    .wrap(ApiKeyAuth::new(store_clone.clone()))  
                     .app_data(web::Data::new(store_clone.clone()))
                     .service(
                         web::scope("/api")
@@ -561,6 +564,10 @@ pub async fn start_http_server(
                             .route("/user/preferences/{email}", web::get().to(get_user_preferences))
                             .route("/user/preferences", web::post().to(update_user_preferences))
                             .route("/user/preferences/{email}", web::delete().to(reset_user_preferences))
+                            .route("/user/key/{email}", web::get().to(get_api_key_status))
+                            .route("/user/key", web::post().to(generate_api_key))
+                            .route("/user/key/{email}", web::delete().to(revoke_api_key))
+                            .route("/user/usage/{email}", web::get().to(get_api_key_usage))
                             .route(
                                 "/groups/{email}/{group_id}",
                                 web::delete().to(delete_api_group),
@@ -689,3 +696,160 @@ async fn reset_user_preferences(
         }
     }
 }
+
+
+// Handler for getting API key status
+async fn get_api_key_status(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP get API key status request");
+
+    match store.get_api_key_status(&email).await {
+        Ok(key_preference) => {
+            tracing::info!(
+                email = %email,
+                has_key = key_preference.has_key,
+                "Successfully retrieved API key status"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "keyPreference": key_preference,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to retrieve API key status"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Error: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for generating a new API key
+async fn generate_api_key(
+    store: web::Data<Arc<EndpointStore>>,
+    request: web::Json<GenerateKeyRequest>,
+) -> impl Responder {
+    let email = &request.email;
+    let key_name = &request.key_name;
+    
+    tracing::info!(
+        email = %email,
+        key_name = %key_name,
+        "Received HTTP generate API key request"
+    );
+
+    match store.generate_api_key(email, key_name).await {
+        Ok((key, key_prefix)) => {
+            tracing::info!(
+                email = %email,
+                key_prefix = %key_prefix,
+                "Successfully generated API key"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "API key generated successfully",
+                "key": key,
+                "keyPrefix": key_prefix,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to generate API key"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to generate API key: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for revoking an API key
+async fn revoke_api_key(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP revoke API key request");
+
+    match store.revoke_api_key(&email).await {
+        Ok(revoked) => {
+            if revoked {
+                tracing::info!(
+                    email = %email,
+                    "Successfully revoked API key"
+                );
+                HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "message": "API key revoked successfully",
+                }))
+            } else {
+                tracing::warn!(
+                    email = %email,
+                    "No API key found to revoke"
+                );
+                HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "message": "No API key found to revoke",
+                }))
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to revoke API key"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to revoke API key: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for getting API key usage
+async fn get_api_key_usage(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP get API key usage request");
+
+    match store.get_api_key_usage(&email).await {
+        Ok(usage) => {
+            tracing::info!(
+                email = %email,
+                usage_count = usage.usage_count,
+                "Successfully retrieved API key usage"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "usage": usage,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to retrieve API key usage"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Error: {}", e),
+            }))
+        }
+    }
+}
+
+

@@ -3,6 +3,7 @@ mod http_server;
 mod grpc_server;
 mod endpoint_store;
 mod db_pool;
+mod middleware;
 
 use crate::grpc_server::EndpointServiceImpl;
 use endpoint::endpoint_service_server::EndpointServiceServer;

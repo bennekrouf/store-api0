@@ -13,10 +13,12 @@ mod delete_user_api_group;
 mod cleanup;
 mod db_helpers;
 mod user_preferences;
+mod api_key_management;
 // Re-export everything needed for the public API
 pub use models::*;
 pub use errors::*;
 pub use utils::*;
+// pub use api_key_management::*;
 // pub use user_preferences::*;
 
 use crate::db_pool::{create_db_pool, MobcDuckDBConnection, MobcDuckDBPool};
@@ -197,5 +199,54 @@ impl EndpointStore {
         email: &str,
     ) -> Result<(), StoreError> {
         cleanup::fallback_clean_user_data(self, email).await
+    }
+
+    /// Gets the API key status for a user
+    pub async fn get_api_key_status(
+        &self,
+        email: &str,
+    ) -> Result<KeyPreference, StoreError> {
+        api_key_management::get_api_key_status(self, email).await
+    }
+
+    /// Generates a new API key for a user
+    pub async fn generate_api_key(
+        &self,
+        email: &str,
+        key_name: &str,
+    ) -> Result<(String, String), StoreError> {
+        api_key_management::generate_api_key(self, email, key_name).await
+    }
+
+    /// Revokes an API key for a user
+    pub async fn revoke_api_key(
+        &self,
+        email: &str,
+    ) -> Result<bool, StoreError> {
+        api_key_management::revoke_api_key(self, email).await
+    }
+
+    /// Records usage of an API key
+    pub async fn record_api_key_usage(
+        &self,
+        email: &str,
+    ) -> Result<(), StoreError> {
+        api_key_management::record_api_key_usage(self, email).await
+    }
+
+    /// Validates an API key
+    pub async fn validate_api_key(
+        &self,
+        key: &str,
+    ) -> Result<Option<String>, StoreError> {
+        api_key_management::validate_api_key(self, key).await
+    }
+
+    /// Gets usage statistics for a user's API key
+    pub async fn get_api_key_usage(
+        &self,
+        email: &str,
+    ) -> Result<KeyPreference, StoreError> {
+        api_key_management::get_api_key_usage(self, email).await
     }
 }

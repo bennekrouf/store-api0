@@ -78,3 +78,40 @@ pub struct ApiGroupWithEndpoints {
 pub struct ApiStorage {
     pub api_groups: Vec<ApiGroupWithEndpoints>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KeyPreference {
+    pub has_key: bool,
+    pub generated_at: Option<String>,
+    pub last_used: Option<String>,
+    pub usage_count: i64,
+    pub key_name: Option<String>,
+    pub key_prefix: Option<String>,
+    pub balance: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GenerateKeyRequest {
+    pub email: String,
+    pub key_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GenerateKeyResponse {
+    pub success: bool,
+    pub message: String,
+    pub key: Option<String>,
+    pub key_prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KeyStatusResponse {
+    pub success: bool,
+    pub key_preference: Option<KeyPreference>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RevokeKeyResponse {
+    pub success: bool,
+    pub message: String,
+}
