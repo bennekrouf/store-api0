@@ -12,11 +12,12 @@ mod add_user_api_group;
 mod delete_user_api_group;
 mod cleanup;
 mod db_helpers;
-
+mod user_preferences;
 // Re-export everything needed for the public API
 pub use models::*;
 pub use errors::*;
 pub use utils::*;
+// pub use user_preferences::*;
 
 use crate::db_pool::{create_db_pool, MobcDuckDBConnection, MobcDuckDBPool};
 use std::path::Path;
@@ -58,10 +59,66 @@ impl EndpointStore {
         self.pool.get().await.map_err(|e| StoreError::Pool(e.to_string()))
     }
 
-    /// Static helper to get a connection from a pool
-    // async fn get_conn_from_pool(pool: &MobcDuckDBPool) -> Result<MobcDuckDBConnection, StoreError> {
-    //     pool.get().await.map_err(|e| StoreError::Pool(e.to_string()))
-    // }
+    /// Gets user preferences by email
+    pub async fn get_user_preferences(
+        &self,
+        email: &str,
+    ) -> Result<UserPreferences, StoreError> {
+        user_preferences::get_user_preferences(self, email).await
+    }
+
+    /// Updates user preferences
+    pub async fn update_user_preferences(
+        &self,
+        email: &str,
+        action: &str,
+        endpoint_id: &str,
+    ) -> Result<bool, StoreError> {
+        user_preferences::update_user_preferences(self, email, action, endpoint_id).await
+    }
+
+    /// Resets user preferences
+    pub async fn reset_user_preferences(
+        &self,
+        email: &str,
+    ) -> Result<bool, StoreError> {
+        user_preferences::reset_user_preferences(self, email).await
+    }
+
+    /// Gets API groups with user preferences applied
+    pub async fn get_api_groups_with_preferences(
+        &self,
+        email: &str,
+    ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
+        // Get user preferences
+        let preferences = self.get_user_preferences(email).await?;
+        
+        // Get API groups
+        let api_groups = self.get_api_groups_by_email(email).await?;
+        
+        // Apply preferences filter
+        let filtered_groups = api_groups
+            .into_iter()
+            .map(|group| {
+                let filtered_endpoints = group.endpoints
+                    .into_iter()
+                    .filter(|endpoint| {
+                        // Keep the endpoint if it's NOT (default AND hidden)
+                        let is_default = endpoint.is_default.unwrap_or(false);
+                        !(is_default && preferences.hidden_defaults.contains(&endpoint.id))
+                    })
+                    .collect();
+                    
+                ApiGroupWithEndpoints {
+                    group: group.group,
+                    endpoints: filtered_endpoints,
+                }
+            })
+            .filter(|group| !group.endpoints.is_empty()) // Remove empty groups
+            .collect();
+        
+        Ok(filtered_groups)
+    }
 
     /// Initializes the database with default API groups if it's empty
     pub async fn initialize_if_empty(

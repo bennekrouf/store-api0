@@ -148,13 +148,14 @@ fn fetch_custom_endpoints(
     let endpoints_query = r#"
         SELECT 
             e.id, e.text, e.description, e.verb, e.base, e.path,
-            p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives
+            p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives,
+            e.is_default,
         FROM endpoints e
         INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE ue.email = ? AND e.group_id = ?
-        GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required
+        GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required, e.is_default,
     "#;
     
     fetch_endpoints(tx, endpoints_query, &[&email, &group_id], group_id)
@@ -168,12 +169,13 @@ fn fetch_default_endpoints(
     let endpoints_query = r#"
         SELECT 
             e.id, e.text, e.description, e.verb, e.base, e.path,
-            p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives
+            p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives,
+            e.is_default,
         FROM endpoints e
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE e.is_default = true AND e.group_id = ?
-        GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required
+        GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required, e.is_default
     "#;
     
     fetch_endpoints(tx, endpoints_query, &[&group_id], group_id)
@@ -200,6 +202,7 @@ fn fetch_endpoints(
             row.get::<_, Option<String>>(7)?,
             row.get::<_, Option<bool>>(8)?,
             row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<bool>>(10)?,
         ))
     }).to_store_error()?;
 
@@ -222,6 +225,7 @@ fn fetch_endpoints(
         param_desc,
         required,
         alternatives_str,
+        is_default,
     ) in endpoint_rows {
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| Endpoint {
             id,
@@ -232,6 +236,7 @@ fn fetch_endpoints(
             path,
             parameters: Vec::new(),
             group_id: group_id.to_string(),
+            is_default,
         });
 
         if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {

@@ -1,5 +1,13 @@
 -- New schema for API groups and endpoints
 
+
+-- User preferences table to store hidden default endpoints
+CREATE TABLE IF NOT EXISTS user_preferences (
+    email VARCHAR NOT NULL,
+    hidden_defaults TEXT NOT NULL, -- Comma-separated list of endpoint IDs
+    PRIMARY KEY (email)
+);
+
 -- API Groups table
 CREATE TABLE IF NOT EXISTS api_groups (
     id VARCHAR PRIMARY KEY,

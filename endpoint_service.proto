@@ -4,6 +4,11 @@ package endpoint;
 service EndpointService {
     rpc GetApiGroups (GetApiGroupsRequest) returns (stream GetApiGroupsResponse);
     rpc UploadApiGroups (UploadApiGroupsRequest) returns (UploadApiGroupsResponse);
+
+    // New methods for user preferences
+    rpc GetUserPreferences (GetUserPreferencesRequest) returns (GetUserPreferencesResponse);
+    rpc UpdateUserPreferences (UpdateUserPreferencesRequest) returns (UpdateUserPreferencesResponse);
+    rpc ResetUserPreferences (ResetUserPreferencesRequest) returns (ResetUserPreferencesResponse);
 }
 
 message GetApiGroupsRequest {
@@ -26,6 +31,7 @@ message Endpoint {
     string path = 6;
     repeated Parameter parameters = 7;
     string group_id = 8;
+    bool is_default = 9;
 }
 
 message ApiGroup {
@@ -51,4 +57,39 @@ message UploadApiGroupsResponse {
     string message = 2;
     int32 imported_count = 3;
     int32 group_count = 4;
+}
+
+message UserPreferences {
+    string email = 1;
+    repeated string hidden_defaults = 2;
+}
+
+message GetUserPreferencesRequest {
+    string email = 1;
+}
+
+message GetUserPreferencesResponse {
+    bool success = 1;
+    string message = 2;
+    UserPreferences preferences = 3;
+}
+
+message UpdateUserPreferencesRequest {
+    string email = 1;
+    string action = 2; // "hide_default" or "show_default"
+    string endpoint_id = 3;
+}
+
+message UpdateUserPreferencesResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ResetUserPreferencesRequest {
+    string email = 1;
+}
+
+message ResetUserPreferencesResponse {
+    bool success = 1;
+    string message = 2;
 }

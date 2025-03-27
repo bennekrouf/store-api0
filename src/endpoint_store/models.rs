@@ -11,6 +11,19 @@ fn default_base_url() -> String {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserPreferences {
+    pub email: String,
+    pub hidden_defaults: Vec<String>, // List of hidden default endpoint IDs
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UpdatePreferenceRequest {
+    pub email: String,
+    pub action: String, // "hide_default" or "show_default"
+    pub endpoint_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Parameter {
     pub name: String,
     #[serde(default = "String::new")]
@@ -34,12 +47,13 @@ pub struct Endpoint {
     #[serde(alias = "method")] // Allow 'method' as an alternative name
     pub verb: String,
     #[serde(default = "default_base_url")]
-    #[serde(alias = "base")] // Handle camelCase from frontend
     pub base: String,
     #[serde(default = "String::new")]
     pub path: String,
     #[serde(default = "String::new")]
     pub group_id: String,
+    #[serde(default)]
+    pub is_default: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

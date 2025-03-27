@@ -1,14 +1,32 @@
 use crate::endpoint::endpoint_service_server::EndpointService;
+// use crate::endpoint::{
+//     ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
+//     GetApiGroupsResponse, Parameter as ProtoParameter, UploadApiGroupsRequest,
+//     UploadApiGroupsResponse,
+// };
+
+// use crate::endpoint::ResetUserPreferencesResponse;
+// use crate::endpoint::UpdateUserPreferencesResponse;
+// use crate::endpoint::UpdateUserPreferencesRequest;
+// use crate::endpoint::ResetUserPreferencesRequest;
+// use crate::endpoint::GetUserPreferencesResponse;
+// use crate::endpoint::GetUserPreferencesRequest;
+// use crate::endpoint::UserPreferences;
+
 use crate::endpoint::{
     ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
     GetApiGroupsResponse, Parameter as ProtoParameter, UploadApiGroupsRequest,
-    UploadApiGroupsResponse,
+    UploadApiGroupsResponse, GetUserPreferencesRequest, GetUserPreferencesResponse,
+    UpdateUserPreferencesRequest, UpdateUserPreferencesResponse, ResetUserPreferencesRequest,
+    ResetUserPreferencesResponse, UserPreferences as ProtoUserPreferences, // Add this
 };
+
 use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
+
 #[derive(Clone)]
 pub struct EndpointServiceImpl {
     store: Arc<EndpointStore>,
@@ -66,26 +84,27 @@ impl EndpointService for EndpointServiceImpl {
 
                 // Transform endpoints to proto format
                 let proto_endpoints: Vec<ProtoEndpoint> = endpoints
-                    .into_iter()
-                    .map(|e| ProtoEndpoint {
-                        id: e.id,
-                        text: e.text,
-                        description: e.description,
-                        verb: e.verb,
-                        base: e.base,
-                        path: e.path,
-                        group_id: e.group_id,
-                        parameters: e.parameters
-                            .into_iter()
-                            .map(|p| ProtoParameter {
-                                name: p.name,
-                                description: p.description,
-                                required: p.required,
-                                alternatives: p.alternatives,
-                            })
-                            .collect(),
-                    })
-                    .collect();
+                .into_iter()
+                .map(|e| ProtoEndpoint {
+                    id: e.id,
+                    text: e.text,
+                    description: e.description,
+                    verb: e.verb,
+                    base: e.base,
+                    path: e.path,
+                    group_id: e.group_id,
+                    is_default: e.is_default.unwrap_or(false), // Include is_default flag
+                    parameters: e.parameters
+                        .into_iter()
+                        .map(|p| ProtoParameter {
+                            name: p.name,
+                            description: p.description,
+                            required: p.required,
+                            alternatives: p.alternatives,
+                        })
+                        .collect(),
+                })
+                .collect();
 
                 // Create the proto API group
                 let proto_group = ProtoApiGroup {
@@ -275,6 +294,133 @@ impl EndpointService for EndpointServiceImpl {
                     "Failed to import API groups: {}",
                     e
                 )))
+            }
+        }
+    }
+
+    // Add these methods to impl EndpointService for EndpointServiceImpl in src/grpc_server.rs
+    async fn get_user_preferences(
+        &self,
+        request: Request<GetUserPreferencesRequest>,
+    ) -> Result<Response<GetUserPreferencesResponse>, Status> {
+        let email = request.into_inner().email;
+        tracing::info!(email = %email, "Received get_user_preferences gRPC request");
+
+        match self.store.get_user_preferences(&email).await {
+            Ok(prefs) => {
+                tracing::info!(
+                    email = %email,
+                    hidden_count = prefs.hidden_defaults.len(),
+                    "Successfully retrieved user preferences"
+                );
+                
+                // Convert to proto format
+                let proto_prefs = ProtoUserPreferences {
+                    email: prefs.email,
+                    hidden_defaults: prefs.hidden_defaults,
+                };
+                
+                Ok(Response::new(GetUserPreferencesResponse {
+                    success: true,
+                    message: "User preferences successfully retrieved".to_string(),
+                    preferences: Some(proto_prefs),
+                }))
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    email = %email,
+                    "Failed to retrieve user preferences"
+                );
+                
+                Ok(Response::new(GetUserPreferencesResponse {
+                    success: false,
+                    message: format!("Failed to retrieve user preferences: {}", e),
+                    preferences: None,
+                }))
+            }
+        }
+    }
+
+    async fn update_user_preferences(
+        &self,
+        request: Request<UpdateUserPreferencesRequest>,
+    ) -> Result<Response<UpdateUserPreferencesResponse>, Status> {
+        let req = request.into_inner();
+        let email = req.email;
+        let action = req.action;
+        let endpoint_id = req.endpoint_id;
+        
+        tracing::info!(
+            email = %email,
+            action = %action,
+            endpoint_id = %endpoint_id,
+            "Received update_user_preferences gRPC request"
+        );
+
+        match self.store.update_user_preferences(&email, &action, &endpoint_id).await {
+            Ok(_) => {
+                tracing::info!(
+                    email = %email,
+                    action = %action,
+                    endpoint_id = %endpoint_id,
+                    "Successfully updated user preferences"
+                );
+                
+                Ok(Response::new(UpdateUserPreferencesResponse {
+                    success: true,
+                    message: "User preferences successfully updated".to_string(),
+                }))
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    email = %email,
+                    "Failed to update user preferences"
+                );
+                
+                Ok(Response::new(UpdateUserPreferencesResponse {
+                    success: false,
+                    message: format!("Failed to update user preferences: {}", e),
+                }))
+            }
+        }
+    }
+
+    async fn reset_user_preferences(
+        &self,
+        request: Request<ResetUserPreferencesRequest>,
+    ) -> Result<Response<ResetUserPreferencesResponse>, Status> {
+        let email = request.into_inner().email;
+        
+        tracing::info!(
+            email = %email,
+            "Received reset_user_preferences gRPC request"
+        );
+
+        match self.store.reset_user_preferences(&email).await {
+            Ok(_) => {
+                tracing::info!(
+                    email = %email,
+                    "Successfully reset user preferences"
+                );
+                
+                Ok(Response::new(ResetUserPreferencesResponse {
+                    success: true,
+                    message: "User preferences successfully reset".to_string(),
+                }))
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    email = %email,
+                    "Failed to reset user preferences"
+                );
+                
+                Ok(Response::new(ResetUserPreferencesResponse {
+                    success: false,
+                    message: format!("Failed to reset user preferences: {}", e),
+                }))
             }
         }
     }

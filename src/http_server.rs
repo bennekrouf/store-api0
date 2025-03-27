@@ -5,6 +5,7 @@ use base64::{engine::general_purpose, Engine as _};
 use crate::endpoint_store::{ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use crate::endpoint_store::UpdatePreferenceRequest;
 
 // Request and Response models
 #[derive(Debug, Clone, Deserialize)]
@@ -200,7 +201,6 @@ async fn upload_api_config(
     }
 }
 
-// Handler for getting API groups
 async fn get_api_groups(
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
@@ -208,12 +208,12 @@ async fn get_api_groups(
     let email = email.into_inner();
     tracing::info!(email = %email, "Received HTTP get API groups request");
 
-    match store.get_or_create_user_api_groups(&email).await {
+    match store.get_api_groups_with_preferences(&email).await {
         Ok(api_groups) => {
             tracing::info!(
                 email = %email,
                 group_count = api_groups.len(),
-                "Successfully retrieved API groups"
+                "Successfully retrieved API groups with preferences applied"
             );
             HttpResponse::Ok().json(ApiGroupsResponse {
                 success: true,
@@ -341,6 +341,29 @@ async fn update_api_group(
         }));
     }
 
+    // Check if group is a default group
+    let is_default_group = match check_is_default_group(&store, group_id).await {
+        Ok(is_default) => is_default,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                group_id = %group_id,
+                "Failed to check if group is default"
+            );
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to check group status: {}", e)
+            }));
+        }
+    };
+
+    if is_default_group {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Cannot update a default API group. Default groups are read-only."
+        }));
+    }
+
     // Ensure group ID is consistent
     api_group.group.id = group_id.clone();
 
@@ -400,6 +423,19 @@ async fn update_api_group(
     }
 }
 
+// Helper function to check if a group is a default group
+async fn check_is_default_group(store: &web::Data<Arc<EndpointStore>>, group_id: &str) -> Result<bool, String> {
+    let conn = store.get_conn().await.map_err(|e| e.to_string())?;
+    
+    let is_default: bool = conn.query_row(
+        "SELECT is_default FROM api_groups WHERE id = ?",
+        [group_id],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    
+    Ok(is_default)
+}
+
 // Handler for deleting an API group
 async fn delete_api_group(
     store: web::Data<Arc<EndpointStore>>,
@@ -412,6 +448,29 @@ async fn delete_api_group(
         group_id = %group_id,
         "Received HTTP delete API group request"
     );
+
+    // Check if group is a default group
+    let is_default_group = match check_is_default_group(&store, &group_id).await {
+        Ok(is_default) => is_default,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                group_id = %group_id,
+                "Failed to check if group is default"
+            );
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to check group status: {}", e)
+            }));
+        }
+    };
+
+    if is_default_group {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "Cannot delete a default API group. Default groups are read-only."
+        }));
+    }
 
     match store.delete_user_api_group(&email, &group_id).await {
         Ok(deleted) => {
@@ -499,6 +558,9 @@ pub async fn start_http_server(
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))
+                            .route("/user/preferences/{email}", web::get().to(get_user_preferences))
+                            .route("/user/preferences", web::post().to(update_user_preferences))
+                            .route("/user/preferences/{email}", web::delete().to(reset_user_preferences))
                             .route(
                                 "/groups/{email}/{group_id}",
                                 web::delete().to(delete_api_group),
@@ -516,4 +578,114 @@ pub async fn start_http_server(
     .expect("Actix system panicked");
 
     Ok(())
+}
+
+// Handler for getting user preferences
+async fn get_user_preferences(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP get user preferences request");
+
+    match store.get_user_preferences(&email).await {
+        Ok(preferences) => {
+            tracing::info!(
+                email = %email,
+                hidden_count = preferences.hidden_defaults.len(),
+                "Successfully retrieved user preferences"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "preferences": preferences,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to retrieve user preferences"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Error: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for updating user preferences
+async fn update_user_preferences(
+    store: web::Data<Arc<EndpointStore>>,
+    update_data: web::Json<UpdatePreferenceRequest>,
+) -> impl Responder {
+    let email = &update_data.email;
+    let action = &update_data.action;
+    let endpoint_id = &update_data.endpoint_id;
+
+    tracing::info!(
+        email = %email,
+        action = %action,
+        endpoint_id = %endpoint_id,
+        "Received HTTP update user preferences request"
+    );
+
+    match store.update_user_preferences(email, action, endpoint_id).await {
+        Ok(_) => {
+            tracing::info!(
+                email = %email,
+                action = %action,
+                endpoint_id = %endpoint_id,
+                "Successfully updated user preferences"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "User preferences successfully updated",
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to update user preferences"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to update user preferences: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for resetting user preferences
+async fn reset_user_preferences(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP reset user preferences request");
+
+    match store.reset_user_preferences(&email).await {
+        Ok(_) => {
+            tracing::info!(
+                email = %email,
+                "Successfully reset user preferences"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": "User preferences successfully reset",
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to reset user preferences"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to reset user preferences: {}", e),
+            }))
+        }
+    }
 }
