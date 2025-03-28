@@ -3,11 +3,31 @@ use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use base64::{engine::general_purpose, Engine as _};
 use crate::endpoint_store::{ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::middleware::api_key_auth::ApiKeyAuth;
 use crate::endpoint_store::UpdatePreferenceRequest;
 use crate::endpoint_store::GenerateKeyRequest;
+// use actix_web::{web, HttpResponse, Responder};
+use serde::{Deserialize, Serialize};
+
+// Request and Response models for API key validation
+#[derive(Debug, Deserialize)]
+struct ValidateKeyRequest {
+    api_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidateKeyResponse {
+    valid: bool,
+    email: Option<String>,
+    message: String,
+}
+
+// Response model for API key usage
+#[derive(Debug, Serialize)]
+struct RecordUsageResponse {
+    success: bool,
+    message: String,
+}
 
 // Request and Response models
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +63,83 @@ pub struct UpdateApiGroupRequest {
     email: String,
     group_id: String,
     api_group: ApiGroupWithEndpoints,
+}
+
+// Handler for validating an API key
+async fn validate_api_key(
+    store: web::Data<Arc<EndpointStore>>,
+    key_data: web::Json<ValidateKeyRequest>,
+) -> impl Responder {
+    let api_key = &key_data.api_key;
+    
+    tracing::info!("Received HTTP validate API key request");
+
+    match store.validate_api_key(api_key).await {
+        Ok(Some(email)) => {
+            tracing::info!(
+                email = %email,
+                "Successfully validated API key"
+            );
+            HttpResponse::Ok().json(ValidateKeyResponse {
+                valid: true,
+                email: Some(email),
+                message: "API key is valid".to_string(),
+            })
+        }
+        Ok(None) => {
+            tracing::warn!("Invalid API key provided");
+            HttpResponse::Ok().json(ValidateKeyResponse {
+                valid: false,
+                email: None,
+                message: "API key is invalid".to_string(),
+            })
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "Failed to validate API key"
+            );
+            HttpResponse::InternalServerError().json(ValidateKeyResponse {
+                valid: false,
+                email: None,
+                message: format!("Error validating API key: {}", e),
+            })
+        }
+    }
+}
+
+// Handler for recording API key usage
+async fn record_api_key_usage(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    
+    tracing::info!(email = %email, "Received HTTP record API key usage request");
+
+    match store.record_api_key_usage(&email).await {
+        Ok(_) => {
+            tracing::info!(
+                email = %email,
+                "Successfully recorded API key usage"
+            );
+            HttpResponse::Ok().json(RecordUsageResponse {
+                success: true,
+                message: "API key usage recorded successfully".to_string(),
+            })
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to record API key usage"
+            );
+            HttpResponse::InternalServerError().json(RecordUsageResponse {
+                success: false,
+                message: format!("Failed to record API key usage: {}", e),
+            })
+        }
+    }
 }
 
 // Handler for uploading API configuration
@@ -552,7 +649,7 @@ pub async fn start_http_server(
                 App::new()
                     .wrap(Logger::default())
                     .wrap(cors)
-                    .wrap(ApiKeyAuth::new(store_clone.clone()))  
+                    // .wrap(ApiKeyAuth::new(store_clone.clone()))  
                     .app_data(web::Data::new(store_clone.clone()))
                     .service(
                         web::scope("/api")
@@ -572,6 +669,9 @@ pub async fn start_http_server(
                                 "/groups/{email}/{group_id}",
                                 web::delete().to(delete_api_group),
                             )
+
+                            .route("/key/validate", web::post().to(validate_api_key))
+                            .route("/key/usage/{email}", web::post().to(record_api_key_usage))
                             .route("/health", web::get().to(health_check)),
                     )
             })

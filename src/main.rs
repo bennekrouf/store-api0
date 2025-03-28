@@ -3,7 +3,9 @@ mod http_server;
 mod grpc_server;
 mod endpoint_store;
 mod db_pool;
-mod middleware;
+mod config;
+
+use config::Config;
 
 use crate::grpc_server::EndpointServiceImpl;
 use endpoint::endpoint_service_server::EndpointServiceServer;
@@ -30,6 +32,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("DEBUG")))
         .init();
+
+    // Load configuration
+    let config = match Config::from_file("config.yaml") {
+        Ok(config) => {
+            tracing::info!("Successfully loaded configuration from config.yaml");
+            config
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load configuration: {}. Using defaults.", e);
+            Config::default()
+        }
+    };
 
     // Create and initialize the endpoint store
     let path = "../db/";
@@ -141,36 +155,22 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Clone for the HTTP server
     let http_store = Arc::clone(&store_arc);
 
-    // Try different ports for HTTP server
-    let http_ports = [9090]; // , 8080, 9090, 3333];
-    let mut http_port = http_ports[0];
-
-    // Find an available port
-    for &port in &http_ports {
-        match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
-            Ok(_) => {
-                http_port = port;
-                tracing::info!("Found available port for HTTP server: {}", port);
-                break;
-            }
-            Err(e) => {
-                tracing::warn!("Port {} is not available: {}", port, e);
-            }
-        }
-    }
+    // Get HTTP configuration
+    let http_host = config.http_host().to_string();
+    let http_port = config.http_port();
 
     // Start the HTTP server as a separate task
     let http_handle = tokio::spawn(async move {
-        tracing::info!("Starting HTTP server on port {}", http_port);
+        tracing::info!("Starting HTTP server on {}:{}", http_host, http_port);
 
-        if let Err(e) = http_server::start_http_server(http_store, "127.0.0.1", http_port).await {
+        if let Err(e) = http_server::start_http_server(http_store, &http_host, http_port).await {
             tracing::error!("HTTP server error: {}", e);
         }
     });
 
     // Configure gRPC server
     let service = EndpointServiceImpl::new(store_arc);
-    let addr = "0.0.0.0:50055".parse()?;
+    let grpc_addr = config.grpc_address().parse()?;
 
     // Load the file descriptor for reflection
     let descriptor_set = include_bytes!(concat!(env!("OUT_DIR"), "/endpoint_descriptor.bin"));
@@ -185,7 +185,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .expose_headers(Any);
 
     // Start the gRPC server as a separate task
-    tracing::info!("Starting gRPC server on {}", addr);
+    tracing::info!("Starting gRPC server on {}", grpc_addr);
     let grpc_handle = tokio::spawn(async move {
         if let Err(e) = Server::builder()
             .accept_http1(true)
@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .layer(GrpcWebLayer::new())
             .add_service(EndpointServiceServer::new(service))
             .add_service(reflection_service)
-            .serve(addr)
+            .serve(grpc_addr)
             .await
         {
             tracing::error!("gRPC server error: {}", e);

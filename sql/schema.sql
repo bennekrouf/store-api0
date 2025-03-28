@@ -67,22 +67,22 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
 -- Split into individual ALTER statements to work with DuckDB
 
 -- Add api_key_hash
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_hash TEXT;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_hash TEXT;
 
 -- Add api_key_prefix
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_prefix TEXT;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_prefix TEXT;
 
 -- Add api_key_name
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_name TEXT;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_name TEXT;
 
 -- Add api_key_generated_at
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_generated_at TIMESTAMP;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_generated_at TIMESTAMP;
 
 -- Add api_key_last_used
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_last_used TIMESTAMP;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_last_used TIMESTAMP;
 
 -- Add api_key_usage_count
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN api_key_usage_count INTEGER DEFAULT 0;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_usage_count INTEGER DEFAULT 0;
 
 -- Add credit_balance
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN credit_balance INTEGER DEFAULT 0;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS credit_balance INTEGER DEFAULT 0;
