@@ -1,11 +1,14 @@
+use crate::endpoint_store::GenerateKeyRequest;
+use crate::endpoint_store::UpdateCreditRequest;
+use crate::endpoint_store::UpdatePreferenceRequest;
+use crate::endpoint_store::{
+    generate_id_from_text, ApiGroupWithEndpoints, ApiStorage, EndpointStore,
+};
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use base64::{engine::general_purpose, Engine as _};
-use crate::endpoint_store::{ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
 use std::sync::Arc;
-use crate::endpoint_store::UpdatePreferenceRequest;
-use crate::endpoint_store::GenerateKeyRequest;
 // use actix_web::{web, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +22,7 @@ struct ValidateKeyRequest {
 struct ValidateKeyResponse {
     valid: bool,
     email: Option<String>,
+    key_id: Option<String>,
     message: String,
 }
 
@@ -71,18 +75,29 @@ async fn validate_api_key(
     key_data: web::Json<ValidateKeyRequest>,
 ) -> impl Responder {
     let api_key = &key_data.api_key;
-    
+
     tracing::info!("Received HTTP validate API key request");
 
     match store.validate_api_key(api_key).await {
-        Ok(Some(email)) => {
+        Ok(Some((key_id, email))) => {
+            // Record usage for this key
+            if let Err(e) = store.record_api_key_usage(&key_id).await {
+                tracing::warn!(
+                    error = %e,
+                    key_id = %key_id,
+                    "Failed to record API key usage but proceeding with validation"
+                );
+            }
+
             tracing::info!(
                 email = %email,
+                key_id = %key_id,
                 "Successfully validated API key"
             );
             HttpResponse::Ok().json(ValidateKeyResponse {
                 valid: true,
                 email: Some(email),
+                key_id: Some(key_id),
                 message: "API key is valid".to_string(),
             })
         }
@@ -91,6 +106,7 @@ async fn validate_api_key(
             HttpResponse::Ok().json(ValidateKeyResponse {
                 valid: false,
                 email: None,
+                key_id: None,
                 message: "API key is invalid".to_string(),
             })
         }
@@ -102,6 +118,7 @@ async fn validate_api_key(
             HttpResponse::InternalServerError().json(ValidateKeyResponse {
                 valid: false,
                 email: None,
+                key_id: None,
                 message: format!("Error validating API key: {}", e),
             })
         }
@@ -114,7 +131,7 @@ async fn record_api_key_usage(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    
+
     tracing::info!(email = %email, "Received HTTP record API key usage request");
 
     match store.record_api_key_usage(&email).await {
@@ -477,36 +494,34 @@ async fn update_api_group(
 
     // Update API group by first deleting and then adding
     match store.delete_user_api_group(email, group_id).await {
-        Ok(_) => {
-            match store.add_user_api_group(email, &api_group).await {
-                Ok(endpoint_count) => {
-                    tracing::info!(
-                        email = %email,
-                        group_id = %group_id,
-                        endpoint_count = endpoint_count,
-                        "Successfully updated API group"
-                    );
-                    HttpResponse::Ok().json(serde_json::json!({
-                        "success": true,
-                        "message": "API group successfully updated",
-                        "group_id": group_id,
-                        "endpoint_count": endpoint_count
-                    }))
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        email = %email,
-                        group_id = %group_id,
-                        "Failed to add updated API group"
-                    );
-                    HttpResponse::InternalServerError().json(serde_json::json!({
-                        "success": false,
-                        "message": format!("Failed to update API group: {}", e)
-                    }))
-                }
+        Ok(_) => match store.add_user_api_group(email, &api_group).await {
+            Ok(endpoint_count) => {
+                tracing::info!(
+                    email = %email,
+                    group_id = %group_id,
+                    endpoint_count = endpoint_count,
+                    "Successfully updated API group"
+                );
+                HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "message": "API group successfully updated",
+                    "group_id": group_id,
+                    "endpoint_count": endpoint_count
+                }))
             }
-        }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    email = %email,
+                    group_id = %group_id,
+                    "Failed to add updated API group"
+                );
+                HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "message": format!("Failed to update API group: {}", e)
+                }))
+            }
+        },
         Err(e) => {
             tracing::error!(
                 error = %e,
@@ -523,15 +538,20 @@ async fn update_api_group(
 }
 
 // Helper function to check if a group is a default group
-async fn check_is_default_group(store: &web::Data<Arc<EndpointStore>>, group_id: &str) -> Result<bool, String> {
+async fn check_is_default_group(
+    store: &web::Data<Arc<EndpointStore>>,
+    group_id: &str,
+) -> Result<bool, String> {
     let conn = store.get_conn().await.map_err(|e| e.to_string())?;
-    
-    let is_default: bool = conn.query_row(
-        "SELECT is_default FROM api_groups WHERE id = ?",
-        [group_id],
-        |row| row.get(0),
-    ).map_err(|e| e.to_string())?;
-    
+
+    let is_default: bool = conn
+        .query_row(
+            "SELECT is_default FROM api_groups WHERE id = ?",
+            [group_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
     Ok(is_default)
 }
 
@@ -649,7 +669,7 @@ pub async fn start_http_server(
                 App::new()
                     .wrap(Logger::default())
                     .wrap(cors)
-                    // .wrap(ApiKeyAuth::new(store_clone.clone()))  
+                    // .wrap(ApiKeyAuth::new(store_clone.clone()))
                     .app_data(web::Data::new(store_clone.clone()))
                     .service(
                         web::scope("/api")
@@ -658,22 +678,49 @@ pub async fn start_http_server(
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))
-                            .route("/user/preferences/{email}", web::get().to(get_user_preferences))
-                            .route("/user/preferences", web::post().to(update_user_preferences))
-                            .route("/user/preferences/{email}", web::delete().to(reset_user_preferences))
-                            .route("/user/key/{email}", web::get().to(get_api_key_status))
-                            .route("/user/key", web::post().to(generate_api_key))
-                            .route("/user/key/{email}", web::delete().to(revoke_api_key))
-                            .route("/user/usage/{email}", web::get().to(get_api_key_usage))
                             .route(
                                 "/groups/{email}/{group_id}",
                                 web::delete().to(delete_api_group),
                             )
-
+                            // User preferences endpoints
+                            .route(
+                                "/user/preferences/{email}",
+                                web::get().to(get_user_preferences),
+                            )
+                            .route("/user/preferences", web::post().to(update_user_preferences))
+                            .route(
+                                "/user/preferences/{email}",
+                                web::delete().to(reset_user_preferences),
+                            )
+                            // Updated API key endpoints
+                            .route("/user/keys/{email}", web::get().to(get_api_keys_status))
+                            .route("/user/keys", web::post().to(generate_api_key))
+                            .route(
+                                "/user/keys/{email}/{key_id}",
+                                web::delete().to(revoke_api_key_handler),
+                            )
+                            .route(
+                                "/user/keys/{email}",
+                                web::delete().to(revoke_all_api_keys_handler),
+                            )
+                            // Credit balance endpoints
+                            .route(
+                                "/user/credits/{email}",
+                                web::get().to(get_credit_balance_handler),
+                            )
+                            .route(
+                                "/user/credits",
+                                web::post().to(update_credit_balance_handler),
+                            )
+                            // Key validation and usage
                             .route("/key/validate", web::post().to(validate_api_key))
-                            .route("/key/usage/{email}", web::post().to(record_api_key_usage))
+                            .route(
+                                "/key/usage/{email}/{key_id}",
+                                web::get().to(get_api_key_usage),
+                            )
                             .route("/health", web::get().to(health_check)),
                     )
+                // Credit balance endpoints
             })
             .bind(addr)?
             .workers(1) // Use fewer workers for testing
@@ -737,7 +784,10 @@ async fn update_user_preferences(
         "Received HTTP update user preferences request"
     );
 
-    match store.update_user_preferences(email, action, endpoint_id).await {
+    match store
+        .update_user_preferences(email, action, endpoint_id)
+        .await
+    {
         Ok(_) => {
             tracing::info!(
                 email = %email,
@@ -797,21 +847,21 @@ async fn reset_user_preferences(
     }
 }
 
-
 // Handler for getting API key status
-async fn get_api_key_status(
+async fn get_api_keys_status(
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get API key status request");
+    tracing::info!(email = %email, "Received HTTP get API keys status request");
 
-    match store.get_api_key_status(&email).await {
+    match store.get_api_keys_status(&email).await {
         Ok(key_preference) => {
             tracing::info!(
                 email = %email,
-                has_key = key_preference.has_key,
-                "Successfully retrieved API key status"
+                has_keys = key_preference.has_keys,
+                key_count = key_preference.active_key_count,
+                "Successfully retrieved API keys status"
             );
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
@@ -822,7 +872,7 @@ async fn get_api_key_status(
             tracing::error!(
                 error = %e,
                 email = %email,
-                "Failed to retrieve API key status"
+                "Failed to retrieve API keys status"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
@@ -839,7 +889,7 @@ async fn generate_api_key(
 ) -> impl Responder {
     let email = &request.email;
     let key_name = &request.key_name;
-    
+
     tracing::info!(
         email = %email,
         key_name = %key_name,
@@ -847,7 +897,7 @@ async fn generate_api_key(
     );
 
     match store.generate_api_key(email, key_name).await {
-        Ok((key, key_prefix)) => {
+        Ok((key, key_prefix, key_id)) => {
             tracing::info!(
                 email = %email,
                 key_prefix = %key_prefix,
@@ -875,14 +925,14 @@ async fn generate_api_key(
 }
 
 // Handler for revoking an API key
-async fn revoke_api_key(
+async fn revoke_api_key_handler(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    path_params: web::Path<(String, String)>,
 ) -> impl Responder {
-    let email = email.into_inner();
+    let (email, key_id) = path_params.into_inner();
     tracing::info!(email = %email, "Received HTTP revoke API key request");
 
-    match store.revoke_api_key(&email).await {
+    match store.revoke_api_key(&email, &key_id).await {
         Ok(revoked) => {
             if revoked {
                 tracing::info!(
@@ -930,7 +980,7 @@ async fn get_api_key_usage(
         Ok(usage) => {
             tracing::info!(
                 email = %email,
-                usage_count = usage.usage_count,
+                usage_count = usage.clone().unwrap().usage_count,
                 "Successfully retrieved API key usage"
             );
             HttpResponse::Ok().json(serde_json::json!({
@@ -952,4 +1002,115 @@ async fn get_api_key_usage(
     }
 }
 
+// Add this function to your http_server.rs file
+async fn update_credit_balance_handler(
+    store: web::Data<Arc<EndpointStore>>,
+    request: web::Json<UpdateCreditRequest>,
+) -> impl Responder {
+    let email = &request.email;
+    let amount = request.amount;
 
+    tracing::info!(
+        email = %email,
+        amount = amount,
+        "Received HTTP update credit balance request"
+    );
+
+    match store.update_credit_balance(email, amount).await {
+        Ok(new_balance) => {
+            tracing::info!(
+                email = %email,
+                amount = amount,
+                new_balance = new_balance,
+                "Successfully updated credit balance"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": format!("Credit balance updated by {}", amount),
+                "balance": new_balance,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                amount = amount,
+                "Failed to update credit balance"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to update credit balance: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for revoking all API keys for a user
+async fn revoke_all_api_keys_handler(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP revoke all API keys request");
+
+    match store.revoke_all_api_keys(&email).await {
+        Ok(count) => {
+            tracing::info!(
+                email = %email,
+                count = count,
+                "Successfully revoked all API keys"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": format!("Successfully revoked {} API keys", count),
+                "count": count,
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to revoke all API keys"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to revoke all API keys: {}", e),
+            }))
+        }
+    }
+}
+
+// Handler for getting credit balance
+async fn get_credit_balance_handler(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    tracing::info!(email = %email, "Received HTTP get credit balance request");
+
+    match store.get_credit_balance(&email).await {
+        Ok(balance) => {
+            tracing::info!(
+                email = %email,
+                balance = balance,
+                "Successfully retrieved credit balance"
+            );
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "balance": balance,
+                "message": "Credit balance retrieved successfully",
+            }))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                email = %email,
+                "Failed to retrieve credit balance"
+            );
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Error retrieving credit balance: {}", e),
+            }))
+        }
+    }
+}

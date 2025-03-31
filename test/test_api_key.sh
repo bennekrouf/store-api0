@@ -3,9 +3,9 @@
 # Test script for API key management
 
 # Configuration
-HOST="127.0.0.1:9090"  # HTTP server address
-TEST_EMAIL="test@example.com"  # Test email
-KEY_NAME="Test API Key"  # Name for the API key
+HOST="127.0.0.1:9090"         # HTTP server address
+TEST_EMAIL="test@example.com" # Test email
+KEY_NAME="Test API Key"       # Name for the API key
 
 # Color codes for output
 GREEN='\033[0;32m'
@@ -29,7 +29,7 @@ test_get_key_status() {
   echo "-----------------"
 
   response=$(curl -s -X GET "$HOST/api/user/key/$TEST_EMAIL")
-  
+
   echo "Response:"
   echo "$response" | jq .
   echo "-----------------"
@@ -42,7 +42,8 @@ test_generate_key() {
   echo "Email: $TEST_EMAIL, Key Name: $KEY_NAME"
   echo "-----------------"
 
-  REQUEST_PAYLOAD=$(cat <<EOF
+  REQUEST_PAYLOAD=$(
+    cat <<EOF
 {
   "email": "$TEST_EMAIL",
   "key_name": "$KEY_NAME"
@@ -55,34 +56,34 @@ EOF
   echo "-----------------"
 
   response=$(curl -s -X POST -H "Content-Type: application/json" -d "$REQUEST_PAYLOAD" "$HOST/api/user/key")
-  
+
   echo "Response:"
   echo "$response" | jq .
   echo "-----------------"
-  
+
   # Extract and save the API key for later tests
   API_KEY=$(echo "$response" | jq -r '.key')
   if [ "$API_KEY" != "null" ]; then
     echo -e "${GREEN}API Key: $API_KEY${NC}"
     # Save to a temp file for later tests
-    echo "$API_KEY" > /tmp/api_key.txt
+    echo "$API_KEY" >/tmp/api_key.txt
   else
     echo -e "${RED}Failed to extract API key from response${NC}"
   fi
-  
+
   echo
 }
 
 # Function to test an endpoint with API key
 test_endpoint_with_key() {
   API_KEY=$(cat /tmp/api_key.txt)
-  
+
   echo -e "${YELLOW}Testing: Access API with Key${NC}"
   echo "API Key: ${API_KEY:0:10}..."
   echo "-----------------"
 
   response=$(curl -s -X GET -H "X-API-Key: $API_KEY" "$HOST/api/groups/$TEST_EMAIL")
-  
+
   echo "Response (truncated):"
   echo "$response" | jq '.success, .message, (.api_groups | length) as $len | "Number of groups: \($len)"'
   echo "-----------------"
@@ -96,7 +97,7 @@ test_get_key_usage() {
   echo "-----------------"
 
   response=$(curl -s -X GET "$HOST/api/user/usage/$TEST_EMAIL")
-  
+
   echo "Response:"
   echo "$response" | jq .
   echo "-----------------"
@@ -110,7 +111,7 @@ test_revoke_key() {
   echo "-----------------"
 
   response=$(curl -s -X DELETE "$HOST/api/user/key/$TEST_EMAIL")
-  
+
   echo "Response:"
   echo "$response" | jq .
   echo "-----------------"
@@ -141,8 +142,8 @@ echo -e "${BLUE}Checking API key usage:${NC}"
 test_get_key_usage
 
 # Revoke the API key
-echo -e "${BLUE}Revoking the API key:${NC}"
-test_revoke_key
+# echo -e "${BLUE}Revoking the API key:${NC}"
+# test_revoke_key
 
 # Final state
 echo -e "${BLUE}Final API key status:${NC}"

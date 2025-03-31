@@ -1,15 +1,17 @@
 // src/main.rs
-mod http_server;
-mod grpc_server;
-mod endpoint_store;
-mod db_pool;
 mod config;
+mod db_pool;
+mod endpoint_store;
+mod grpc_server;
+mod http_server;
 
 use config::Config;
 
+use crate::endpoint_store::{
+    generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore,
+};
 use crate::grpc_server::EndpointServiceImpl;
 use endpoint::endpoint_service_server::EndpointServiceServer;
-use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore, generate_id_from_text};
 use serde::Deserialize;
 use std::error::Error;
 use std::sync::Arc;

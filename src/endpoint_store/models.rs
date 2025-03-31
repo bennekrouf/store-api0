@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::endpoint_store::utils::generate_uuid;
+use serde::{Deserialize, Serialize};
 
 // Helper function to provide default verb value
 fn default_verb() -> String {
@@ -80,13 +80,20 @@ pub struct ApiStorage {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct KeyPreference {
-    pub has_key: bool,
-    pub generated_at: Option<String>,
+pub struct ApiKeyInfo {
+    pub id: String,
+    pub key_prefix: String,
+    pub key_name: String,
+    pub generated_at: String,
     pub last_used: Option<String>,
     pub usage_count: i64,
-    pub key_name: Option<String>,
-    pub key_prefix: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KeyPreference {
+    pub has_keys: bool,
+    pub active_key_count: usize,
+    pub keys: Vec<ApiKeyInfo>,
     pub balance: i64,
 }
 
@@ -102,6 +109,19 @@ pub struct GenerateKeyResponse {
     pub message: String,
     pub key: Option<String>,
     pub key_prefix: Option<String>,
+    pub key_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RevokeKeyRequest {
+    pub email: String,
+    pub key_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RevokeKeyResponse {
+    pub success: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -111,7 +131,14 @@ pub struct KeyStatusResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RevokeKeyResponse {
+pub struct UpdateCreditRequest {
+    pub email: String,
+    pub amount: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreditBalanceResponse {
     pub success: bool,
     pub message: String,
+    pub balance: i64,
 }

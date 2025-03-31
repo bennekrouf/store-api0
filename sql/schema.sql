@@ -1,11 +1,28 @@
 -- New schema for API groups and endpoints
 
--- User preferences table to store hidden default endpoints
+-- Keep user_preferences table, but focus it just on preferences and credit
 CREATE TABLE IF NOT EXISTS user_preferences (
     email VARCHAR NOT NULL,
-    hidden_defaults TEXT NOT NULL, -- Comma-separated list of endpoint IDs
+    hidden_defaults TEXT NOT NULL DEFAULT '', -- Comma-separated list of endpoint IDs
+    credit_balance INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (email)
 );
+
+-- New table for API keys
+CREATE TABLE IF NOT EXISTS api_keys (
+    id VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    key_hash VARCHAR NOT NULL,
+    key_prefix VARCHAR NOT NULL,
+    key_name VARCHAR NOT NULL,
+    generated_at VARCHAR NOT NULL,
+    last_used TIMESTAMP,
+    usage_count INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    PRIMARY KEY (id),
+    FOREIGN KEY (email) REFERENCES user_preferences(email)
+);
+
 
 -- API Groups table
 CREATE TABLE IF NOT EXISTS api_groups (
@@ -62,27 +79,8 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 
--- Modify the user_preferences table to include API key fields
--- Migration to add API key fields to user_preferences table
--- Split into individual ALTER statements to work with DuckDB
+-- Create index on email for faster lookups
+CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
+-- Create index on key_hash for faster validation
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 
--- Add api_key_hash
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_hash TEXT;
-
--- Add api_key_prefix
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_prefix TEXT;
-
--- Add api_key_name
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_name TEXT;
-
--- Add api_key_generated_at
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_generated_at TIMESTAMP;
-
--- Add api_key_last_used
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_last_used TIMESTAMP;
-
--- Add api_key_usage_count
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS api_key_usage_count INTEGER DEFAULT 0;
-
--- Add credit_balance
-ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS credit_balance INTEGER DEFAULT 0;
