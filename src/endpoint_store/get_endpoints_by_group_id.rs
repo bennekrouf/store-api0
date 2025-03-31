@@ -1,4 +1,4 @@
-use crate::endpoint_store::{EndpointStore, StoreError, Endpoint, Parameter};
+use crate::endpoint_store::{Endpoint, EndpointStore, Parameter, StoreError};
 use std::collections::HashMap;
 
 use crate::endpoint_store::db_helpers::ResultExt;
@@ -16,11 +16,13 @@ pub(crate) async fn get_endpoints_by_group_id(
     );
 
     // Check if there are any endpoints for this group
-    let endpoint_count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM endpoints WHERE group_id = ?",
-        [group_id],
-        |row| row.get(0),
-    ).to_store_error()?;
+    let endpoint_count: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM endpoints WHERE group_id = ?",
+            [group_id],
+            |row| row.get(0),
+        )
+        .to_store_error()?;
 
     tracing::debug!(
         group_id = %group_id,
@@ -36,7 +38,8 @@ pub(crate) async fn get_endpoints_by_group_id(
         return Ok(Vec::new());
     }
 
-    let mut stmt = match tx.prepare(r#"
+    let mut stmt = match tx.prepare(
+        r#"
         SELECT 
             e.id,
             e.text,
@@ -48,13 +51,23 @@ pub(crate) async fn get_endpoints_by_group_id(
             p.description as param_description,
             p.required,
             STRING_AGG(pa.alternative, ',') as alternatives,
-            e.is_default
+            ANY_VALUE(e.is_default) as is_default
         FROM endpoints e
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE e.group_id = ?
-        GROUP BY e.id, e.text, e.description, e.verb, e.base, e.path, p.name, p.description, p.required
-    "#) {
+        GROUP BY 
+            e.id, 
+            e.text, 
+            e.description, 
+            e.verb, 
+            e.base, 
+            e.path, 
+            p.name, 
+            p.description, 
+            p.required
+    "#,
+    ) {
         Ok(stmt) => stmt,
         Err(e) => {
             tracing::error!(
@@ -120,16 +133,15 @@ pub(crate) async fn get_endpoints_by_group_id(
                         "Creating endpoint object"
                     );
 
-
-            // Check if the endpoint is a default one
-                let is_default = match tx.query_row(
-                    "SELECT is_default FROM endpoints WHERE id = ?",
-                    [&id],
-                    |row| row.get::<_, bool>(0),
-                ) {
-                    Ok(value) => Some(value),
-                    Err(_) => None,
-                };
+                    // Check if the endpoint is a default one
+                    let is_default = match tx.query_row(
+                        "SELECT is_default FROM endpoints WHERE id = ?",
+                        [&id],
+                        |row| row.get::<_, bool>(0),
+                    ) {
+                        Ok(value) => Some(value),
+                        Err(_) => None,
+                    };
 
                     Endpoint {
                         id,
@@ -144,8 +156,7 @@ pub(crate) async fn get_endpoints_by_group_id(
                     }
                 });
 
-                if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required)
-                {
+                if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {
                     let alternatives = alternatives_str
                         .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
                         .unwrap_or_default();

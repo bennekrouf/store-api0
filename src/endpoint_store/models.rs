@@ -85,6 +85,7 @@ pub struct ApiKeyInfo {
     pub key_prefix: String,
     pub key_name: String,
     pub generated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_used: Option<String>,
     pub usage_count: i64,
 }

@@ -109,10 +109,16 @@ pub async fn get_api_keys_status(
     // Get all active keys
     let mut stmt = conn
         .prepare(
-            "SELECT id, key_prefix, key_name, generated_at, last_used, usage_count 
-         FROM api_keys 
-         WHERE email = ? AND is_active = true 
-         ORDER BY generated_at DESC",
+            "SELECT 
+                id, 
+                key_prefix, 
+                key_name, 
+                generated_at, 
+                COALESCE(last_used, '') as last_used_str, 
+                usage_count 
+            FROM api_keys 
+            WHERE email = ? AND is_active = true 
+            ORDER BY generated_at DESC",
         )
         .to_store_error()?;
 
@@ -123,7 +129,7 @@ pub async fn get_api_keys_status(
                 key_prefix: row.get(1)?,
                 key_name: row.get(2)?,
                 generated_at: row.get(3)?,
-                last_used: row.get(4)?,
+                last_used: row.get::<_, String>(4).ok().filter(|s| !s.is_empty()),
                 usage_count: row.get(5)?,
             })
         })
