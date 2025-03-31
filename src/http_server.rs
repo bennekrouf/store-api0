@@ -126,18 +126,24 @@ async fn validate_api_key(
 }
 
 // Handler for recording API key usage
+#[derive(Debug, Deserialize)]
+struct RecordUsageRequest {
+    key_id: String,
+}
+
+// Modify the record_api_key_usage handler in http_server.rs to accept a key_id parameter
 async fn record_api_key_usage(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    request: web::Json<RecordUsageRequest>,
 ) -> impl Responder {
-    let email = email.into_inner();
+    let key_id = &request.key_id;
 
-    tracing::info!(email = %email, "Received HTTP record API key usage request");
+    tracing::info!(key_id = %key_id, "Received HTTP record API key usage request");
 
-    match store.record_api_key_usage(&email).await {
+    match store.record_api_key_usage(key_id).await {
         Ok(_) => {
             tracing::info!(
-                email = %email,
+                key_id = %key_id,
                 "Successfully recorded API key usage"
             );
             HttpResponse::Ok().json(RecordUsageResponse {
@@ -148,7 +154,7 @@ async fn record_api_key_usage(
         Err(e) => {
             tracing::error!(
                 error = %e,
-                email = %email,
+                key_id = %key_id,
                 "Failed to record API key usage"
             );
             HttpResponse::InternalServerError().json(RecordUsageResponse {
@@ -675,6 +681,7 @@ pub async fn start_http_server(
                         web::scope("/api")
                             // API groups endpoints
                             .route("/upload", web::post().to(upload_api_config))
+                            .route("/key/usage", web::post().to(record_api_key_usage))
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))
@@ -897,7 +904,7 @@ async fn generate_api_key(
     );
 
     match store.generate_api_key(email, key_name).await {
-        Ok((key, key_prefix, key_id)) => {
+        Ok((key, key_prefix, _)) => {
             tracing::info!(
                 email = %email,
                 key_prefix = %key_prefix,
