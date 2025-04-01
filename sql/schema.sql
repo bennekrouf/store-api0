@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key_prefix VARCHAR NOT NULL,
     key_name VARCHAR NOT NULL,
     generated_at VARCHAR NOT NULL,
-    last_used TIMESTAMP,
+    last_used VARCHAR,
     usage_count INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT true,
     PRIMARY KEY (id),
