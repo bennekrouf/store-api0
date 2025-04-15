@@ -20,7 +20,7 @@ log_all_messages: false
 # Server configurations
 server:
   grpc:
-    host: "0.0.0.0"
+    host: "127.0.0.1"
     port: 50055
   http:
     host: "127.0.0.1"
