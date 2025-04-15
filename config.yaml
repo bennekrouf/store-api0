@@ -3,7 +3,7 @@ output: grpc # console, file
 level: debug
 grpc:
   address: "127.0.0.1"
-  port: 50052
+  port: 50055
 # file_path: "logs"
 # file_name: "app.log"
 log_fields:
