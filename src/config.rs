@@ -22,9 +22,9 @@ pub struct HttpServerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub whoami: String,
-    pub output: String,
-    pub level: String,
+    // pub whoami: String,
+    // pub output: String,
+    // pub level: String,
     pub server: ServerConfig,
     // Include other fields as needed
 }
@@ -53,9 +53,9 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            whoami: "api-store".to_string(),
-            output: "grpc".to_string(),
-            level: "debug".to_string(),
+            // whoami: "api-store".to_string(),
+            // output: "grpc".to_string(),
+            // level: "debug".to_string(),
             server: ServerConfig {
                 grpc: GrpcServerConfig {
                     host: "0.0.0.0".to_string(),
