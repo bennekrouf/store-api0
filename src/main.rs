@@ -1,11 +1,33 @@
 // src/main.rs
+mod add_api_group;
+mod check_is_default_group;
 mod config;
 mod db_pool;
+mod delete_api_group;
 mod endpoint_store;
+mod formatter;
+mod generate_api_key;
+mod get_api_groups;
+mod get_api_key_usage;
+mod get_api_keys_status;
+mod get_credit_balance_handler;
+mod get_user_preferences;
 mod grpc_server;
+mod health_check;
 mod http_server;
+mod models;
+mod record_api_key_usage;
+mod reset_user_preferences;
+mod revoke_all_api_keys_handler;
+mod revoke_api_key_handler;
+mod update_api_group;
+mod update_credit_balance_handler;
+mod update_user_preferences;
+mod upload_api_config;
+mod validate_api_key;
 
 use config::Config;
+use formatter::YamlFormatter;
 
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore,
@@ -46,6 +68,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             Config::default()
         }
     };
+
+    let formatter_url = config.formatter_url();
+    tracing::info!("Using YAML formatter at: {}", formatter_url);
+
+    let formatter = Arc::new(YamlFormatter::new(&formatter_url));
 
     // Create and initialize the endpoint store
     let path = "../db/";
@@ -155,23 +182,29 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let store_arc = Arc::new(store);
 
     // Clone for the HTTP server
-    let http_store = Arc::clone(&store_arc);
+    // let http_store = Arc::clone(&store_arc);
 
     // Get HTTP configuration
     let http_host = config.http_host().to_string();
     let http_port = config.http_port();
 
+    // Clone for the HTTP server
+    let http_formatter = Arc::clone(&formatter);
+    let http_store = Arc::clone(&store_arc);
+
     // Start the HTTP server as a separate task
     let http_handle = tokio::spawn(async move {
         tracing::info!("Starting HTTP server on {}:{}", http_host, http_port);
 
-        if let Err(e) = http_server::start_http_server(http_store, &http_host, http_port).await {
+        if let Err(e) =
+            http_server::start_http_server(http_store, http_formatter, &http_host, http_port).await
+        {
             tracing::error!("HTTP server error: {}", e);
         }
     });
 
     // Configure gRPC server
-    let service = EndpointServiceImpl::new(store_arc);
+    let service = EndpointServiceImpl::new(store_arc, &formatter_url);
     let grpc_addr = config.grpc_address().parse()?;
 
     // Load the file descriptor for reflection

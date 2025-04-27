@@ -1,0 +1,126 @@
+api_groups:
+  - name: "User Service"
+    description: "User-related API endpoints"
+    base: "https://api.example.com"
+    endpoints:
+      - text: "Get user"
+        description: "Retrieves user information"
+        verb: "GET"
+        path: "/users/{id}"
+        parameters:
+          - name: "id"
+            description: "User identifier"
+            required: true
+            alternatives:
+              - "user_id"
+              - "userId"
+
+  - name: "Auth Service"
+    description: "Authentication and session-related API endpoints"
+    base: "https://auth.example.com"
+    endpoints:
+      - text: "Login"
+        description: "Authenticates a user"
+        verb: "POST"
+        path: "/login"
+        parameters:
+          - name: "username"
+            description: "User's login name"
+            required: true
+            alternatives: []
+          - name: "password"
+            description: "User's password"
+            required: true
+            alternatives: []
+
+  - name: "Inspection Service"
+    description: "Inspection-related API endpoints"
+    base: "https://api.example.com/inspection"
+    endpoints:
+      - text: "Get inspection evaluation"
+        description: "Retrieves evaluation report for an inspection"
+        verb: "GET"
+        path: "/{inspectionId}"
+        parameters:
+          - name: "inspectionId"
+            description: "Unique identifier for the inspection"
+            required: true
+            alternatives: []
+      
+      - text: "Get model report roles"
+        description: "Retrieves roles assigned to a model report"
+        verb: "GET"
+        path: "/model-reports/{reportId}"
+        parameters:
+          - name: "reportId"
+            description: "Unique identifier for the model report"
+            required: true
+            alternatives: []
+
+  - name: "Dossier Service"
+    description: "Dossier-related API endpoints"
+    base: "https://api.example.com/dossier"
+    endpoints:
+      - text: "Get dossier periods"
+        description: "Retrieves active periods for a sector in a dossier"
+        verb: "GET"
+        path: "/{sectorId}"
+        parameters:
+          - name: "sectorId"
+            description: "Unique identifier for the sector"
+            required: true
+            alternatives: []
+      
+      - text: "Get last open dossier period"
+        description: "Retrieves details of the last open period in a sector's dossier"
+        verb: "GET"
+        path: "/dossier-periods/{sectorId}"
+        parameters:
+          - name: "sectorId"
+            description: "Unique identifier for the sector"
+            required: true
+            alternatives: []
+
+  - name: "Period Type Service"
+    description: "Period type-related API endpoints"
+    base: "https://api.example.com/period-types"
+    endpoints:
+      - text: "Get period types"
+        description: "Retrieves available period types for evaluation"
+        verb: "GET"
+        path: "/"
+        parameters: []
+
+  - name: "System Status Service"
+    description: "System status-related API endpoints"
+    base: "https://api.example.com/status"
+    endpoints:
+      - text: "Get system status"
+        description: "Retrieves current system operational status"
+        verb: "GET"
+        path: "/"
+        parameters: []
+
+  - name: "Trace Service"
+    description: "Trace data-related API endpoints"
+    base: "https://api.example.com/trace"
+    endpoints:
+      - text: "Generate trace data report"
+        description: "Generates a trace data report for analysis"
+        verb: "POST"
+        path: "/{traceId}"
+        parameters:
+          - name: "traceId"
+            description: "Unique identifier for the trace data report"
+            required: true
+            alternatives: []
+      
+      - text: "Get trace data"
+        description: "Retrieves specific trace data by ID"
+        verb: "GET"
+        path: "/{traceId}"
+        parameters:
+          - name: "traceId"
+            description: "Unique identifier for the trace data report"
+            required: true
+            alternatives: []

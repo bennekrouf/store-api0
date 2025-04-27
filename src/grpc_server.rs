@@ -16,6 +16,7 @@ use crate::endpoint::{
     UploadApiGroupsResponse,
     UserPreferences as ProtoUserPreferences, // Add this
 };
+use crate::formatter::YamlFormatter;
 
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore,
@@ -28,11 +29,15 @@ use tonic::{Request, Response, Status};
 #[derive(Clone)]
 pub struct EndpointServiceImpl {
     store: Arc<EndpointStore>,
+    formatter: Arc<YamlFormatter>,
 }
 
 impl EndpointServiceImpl {
-    pub fn new(store: Arc<EndpointStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<EndpointStore>, formatter_url: &str) -> Self {
+        Self {
+            store,
+            formatter: Arc::new(YamlFormatter::new(formatter_url)),
+        }
     }
 }
 
@@ -152,14 +157,43 @@ impl EndpointService for EndpointServiceImpl {
     ) -> Result<Response<UploadApiGroupsResponse>, Status> {
         let req = request.into_inner();
         let email = req.email;
-        let file_content = String::from_utf8(req.file_content.clone())
-            .map_err(|e| Status::invalid_argument(format!("Invalid file content: {}", e)))?;
+        let file_content = req.file_content.clone();
+        let file_name = req.file_name.clone();
 
         tracing::info!(
             email = %email,
             filename = %req.file_name,
             "Processing API group upload request"
         );
+
+        // Format YAML content if needed
+        let file_content = if file_name.ends_with(".yaml") || file_name.ends_with(".yml") {
+            match self.formatter.format_yaml(&file_content, &file_name).await {
+                Ok(formatted) => formatted,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        email = %email,
+                        "Failed to format YAML, proceeding with original content"
+                    );
+                    file_content
+                }
+            }
+        } else {
+            file_content
+        };
+
+        // Convert to string
+        let file_content = match String::from_utf8(file_content) {
+            Ok(content) => content,
+            Err(e) => {
+                tracing::error!(error = %e, "Invalid file content: not UTF-8");
+                return Err(Status::invalid_argument(format!(
+                    "Invalid file content: {}",
+                    e
+                )));
+            }
+        };
 
         // Detect and parse content based on file extension
         let mut api_storage = if req.file_name.ends_with(".yaml") || req.file_name.ends_with(".yml")

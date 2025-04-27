@@ -22,11 +22,9 @@ pub struct HttpServerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    // pub whoami: String,
-    // pub output: String,
-    // pub level: String,
     pub server: ServerConfig,
-    // Include other fields as needed
+    formatter_host: Option<String>,
+    formatter_port: Option<u16>,
 }
 
 impl Config {
@@ -47,6 +45,12 @@ impl Config {
     pub fn http_port(&self) -> u16 {
         self.server.http.port
     }
+
+    pub fn formatter_url(&self) -> String {
+        let host = self.formatter_host.as_deref().unwrap_or("localhost");
+        let port = self.formatter_port.unwrap_or(8080);
+        format!("http://{}:{}/format-yaml", host, port)
+    }
 }
 
 // Default implementation for testing or when config file is missing
@@ -66,6 +70,8 @@ impl Default for Config {
                     port: 9090,
                 },
             },
+            formatter_port: Some(8080),
+            formatter_host: Some("localhost".to_string()),
         }
     }
 }

@@ -25,3 +25,5 @@ server:
   http:
     host: "127.0.0.1"
     port: 9090
+formatter_host: "localhost"  # Docker service name or hostname
+formatter_port: 8080
