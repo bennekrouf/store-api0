@@ -1,27 +1,25 @@
 use crate::endpoint::endpoint_service_server::EndpointService;
-// use crate::endpoint::{
-//     ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
-//     GetApiGroupsResponse, Parameter as ProtoParameter, UploadApiGroupsRequest,
-//     UploadApiGroupsResponse,
-// };
-
-// use crate::endpoint::ResetUserPreferencesResponse;
-// use crate::endpoint::UpdateUserPreferencesResponse;
-// use crate::endpoint::UpdateUserPreferencesRequest;
-// use crate::endpoint::ResetUserPreferencesRequest;
-// use crate::endpoint::GetUserPreferencesResponse;
-// use crate::endpoint::GetUserPreferencesRequest;
-// use crate::endpoint::UserPreferences;
 
 use crate::endpoint::{
-    ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
-    GetApiGroupsResponse, Parameter as ProtoParameter, UploadApiGroupsRequest,
-    UploadApiGroupsResponse, GetUserPreferencesRequest, GetUserPreferencesResponse,
-    UpdateUserPreferencesRequest, UpdateUserPreferencesResponse, ResetUserPreferencesRequest,
-    ResetUserPreferencesResponse, UserPreferences as ProtoUserPreferences, // Add this
+    ApiGroup as ProtoApiGroup,
+    Endpoint as ProtoEndpoint,
+    GetApiGroupsRequest,
+    GetApiGroupsResponse,
+    GetUserPreferencesRequest,
+    GetUserPreferencesResponse,
+    Parameter as ProtoParameter,
+    ResetUserPreferencesRequest,
+    ResetUserPreferencesResponse,
+    UpdateUserPreferencesRequest,
+    UpdateUserPreferencesResponse,
+    UploadApiGroupsRequest,
+    UploadApiGroupsResponse,
+    UserPreferences as ProtoUserPreferences, // Add this
 };
 
-use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore, generate_id_from_text};
+use crate::endpoint_store::{
+    generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore,
+};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::Stream;
@@ -313,13 +311,13 @@ impl EndpointService for EndpointServiceImpl {
                     hidden_count = prefs.hidden_defaults.len(),
                     "Successfully retrieved user preferences"
                 );
-                
+
                 // Convert to proto format
                 let proto_prefs = ProtoUserPreferences {
                     email: prefs.email,
                     hidden_defaults: prefs.hidden_defaults,
                 };
-                
+
                 Ok(Response::new(GetUserPreferencesResponse {
                     success: true,
                     message: "User preferences successfully retrieved".to_string(),
@@ -332,7 +330,7 @@ impl EndpointService for EndpointServiceImpl {
                     email = %email,
                     "Failed to retrieve user preferences"
                 );
-                
+
                 Ok(Response::new(GetUserPreferencesResponse {
                     success: false,
                     message: format!("Failed to retrieve user preferences: {}", e),
@@ -350,7 +348,7 @@ impl EndpointService for EndpointServiceImpl {
         let email = req.email;
         let action = req.action;
         let endpoint_id = req.endpoint_id;
-        
+
         tracing::info!(
             email = %email,
             action = %action,
@@ -358,7 +356,11 @@ impl EndpointService for EndpointServiceImpl {
             "Received update_user_preferences gRPC request"
         );
 
-        match self.store.update_user_preferences(&email, &action, &endpoint_id).await {
+        match self
+            .store
+            .update_user_preferences(&email, &action, &endpoint_id)
+            .await
+        {
             Ok(_) => {
                 tracing::info!(
                     email = %email,
@@ -366,7 +368,7 @@ impl EndpointService for EndpointServiceImpl {
                     endpoint_id = %endpoint_id,
                     "Successfully updated user preferences"
                 );
-                
+
                 Ok(Response::new(UpdateUserPreferencesResponse {
                     success: true,
                     message: "User preferences successfully updated".to_string(),
@@ -378,7 +380,7 @@ impl EndpointService for EndpointServiceImpl {
                     email = %email,
                     "Failed to update user preferences"
                 );
-                
+
                 Ok(Response::new(UpdateUserPreferencesResponse {
                     success: false,
                     message: format!("Failed to update user preferences: {}", e),
@@ -392,7 +394,7 @@ impl EndpointService for EndpointServiceImpl {
         request: Request<ResetUserPreferencesRequest>,
     ) -> Result<Response<ResetUserPreferencesResponse>, Status> {
         let email = request.into_inner().email;
-        
+
         tracing::info!(
             email = %email,
             "Received reset_user_preferences gRPC request"
@@ -404,7 +406,7 @@ impl EndpointService for EndpointServiceImpl {
                     email = %email,
                     "Successfully reset user preferences"
                 );
-                
+
                 Ok(Response::new(ResetUserPreferencesResponse {
                     success: true,
                     message: "User preferences successfully reset".to_string(),
@@ -416,7 +418,7 @@ impl EndpointService for EndpointServiceImpl {
                     email = %email,
                     "Failed to reset user preferences"
                 );
-                
+
                 Ok(Response::new(ResetUserPreferencesResponse {
                     success: false,
                     message: format!("Failed to reset user preferences: {}", e),
