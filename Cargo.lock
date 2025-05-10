@@ -1205,9 +1205,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.7"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccae279728d634d083c00f6099cb58f01cc99c145b84b8be2f6c74618d79922e"
+checksum = "a9421a676d1b147b16b82c9225157dc629087ef8ec4d5e2960f9437a90dac0a5"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1344,7 +1344,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "h2 0.4.7",
+ "h2 0.4.10",
  "http 1.2.0",
  "http-body",
  "httparse",
@@ -2432,7 +2432,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2 0.4.7",
+ "h2 0.4.10",
  "http 1.2.0",
  "http-body",
  "http-body-util",
@@ -2667,6 +2667,7 @@ dependencies = [
  "duckdb",
  "futures",
  "grpc_logger",
+ "h2 0.4.10",
  "mobc",
  "prost",
  "rand 0.9.0",
@@ -3185,7 +3186,7 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
- "h2 0.4.7",
+ "h2 0.4.10",
  "http 1.2.0",
  "http-body",
  "http-body-util",
