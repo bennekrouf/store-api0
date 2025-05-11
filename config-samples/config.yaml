@@ -2,7 +2,7 @@
 
 # Service settings
 service:
-  name: sensei-store
+  name: store
   version: 1.0.0
   port: 50055
   host: 0.0.0.0
@@ -33,8 +33,8 @@ metrics:
 security:
   tls:
     enabled: true
-    cert_path: /etc/sensei/certs/sensei-store.crt
-    key_path: /etc/sensei/certs/sensei-store.key
+    cert_path: /etc/sensei/certs/store.crt
+    key_path: /etc/sensei/certs/store.key
   cors:
     allowed_origins:
       - https://app.apisensei.ai
@@ -52,7 +52,7 @@ security:
 # Tracing configuration
 tracing:
   level: info
-  file_path: /var/log/sensei/sensei-store.log
+  file_path: /var/log/sensei/store.log
   rotation:
     size_mb: 100
     age_days: 7

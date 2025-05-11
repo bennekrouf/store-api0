@@ -1,5 +1,5 @@
 [package]
-name = "sensei-store"
+name = "store"
 version = "0.1.0"
 edition = "2021"
 
@@ -41,6 +41,6 @@ h2 = "0.4.10"
 tonic-build = "0.12.3"
 
 [[bin]]
-name = "sensei-store"
+name = "store"
 path = "src/main.rs"
 

@@ -2,7 +2,7 @@
 
 ## Overview of Changes
 
-We've successfully implemented a complete API key management system for the Sensei Store backend. Here's a summary of the changes made:
+We've successfully implemented a complete API key management system for the api0 Store backend. Here's a summary of the changes made:
 
 1. **Database Updates**:
    - Extended the `user_preferences` table with API key fields

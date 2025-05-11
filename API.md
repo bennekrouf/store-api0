@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides a comprehensive list of all endpoints exposed by the Sensei Store API service. The API contains multiple endpoint categories for managing API groups, user preferences, API keys, and credit balances.
+This document provides a comprehensive list of all endpoints exposed by the api0 Store API service. The API contains multiple endpoint categories for managing API groups, user preferences, API keys, and credit balances.
 
 ## Base URLs
 
