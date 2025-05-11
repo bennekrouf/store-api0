@@ -3,7 +3,7 @@ output: grpc # console, file
 level: debug
 grpc:
   address: "0.0.0.0"
-  port: 50055
+  port: 50057
 # file_path: "logs"
 # file_name: "app.log"
 log_fields:
@@ -20,10 +20,10 @@ log_all_messages: false
 # Server configurations
 server:
   grpc:
-    host: "0.0.0.0
-    port: 50055
+    host: "0.0.0.0"
+    port: 50057
   http:
     host: "0.0.0.0"
-    port: 9090
+    port: 5007
 formatter_host: "0.0.0.0"  # Docker service name or hostname
-formatter_port: 8080
+formatter_port: 5000
