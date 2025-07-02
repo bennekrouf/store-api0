@@ -2,8 +2,10 @@ whoami: "api-store"
 output: "grpc" # Options: console, file, grpc
 level: "info"
 grpc:
-  address: "127.0.0.1"
+  address: "0.0.0.0"
   port: 50057
+# file_path: "logs"
+# file_name: "app.log"
 log_fields:
   include_thread_id: false
   include_target: false
@@ -23,3 +25,4 @@ server:
     port: 5007
 formatter_host: "127.0.0.1"
 formatter_port: 8080
+formatter_host: "0.0.0.0"  # Docker service name or hostname
