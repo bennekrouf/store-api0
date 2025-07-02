@@ -1,11 +1,9 @@
 whoami: "api-store"
-output: grpc # console, file
-level: debug
+output: "grpc" # Options: console, file, grpc
+level: "info"
 grpc:
-  address: "0.0.0.0"
-  port: 50055
-# file_path: "logs"
-# file_name: "app.log"
+  address: "127.0.0.1"
+  port: 50057
 log_fields:
   include_thread_id: false
   include_target: false
@@ -15,15 +13,13 @@ log_fields:
 debug_mode:
   enabled: true
   test_interval_secs: 100
-log_all_messages: false 
-
-# Server configurations
+log_all_messages: false
 server:
   grpc:
-    host: "0.0.0.0
-    port: 50055
+    host: "127.0.0.1"
+    port: 50057
   http:
-    host: "0.0.0.0"
-    port: 9090
-formatter_host: "0.0.0.0"  # Docker service name or hostname
+    host: "127.0.0.1"
+    port: 5007
+formatter_host: "127.0.0.1"
 formatter_port: 8080
