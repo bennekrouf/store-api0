@@ -67,7 +67,7 @@ impl Default for Config {
                 },
                 http: HttpServerConfig {
                     host: "127.0.0.1".to_string(),
-                    port: 9090,
+                    port: 5007,
                 },
             },
             formatter_port: Some(8080),
