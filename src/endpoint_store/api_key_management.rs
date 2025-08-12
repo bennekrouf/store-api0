@@ -62,6 +62,8 @@ pub async fn get_api_keys_status(
 ) -> Result<KeyPreference, StoreError> {
     let conn = store.get_conn().await?;
 
+    tracing::debug!(email = %email, "Checking API keys status");
+
     // First, check if user exists in preferences
     let user_exists: bool = conn
         .query_row(
@@ -71,8 +73,11 @@ pub async fn get_api_keys_status(
         )
         .unwrap_or(false);
 
+    tracing::debug!(email = %email, user_exists = user_exists, "User exists in preferences");
+
     if !user_exists {
         // Create user if not exists
+        tracing::info!(email = %email, "Creating new user in preferences table");
         conn.execute(
             "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES (?, '', 0)",
             [email],
@@ -88,7 +93,9 @@ pub async fn get_api_keys_status(
         )
         .unwrap_or(0);
 
-    // Check if the user has any API keys
+    tracing::debug!(email = %email, balance = balance, "Retrieved credit balance");
+
+    // Check if the user has any ACTIVE API keys
     let key_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM api_keys WHERE email = ? AND is_active = true",
@@ -97,7 +104,10 @@ pub async fn get_api_keys_status(
         )
         .unwrap_or(0);
 
+    tracing::debug!(email = %email, active_key_count = key_count, "Found active API keys");
+
     if key_count == 0 {
+        tracing::info!(email = %email, "No active API keys found - user is considered new");
         return Ok(KeyPreference {
             has_keys: false,
             active_key_count: 0,
@@ -105,6 +115,8 @@ pub async fn get_api_keys_status(
             balance,
         });
     }
+
+    tracing::info!(email = %email, key_count = key_count, "User has active API keys");
 
     // Get all active keys
     let mut stmt = conn
@@ -139,6 +151,8 @@ pub async fn get_api_keys_status(
     for key_result in keys_iter {
         keys.push(key_result.to_store_error()?);
     }
+
+    tracing::debug!(email = %email, keys_found = keys.len(), "Retrieved API key details");
 
     Ok(KeyPreference {
         has_keys: true,

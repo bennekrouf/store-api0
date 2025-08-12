@@ -24,9 +24,31 @@ pub async fn get_api_groups(
 
     // Check if this is a new user by looking for existing API keys
     let is_new_user = match store.get_api_keys_status(&email).await {
-        Ok(status) => !status.has_keys,
-        Err(_) => true, // Assume new user if we can't check
+        Ok(status) => {
+            tracing::info!(
+                email = %email,
+                has_keys = status.has_keys,
+                active_key_count = status.active_key_count,
+                keys_length = status.keys.len(),
+                "API key status check result"
+            );
+            !status.has_keys
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                email = %email,
+                "Failed to check API key status, assuming new user"
+            );
+            true // Assume new user if we can't check
+        }
     };
+
+    tracing::info!(
+        email = %email,
+        is_new_user = is_new_user,
+        "Computed is_new_user flag"
+    );
 
     let mut response = EnhancedApiGroupsResponse {
         success: true,
