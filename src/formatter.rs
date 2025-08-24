@@ -3,6 +3,8 @@ use std::error::Error;
 use std::io::Write;
 use tempfile::NamedTempFile;
 use tracing::{error, info};
+
+#[derive(Clone)]
 pub struct YamlFormatter {
     formatter_url: String,
 }
