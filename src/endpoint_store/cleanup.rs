@@ -11,18 +11,23 @@ pub async fn fallback_clean_user_data(
     let mut conn = store.get_conn().await?;
     let tx = conn.transaction().to_store_error()?;
 
-    let mut stmt = tx.prepare(
-        "SELECT e.id 
-        FROM endpoints e
-        JOIN user_endpoints ue ON e.id = ue.endpoint_id
-        WHERE ue.email = ? AND e.is_default = false",
-    ).to_store_error()?;
+    // Collect endpoint IDs in a separate scope to ensure stmt is dropped
+    let endpoint_ids = {
+        let mut stmt = tx.prepare(
+            "SELECT e.id 
+            FROM endpoints e
+            JOIN user_endpoints ue ON e.id = ue.endpoint_id
+            WHERE ue.email = ? AND e.is_default = false",
+        ).to_store_error()?;
 
-    let endpoint_ids: Vec<String> = stmt
-        .query_map([email], |row| row.get(0))
-        .to_store_error()?
-        .collect::<Result<Vec<String>, _>>()
-        .to_store_error()?;
+        let endpoint_ids: Vec<String> = stmt
+            .query_map([email], |row| row.get(0))
+            .to_store_error()?
+            .collect::<Result<Vec<String>, _>>()
+            .to_store_error()?;
+
+        endpoint_ids
+    }; // stmt is dropped here
 
     // Remove user-endpoint associations
     for id in &endpoint_ids {
@@ -68,7 +73,7 @@ pub async fn force_clean_user_data(
     let tx = conn.transaction().to_store_error()?;
 
     // First turn off foreign keys
-    tx.execute("PRAGMA foreign_keys=OFF;", []).to_store_error()?;
+    tx.execute("PRAGMA foreign_keys=OFF", []).to_store_error()?;
 
     // Create a temporary table to track user's custom endpoints
     tx.execute(
@@ -111,7 +116,7 @@ pub async fn force_clean_user_data(
     tx.execute("DROP TABLE user_custom_endpoints", []).to_store_error()?;
 
     // Turn foreign keys back on
-    tx.execute("PRAGMA foreign_keys=ON;", []).to_store_error()?;
+    tx.execute("PRAGMA foreign_keys=ON", []).to_store_error()?;
 
     tx.commit().to_store_error()?;
     Ok(())

@@ -1,4 +1,4 @@
-use duckdb::Connection;
+use rusqlite::Connection;
 use mobc::{Connection as MobcConnection, Manager, Pool};
 use std::fs;
 use std::path::Path;
@@ -6,36 +6,33 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
-pub type MobcDuckDBPool = Pool<DuckDBConnectionManager>;
-pub type MobcDuckDBConnection = MobcConnection<DuckDBConnectionManager>;
+pub type MobcSQLitePool = Pool<SQLiteConnectionManager>;
+pub type MobcSQLiteConnection = MobcConnection<SQLiteConnectionManager>;
 
-// Custom error type for the database pool
 #[derive(Debug, Error)]
 pub enum DbPoolError {
-    #[error("DuckDB error: {0}")]
-    DuckDBError(#[from] duckdb::Error),
+    #[error("SQLite error: {0}")]
+    SQLiteError(#[from] rusqlite::Error),
     
     #[error("Pool error: {0:?}")]
-    PoolError(mobc::Error<DuckDBConnectionManager>),
+    PoolError(mobc::Error<SQLiteConnectionManager>),
     
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
 
-// Implement From manually for mobc::Error
-impl From<mobc::Error<DuckDBConnectionManager>> for DbPoolError {
-    fn from(err: mobc::Error<DuckDBConnectionManager>) -> Self {
+impl From<mobc::Error<SQLiteConnectionManager>> for DbPoolError {
+    fn from(err: mobc::Error<SQLiteConnectionManager>) -> Self {
         DbPoolError::PoolError(err)
     }
 }
 
-// Rest of the code remains the same...
 #[derive(Clone, Debug)]
-pub struct DuckDBConnectionManager {
+pub struct SQLiteConnectionManager {
     db_path: Arc<String>,
 }
 
-impl DuckDBConnectionManager {
+impl SQLiteConnectionManager {
     pub fn file<P: AsRef<Path>>(path: P) -> Result<Self, DbPoolError> {
         if let Some(parent) = path.as_ref().parent() {
             fs::create_dir_all(parent)?;
@@ -46,25 +43,22 @@ impl DuckDBConnectionManager {
             db_path: Arc::new(path_str),
         })
     }
-
-    // pub fn memory() -> Self {
-    //     Self {
-    //         db_path: Arc::new(":memory:".to_string()),
-    //     }
-    // }
 }
 
 #[async_trait::async_trait]
-impl Manager for DuckDBConnectionManager {
+impl Manager for SQLiteConnectionManager {
     type Connection = Connection;
-    type Error = duckdb::Error;
+    type Error = rusqlite::Error;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        Connection::open(self.db_path.as_str())
+        let conn = Connection::open(self.db_path.as_str())?;
+        // Enable foreign keys
+        conn.execute("PRAGMA foreign_keys=ON", [])?;
+        Ok(conn)
     }
 
     async fn check(&self, conn: Self::Connection) -> Result<Self::Connection, Self::Error> {
-        conn.execute_batch("SELECT 1")?;
+        conn.execute("SELECT 1", [])?;
         Ok(conn)
     }
 }
@@ -73,8 +67,8 @@ pub fn create_db_pool<P: AsRef<Path>>(
     db_path: P, 
     max_pool_size: u64,
     max_idle_timeout: Option<Duration>
-) -> Result<MobcDuckDBPool, DbPoolError> {
-    let manager = DuckDBConnectionManager::file(db_path)?;
+) -> Result<MobcSQLitePool, DbPoolError> {
+    let manager = SQLiteConnectionManager::file(db_path)?;
     
     let mut builder = Pool::builder()
         .max_open(max_pool_size);

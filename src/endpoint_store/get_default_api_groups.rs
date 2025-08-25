@@ -1,5 +1,6 @@
 use crate::endpoint_store::{EndpointStore, StoreError, ApiGroup, ApiGroupWithEndpoints};
 use crate::endpoint_store::db_helpers::ResultExt;
+use crate::endpoint_store::get_endpoints_by_group_id;
 
 /// Gets the default API groups from the database
 pub(crate) async fn get_default_api_groups(
@@ -28,38 +29,41 @@ pub(crate) async fn get_default_api_groups(
 
         if default_count == 0 {
             tracing::warn!("No default API groups found in database");
+            // Commit empty transaction before returning
             tx.commit().to_store_error()?;
             return Ok(Vec::new());
         }
 
-        // Get all default groups
-        let mut stmt = tx
-            .prepare("SELECT id, name, description, base FROM api_groups WHERE is_default = true")
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to prepare statement for fetching default groups");
-                StoreError::Database(e.to_string())
-            })?;
+        // Get all default groups - scope the statement properly
+        let groups = {
+            let mut stmt = tx
+                .prepare("SELECT id, name, description, base FROM api_groups WHERE is_default = true")
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Failed to prepare statement for fetching default groups");
+                    StoreError::Database(e.to_string())
+                })?;
 
-        let groups_iter = stmt.query_map([], |row| {
-            Ok(ApiGroup {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                base: row.get(3)?,
+            let groups_iter = stmt.query_map([], |row| {
+                Ok(ApiGroup {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    base: row.get(3)?,
+                })
             })
-        })
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to query default groups");
-            StoreError::Database(e.to_string())
-        })?;
-
-        let groups = groups_iter.collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
-                tracing::error!(error = %e, "Failed to process group result");
+                tracing::error!(error = %e, "Failed to query default groups");
                 StoreError::Database(e.to_string())
             })?;
 
-        // Commit transaction before leaving this scope
+            groups_iter.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    tracing::error!(error = %e, "Failed to process group result");
+                    StoreError::Database(e.to_string())
+                })?
+        }; // stmt is dropped here
+
+        // Now we can commit the transaction
         tx.commit().to_store_error()?;
         
         groups
@@ -74,7 +78,7 @@ pub(crate) async fn get_default_api_groups(
             "Processing default group"
         );
         
-        match store.get_endpoints_by_group_id(&group.id).await {
+        match get_endpoints_by_group_id(store, &group.id).await {
             Ok(endpoints) => {
                 tracing::debug!(
                     group_id = %group.id,

@@ -2,11 +2,11 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, Parameter, StoreError,
 };
-use duckdb::ToSql;
+// use duckdb::ToSql;
 use std::collections::HashMap;
+use rusqlite::ToSql;
 
-// Define a type alias for DuckDB transaction to maintain consistency
-type DbTransaction<'a> = duckdb::Transaction<'a>;
+type DbTransaction<'a> = rusqlite::Transaction<'a>;
 
 /// Gets all API groups and endpoints for a user
 pub async fn get_api_groups_by_email(

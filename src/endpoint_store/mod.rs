@@ -18,17 +18,16 @@ mod utils;
 pub use errors::*;
 pub use models::*;
 pub use utils::*;
-// pub use api_key_management::*;
-// pub use user_preferences::*;
 
-use crate::db_pool::{create_db_pool, MobcDuckDBConnection, MobcDuckDBPool};
+use crate::db_pool::{create_db_pool, MobcSQLiteConnection, MobcSQLitePool};
 use std::path::Path;
 use std::time::Duration;
+use get_endpoints_by_group_id::get_endpoints_by_group_id;
 
 /// The main EndpointStore struct that provides access to all functionality
 #[derive(Clone)]
 pub struct EndpointStore {
-    pool: MobcDuckDBPool,
+    pool: MobcSQLitePool,
 }
 
 impl EndpointStore {
@@ -57,8 +56,16 @@ impl EndpointStore {
         Ok(store)
     }
 
+/// Gets endpoints for a specific group ID
+    pub(crate) async fn get_endpoints_by_group_id(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<Endpoint>, StoreError> {
+        get_endpoints_by_group_id(self, group_id).await
+    }
+
     /// Get a connection from the pool
-    pub async fn get_conn(&self) -> Result<MobcDuckDBConnection, StoreError> {
+    pub async fn get_conn(&self) -> Result<MobcSQLiteConnection, StoreError> {
         self.pool
             .get()
             .await
@@ -142,14 +149,6 @@ impl EndpointStore {
         &self,
     ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
         get_default_api_groups::get_default_api_groups(self).await
-    }
-
-    /// Gets the endpoints for a specific group
-    pub(crate) async fn get_endpoints_by_group_id(
-        &self,
-        group_id: &str,
-    ) -> Result<Vec<Endpoint>, StoreError> {
-        get_endpoints_by_group_id::get_endpoints_by_group_id(self, group_id).await
     }
 
     /// Gets all API groups and endpoints for a user

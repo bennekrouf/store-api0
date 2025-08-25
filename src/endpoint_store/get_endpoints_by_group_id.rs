@@ -1,55 +1,24 @@
-use crate::endpoint_store::{Endpoint, EndpointStore, Parameter, StoreError};
+use crate::endpoint_store::{EndpointStore, StoreError, Endpoint, Parameter};
+use crate::endpoint_store::db_helpers::ResultExt;
 use std::collections::HashMap;
 
-use crate::endpoint_store::db_helpers::ResultExt;
-/// Gets all endpoints for a specific group
+/// Gets endpoints for a specific group ID
 pub(crate) async fn get_endpoints_by_group_id(
     store: &EndpointStore,
     group_id: &str,
 ) -> Result<Vec<Endpoint>, StoreError> {
-    let mut conn = store.get_conn().await?;
-    let tx = conn.transaction().to_store_error()?;
-
+    let conn = store.get_conn().await?;
+    
     tracing::debug!(
         group_id = %group_id,
         "Fetching endpoints for group"
     );
 
-    // Check if there are any endpoints for this group
-    let endpoint_count: i64 = tx
-        .query_row(
-            "SELECT COUNT(*) FROM endpoints WHERE group_id = ?",
-            [group_id],
-            |row| row.get(0),
-        )
-        .to_store_error()?;
-
-    tracing::debug!(
-        group_id = %group_id,
-        count = endpoint_count,
-        "Found endpoints for group"
-    );
-
-    if endpoint_count == 0 {
-        tracing::warn!(
-            group_id = %group_id,
-            "No endpoints found for group"
-        );
-        return Ok(Vec::new());
-    }
-
-    let mut stmt = match tx.prepare(
-        r#"
+    // Query to get endpoints with parameters for the specific group
+    let endpoints_query = r#"
         SELECT 
-            e.id,
-            e.text,
-            e.description,
-            e.verb,
-            e.base,
-            e.path,
-            p.name as param_name,
-            p.description as param_description,
-            p.required,
+            e.id, e.text, e.description, e.verb, e.base, e.path,
+            p.name, p.description, p.required, 
             STRING_AGG(pa.alternative, ',') as alternatives,
             ANY_VALUE(e.is_default) as is_default
         FROM endpoints e
@@ -57,132 +26,89 @@ pub(crate) async fn get_endpoints_by_group_id(
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE e.group_id = ?
         GROUP BY 
-            e.id, 
-            e.text, 
-            e.description, 
-            e.verb, 
-            e.base, 
-            e.path, 
-            p.name, 
-            p.description, 
-            p.required
-    "#,
-    ) {
-        Ok(stmt) => stmt,
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                group_id = %group_id,
-                "Failed to prepare statement for fetching endpoints"
-            );
-            return Err(StoreError::Database(e.to_string()));
-        }
-    };
+            e.id, e.text, e.description, e.verb, e.base, e.path, 
+            p.name, p.description, p.required
+    "#;
 
-    let rows = match stmt.query_map([group_id], |row| {
-        let id: String = row.get(0)?;
-        tracing::trace!(
-            endpoint_id = %id,
-            "Processing endpoint row from database"
-        );
+    let mut stmt = conn.prepare(endpoints_query).to_store_error()?;
 
-        Ok((
-            id,
-            row.get::<_, String>(1)?,         // text
-            row.get::<_, String>(2)?,         // description
-            row.get::<_, String>(3)?,         // verb
-            row.get::<_, String>(4)?,         // base
-            row.get::<_, String>(5)?,         // path
-            row.get::<_, Option<String>>(6)?, // param_name
-            row.get::<_, Option<String>>(7)?, // param_description
-            row.get::<_, Option<bool>>(8)?,   // required
-            row.get::<_, Option<String>>(9)?, // alternatives
-        ))
-    }) {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                group_id = %group_id,
-                "Failed to query endpoints for group"
-            );
-            return Err(StoreError::Database(e.to_string()));
-        }
-    };
-
-    // Process rows into endpoints
-    let mut endpoints_map = HashMap::new();
-    for row_result in rows {
-        match row_result {
+    let endpoint_rows_iter = stmt
+        .query_map([group_id], |row| {
             Ok((
+                row.get::<_, String>(0)?,       // e.id
+                row.get::<_, String>(1)?,       // e.text
+                row.get::<_, String>(2)?,       // e.description
+                row.get::<_, String>(3)?,       // e.verb
+                row.get::<_, String>(4)?,       // e.base
+                row.get::<_, String>(5)?,       // e.path
+                row.get::<_, Option<String>>(6)?, // p.name
+                row.get::<_, Option<String>>(7)?, // p.description
+                row.get::<_, Option<bool>>(8)?,   // p.required
+                row.get::<_, Option<String>>(9)?, // alternatives
+                row.get::<_, Option<bool>>(10)?,  // is_default
+            ))
+        })
+        .to_store_error()?;
+
+    let mut endpoint_rows = Vec::new();
+    for row_result in endpoint_rows_iter {
+        endpoint_rows.push(row_result.to_store_error()?);
+    }
+
+    // Process endpoint rows into endpoints with parameters
+    let mut endpoints_map = HashMap::new();
+
+    for (
+        id,
+        text,
+        description,
+        verb,
+        base,
+        path,
+        param_name,
+        param_desc,
+        required,
+        alternatives_str,
+        is_default,
+    ) in endpoint_rows
+    {
+        let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
+            tracing::trace!(
+                endpoint_id = %id,
+                endpoint_text = %text,
+                "Creating endpoint object"
+            );
+
+            Endpoint {
                 id,
                 text,
                 description,
                 verb,
                 base,
-                path_value,
-                param_name,
-                param_desc,
-                required,
-                alternatives_str,
-            )) => {
-                let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
-                    tracing::debug!(
-                        endpoint_id = %id,
-                        endpoint_text = %text,
-                        "Creating endpoint object"
-                    );
-
-                    // Check if the endpoint is a default one
-                    let is_default = match tx.query_row(
-                        "SELECT is_default FROM endpoints WHERE id = ?",
-                        [&id],
-                        |row| row.get::<_, bool>(0),
-                    ) {
-                        Ok(value) => Some(value),
-                        Err(_) => None,
-                    };
-
-                    Endpoint {
-                        id,
-                        text,
-                        description,
-                        verb,
-                        base,
-                        path: path_value,
-                        parameters: Vec::new(),
-                        group_id: group_id.to_string(),
-                        is_default,
-                    }
-                });
-
-                if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {
-                    let alternatives = alternatives_str
-                        .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
-                        .unwrap_or_default();
-
-                    tracing::trace!(
-                        endpoint_id = %endpoint.id,
-                        param_name = %name,
-                        "Adding parameter to endpoint"
-                    );
-
-                    endpoint.parameters.push(Parameter {
-                        name,
-                        description: desc,
-                        required: req,
-                        alternatives,
-                    });
-                }
+                path,
+                parameters: Vec::new(),
+                group_id: group_id.to_string(),
+                is_default,
             }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    group_id = %group_id,
-                    "Failed to process endpoint row"
-                );
-                return Err(StoreError::Database(e.to_string()));
-            }
+        });
+
+        if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {
+            let alternatives = alternatives_str
+                .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            tracing::trace!(
+                endpoint_id = %endpoint.id,
+                param_name = %name,
+                "Adding parameter to endpoint"
+            );
+
+            endpoint.parameters.push(Parameter {
+                name,
+                description: desc,
+                required: req,
+                alternatives,
+            });
         }
     }
 
@@ -194,6 +120,5 @@ pub(crate) async fn get_endpoints_by_group_id(
         "Successfully retrieved endpoints for group"
     );
 
-    tx.commit().to_store_error()?;
     Ok(result)
 }

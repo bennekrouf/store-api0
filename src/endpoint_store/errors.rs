@@ -1,5 +1,4 @@
-// src/endpoint_store/errors.rs
-use crate::db_pool::{DuckDBConnectionManager, DbPoolError};
+use crate::db_pool::SQLiteConnectionManager;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -9,24 +8,14 @@ pub enum StoreError {
     Pool(String),
 }
 
-impl From<duckdb::Error> for StoreError {
-    fn from(err: duckdb::Error) -> Self {
+impl From<rusqlite::Error> for StoreError {
+    fn from(err: rusqlite::Error) -> Self {
         StoreError::Database(err.to_string())
     }
 }
 
-impl From<mobc::Error<DuckDBConnectionManager>> for StoreError {
-    fn from(err: mobc::Error<DuckDBConnectionManager>) -> Self {
+impl From<mobc::Error<SQLiteConnectionManager>> for StoreError {
+    fn from(err: mobc::Error<SQLiteConnectionManager>) -> Self {
         StoreError::Pool(format!("Failed to create connection pool: {:?}", err))
-    }
-}
-
-impl From<DbPoolError> for StoreError {
-    fn from(err: DbPoolError) -> Self {
-        match err {
-            DbPoolError::DuckDBError(e) => StoreError::Database(e.to_string()),
-            DbPoolError::PoolError(e) => StoreError::Pool(format!("Pool error: {:?}", e)),
-            DbPoolError::IoError(e) => StoreError::Pool(format!("IO error: {:?}", e)),
-        }
     }
 }

@@ -1,4 +1,5 @@
 -- New schema for API groups and endpoints
+PRAGMA foreign_keys = ON;
 
 -- Keep user_preferences table, but focus it just on preferences and credit
 CREATE TABLE IF NOT EXISTS user_preferences (

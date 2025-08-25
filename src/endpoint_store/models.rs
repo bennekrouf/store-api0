@@ -143,3 +143,36 @@ pub struct CreditBalanceResponse {
     pub message: String,
     pub balance: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LogApiUsageRequest {
+    pub key_id: String,
+    pub email: String,
+    pub endpoint_path: String,
+    pub method: String,
+    pub response_status: Option<i32>,
+    pub response_time_ms: Option<i64>,
+    pub request_size: Option<i64>,
+    pub response_size: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LogApiUsageResponse {
+    pub success: bool,
+    pub message: String,
+    pub log_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApiUsageLog {
+    pub id: String,
+    pub key_id: String,
+    pub email: String,
+    pub endpoint_path: String,
+    pub method: String,
+    pub timestamp: String,
+    pub response_status: Option<i32>,
+    pub response_time_ms: Option<i64>,
+    pub request_size: Option<i64>,
+    pub response_size: Option<i64>,
+}

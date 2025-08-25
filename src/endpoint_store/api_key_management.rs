@@ -298,7 +298,7 @@ pub async fn update_credit_balance(
         // Create user if not exists
         conn.execute(
             "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES (?, '', ?)",
-            duckdb::params![email, amount], // Use duckdb::params! for type safety
+            rusqlite::params![email, amount],
         ).to_store_error()?;
 
         return Ok(amount);
@@ -307,7 +307,7 @@ pub async fn update_credit_balance(
     // Update credit balance
     conn.execute(
         "UPDATE user_preferences SET credit_balance = credit_balance + ? WHERE email = ?",
-        duckdb::params![amount, email], // Use duckdb::params! macro
+        rusqlite::params![amount, email],
     )
     .to_store_error()?;
 
@@ -367,7 +367,7 @@ pub async fn generate_api_key(
         // Create user if not exists with default credit balance
         tx.execute(
             "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES (?, '', ?)",
-            duckdb::params![email, 0i64], // Explicitly specify as i64
+            rusqlite::params![email, 0i64], // Explicitly specify as i64
         ).to_store_error()?;
     }
 
@@ -383,7 +383,7 @@ pub async fn generate_api_key(
             usage_count,
             is_active
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        duckdb::params![key_id, email, key_hash, key_prefix, key_name, now, 0i64, true],
+        rusqlite::params![key_id, email, key_hash, key_prefix, key_name, now, 0i64, true],
     )
     .to_store_error()?;
 
