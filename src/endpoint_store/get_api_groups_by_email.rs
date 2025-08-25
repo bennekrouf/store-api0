@@ -157,7 +157,7 @@ fn fetch_custom_endpoints(
             e.id, e.text, e.description, e.verb, e.base, e.path, 
             p.name, p.description, p.required, 
             STRING_AGG(pa.alternative, ',') as alternatives, 
-            ANY_VALUE(e.is_default) as is_default
+            e.is_default as is_default
         FROM endpoints e
         INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
@@ -187,9 +187,9 @@ fn fetch_custom_endpoints(
                 row.get::<_, String>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<bool>>(8)?,
+                row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<bool>>(10)?,
+                row.get::<_, Option<String>>(10)?,
             ))
         })
         .to_store_error()?;
@@ -276,7 +276,7 @@ fn fetch_default_endpoints(
         SELECT 
             e.id, e.text, e.description, e.verb, e.base, e.path,
             p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives,
-            ANY_VALUE(e.is_default) as is_default
+            e.is_default as is_default
         FROM endpoints e
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
@@ -309,9 +309,9 @@ fn fetch_endpoints(
                 row.get::<_, String>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<bool>>(8)?,
+                row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<bool>>(10)?,
+                row.get::<_, Option<String>>(10)?,
             ))
         })
         .to_store_error()?;

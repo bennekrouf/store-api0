@@ -20,7 +20,7 @@ pub(crate) async fn get_endpoints_by_group_id(
             e.id, e.text, e.description, e.verb, e.base, e.path,
             p.name, p.description, p.required, 
             STRING_AGG(pa.alternative, ',') as alternatives,
-            ANY_VALUE(e.is_default) as is_default
+            e.is_default as is_default
         FROM endpoints e
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
@@ -43,9 +43,9 @@ pub(crate) async fn get_endpoints_by_group_id(
                 row.get::<_, String>(5)?,       // e.path
                 row.get::<_, Option<String>>(6)?, // p.name
                 row.get::<_, Option<String>>(7)?, // p.description
-                row.get::<_, Option<bool>>(8)?,   // p.required
+                row.get::<_, Option<String>>(8)?,   // p.required
                 row.get::<_, Option<String>>(9)?, // alternatives
-                row.get::<_, Option<bool>>(10)?,  // is_default
+                row.get::<_, Option<String>>(10)?,  // is_default
             ))
         })
         .to_store_error()?;

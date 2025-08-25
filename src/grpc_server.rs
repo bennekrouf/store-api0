@@ -14,7 +14,7 @@ use crate::endpoint::{
     UpdateUserPreferencesResponse,
     UploadApiGroupsRequest,
     UploadApiGroupsResponse,
-    UserPreferences as ProtoUserPreferences, // Add this
+    UserPreferences as ProtoUserPreferences,
 };
 use crate::formatter::YamlFormatter;
 
@@ -96,7 +96,7 @@ impl EndpointService for EndpointServiceImpl {
                     base: e.base,
                     path: e.path,
                     group_id: e.group_id,
-                    is_default: e.is_default.unwrap_or(false), // Include is_default flag
+                    is_default: e.is_default.is_some(), // Include is_default flag
                     parameters: e.parameters
                         .into_iter()
                         .map(|p| ProtoParameter {

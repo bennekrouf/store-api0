@@ -112,8 +112,8 @@ impl EndpointStore {
                     .into_iter()
                     .filter(|endpoint| {
                         // Keep the endpoint if it's NOT (default AND hidden)
-                        let is_default = endpoint.is_default.unwrap_or(false);
-                        !(is_default && preferences.hidden_defaults.contains(&endpoint.id))
+                        let is_default = &endpoint.is_default;
+                        !(*is_default == Some("true".to_string()) && preferences.hidden_defaults.contains(&endpoint.id))
                     })
                     .collect();
 

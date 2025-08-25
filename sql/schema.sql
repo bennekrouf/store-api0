@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     generated_at VARCHAR NOT NULL,
     last_used VARCHAR,
     usage_count INTEGER NOT NULL DEFAULT 0,
-    is_active BOOLEAN NOT NULL DEFAULT true,
+    is_active VARCHAR NOT NULL DEFAULT true,
     PRIMARY KEY (id),
     FOREIGN KEY (email) REFERENCES user_preferences(email)
 );
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS api_groups (
     name VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
     base VARCHAR NOT NULL DEFAULT 'http://localhost:3000',
-    is_default BOOLEAN NOT NULL DEFAULT true
+    is_default VARCHAR NOT NULL DEFAULT true
 );
 
 -- Modified endpoints table with group reference
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     id VARCHAR PRIMARY KEY,
     text VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
-    is_default BOOLEAN NOT NULL DEFAULT true,
+    is_default VARCHAR NOT NULL DEFAULT true,
     verb VARCHAR NOT NULL DEFAULT 'GET',
     base VARCHAR NOT NULL DEFAULT 'http://localhost:3000',
     path VARCHAR NOT NULL DEFAULT '',
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS parameters (
     endpoint_id VARCHAR,
     name VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
-    required BOOLEAN NOT NULL DEFAULT false,
+    required VARCHAR NOT NULL DEFAULT false,
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 

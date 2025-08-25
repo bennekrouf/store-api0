@@ -29,7 +29,7 @@ pub struct Parameter {
     #[serde(default = "String::new")]
     pub description: String,
     #[serde(default)]
-    pub required: bool,
+    pub required: String,
     #[serde(default)]
     pub alternatives: Vec<String>,
 }
@@ -53,7 +53,7 @@ pub struct Endpoint {
     #[serde(default = "String::new")]
     pub group_id: String,
     #[serde(default)]
-    pub is_default: Option<bool>,
+    pub is_default: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
