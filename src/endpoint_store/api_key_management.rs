@@ -162,60 +162,6 @@ pub async fn get_api_keys_status(
     })
 }
 
-/// Generate a new API key for a user
-pub async fn generate_api_key(
-    store: &EndpointStore,
-    email: &str,
-    key_name: &str,
-) -> Result<(String, String, String), StoreError> {
-    let mut conn = store.get_conn().await?;
-    let tx = conn.transaction().to_store_error()?;
-
-    // Generate a new secure API key
-    let new_key = generate_secure_key();
-    let key_hash = hash_api_key(&new_key);
-    let key_prefix = extract_key_prefix(&new_key);
-    let now = Utc::now().to_rfc3339();
-    let key_id = Uuid::new_v4().to_string();
-
-    // Check if the user exists in preferences
-    let user_exists: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM user_preferences WHERE email = ?)",
-            [email],
-            |row| row.get(0),
-        )
-        .to_store_error()?;
-
-    if !user_exists {
-        // Create user if not exists
-        tx.execute(
-            "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES (?, '', 0)",
-            [email],
-        ).to_store_error()?;
-    }
-
-    // Insert the new API key
-    tx.execute(
-        "INSERT INTO api_keys (
-            id, 
-            email, 
-            key_hash, 
-            key_prefix, 
-            key_name, 
-            generated_at, 
-            usage_count,
-            is_active
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, true)",
-        &[&key_id, email, &key_hash, &key_prefix, key_name, &now],
-    )
-    .to_store_error()?;
-
-    tx.commit().to_store_error()?;
-
-    Ok((new_key, key_prefix, key_id))
-}
-
 /// Revoke a specific API key
 pub async fn revoke_api_key(
     store: &EndpointStore,
@@ -352,7 +298,7 @@ pub async fn update_credit_balance(
         // Create user if not exists
         conn.execute(
             "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES (?, '', ?)",
-            [email, &amount.to_string()],
+            duckdb::params![email, amount], // Use duckdb::params! for type safety
         ).to_store_error()?;
 
         return Ok(amount);
@@ -361,7 +307,7 @@ pub async fn update_credit_balance(
     // Update credit balance
     conn.execute(
         "UPDATE user_preferences SET credit_balance = credit_balance + ? WHERE email = ?",
-        [&amount.to_string(), email],
+        duckdb::params![amount, email], // Use duckdb::params! macro
     )
     .to_store_error()?;
 
@@ -390,4 +336,58 @@ pub async fn get_credit_balance(store: &EndpointStore, email: &str) -> Result<i6
         .unwrap_or(0);
 
     Ok(balance)
+}
+
+/// Generate a new API key for a user (updated to handle credits properly)
+pub async fn generate_api_key(
+    store: &EndpointStore,
+    email: &str,
+    key_name: &str,
+) -> Result<(String, String, String), StoreError> {
+    let mut conn = store.get_conn().await?;
+    let tx = conn.transaction().to_store_error()?;
+
+    // Generate a new secure API key
+    let new_key = generate_secure_key();
+    let key_hash = hash_api_key(&new_key);
+    let key_prefix = extract_key_prefix(&new_key);
+    let now = Utc::now().to_rfc3339();
+    let key_id = Uuid::new_v4().to_string();
+
+    // Check if the user exists in preferences
+    let user_exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_preferences WHERE email = ?)",
+            [email],
+            |row| row.get(0),
+        )
+        .to_store_error()?;
+
+    if !user_exists {
+        // Create user if not exists with default credit balance
+        tx.execute(
+            "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES (?, '', ?)",
+            duckdb::params![email, 0i64], // Explicitly specify as i64
+        ).to_store_error()?;
+    }
+
+    // Insert the new API key
+    tx.execute(
+        "INSERT INTO api_keys (
+            id, 
+            email, 
+            key_hash, 
+            key_prefix, 
+            key_name, 
+            generated_at, 
+            usage_count,
+            is_active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        duckdb::params![key_id, email, key_hash, key_prefix, key_name, now, 0i64, true],
+    )
+    .to_store_error()?;
+
+    tx.commit().to_store_error()?;
+
+    Ok((new_key, key_prefix, key_id))
 }

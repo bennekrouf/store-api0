@@ -183,6 +183,14 @@ The service exposes both gRPC and HTTP endpoints:
 7. `POST /api/user/preferences`: Update user preferences
 8. `DELETE /api/user/preferences/:email`: Reset user preferences
 
+
+Convenient curl to add credit for test 
+
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mohamed.bennekrouf@gmail.com","amount":500}' \
+  http://127.0.0.1:9090/api/user/credits
+
 ## License
 
 MIT
