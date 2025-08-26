@@ -31,7 +31,6 @@ message Endpoint {
     string path = 6;
     repeated Parameter parameters = 7;
     string group_id = 8;
-    bool is_default = 9;
 }
 
 message ApiGroup {

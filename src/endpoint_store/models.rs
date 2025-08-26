@@ -52,8 +52,6 @@ pub struct Endpoint {
     pub path: String,
     #[serde(default = "String::new")]
     pub group_id: String,
-    #[serde(default)]
-    pub is_default: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

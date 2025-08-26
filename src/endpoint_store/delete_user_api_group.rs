@@ -84,7 +84,7 @@ pub async fn delete_user_api_group(
 
                 // Delete endpoint
                 tx.execute(
-                    "DELETE FROM endpoints WHERE id = ? AND is_default = false",
+                    "DELETE FROM endpoints WHERE id = ?",
                     [endpoint_id],
                 ).to_store_error()?;
             }
@@ -92,7 +92,7 @@ pub async fn delete_user_api_group(
 
         // Delete the group itself (if it's not a default group)
         tx.execute(
-            "DELETE FROM api_groups WHERE id = ? AND is_default = false",
+            "DELETE FROM api_groups WHERE id = ?",
             [group_id],
         ).to_store_error()?;
     }

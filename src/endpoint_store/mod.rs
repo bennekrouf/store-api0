@@ -7,13 +7,12 @@ mod delete_user_api_group;
 mod errors;
 mod get_api_groups_by_email;
 mod get_create_user_api_groups;
-mod get_default_api_groups;
-mod get_endpoints_by_group_id;
-mod init;
+
 pub mod models;
 mod replace_user_api_groups;
 mod user_preferences;
 mod utils;
+
 // Re-export everything needed for the public API
 pub use errors::*;
 pub use models::*;
@@ -22,7 +21,6 @@ pub use utils::*;
 use crate::db_pool::{create_db_pool, MobcSQLiteConnection, MobcSQLitePool};
 use std::path::Path;
 use std::time::Duration;
-use get_endpoints_by_group_id::get_endpoints_by_group_id;
 
 /// The main EndpointStore struct that provides access to all functionality
 #[derive(Clone)]
@@ -89,9 +87,6 @@ impl EndpointStore {
         &self,
         email: &str,
     ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-        // Get user preferences
-        let preferences = self.get_user_preferences(email).await?;
-
         // Get API groups
         let api_groups = self.get_api_groups_by_email(email).await?;
 
@@ -102,11 +97,6 @@ impl EndpointStore {
                 let filtered_endpoints = group
                     .endpoints
                     .into_iter()
-                    .filter(|endpoint| {
-                        // Keep the endpoint if it's NOT (default AND hidden)
-                        let is_default = &endpoint.is_default;
-                        !(*is_default == Some("true".to_string()) && preferences.hidden_defaults.contains(&endpoint.id))
-                    })
                     .collect();
 
                 ApiGroupWithEndpoints {
@@ -120,27 +110,12 @@ impl EndpointStore {
         Ok(filtered_groups)
     }
 
-    /// Initializes the database with default API groups if it's empty
-    pub async fn initialize_if_empty(
-        &mut self,
-        default_api_groups: &[ApiGroupWithEndpoints],
-    ) -> Result<(), StoreError> {
-        init::initialize_if_empty(self, default_api_groups).await
-    }
-
     /// Gets or creates API groups for a user
     pub async fn get_or_create_user_api_groups(
         &self,
         email: &str,
     ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
         get_create_user_api_groups::get_or_create_user_api_groups(self, email).await
-    }
-
-    /// Gets the default API groups from the database
-    pub(crate) async fn get_default_api_groups(
-        &self,
-    ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-        get_default_api_groups::get_default_api_groups(self).await
     }
 
     /// Gets all API groups and endpoints for a user

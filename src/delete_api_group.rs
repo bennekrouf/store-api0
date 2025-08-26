@@ -1,4 +1,4 @@
-use crate::{check_is_default_group::check_is_default_group, endpoint_store::EndpointStore};
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
@@ -14,29 +14,6 @@ pub async fn delete_api_group(
         group_id = %group_id,
         "Received HTTP delete API group request"
     );
-
-    // Check if group is a default group
-    let is_default_group = match check_is_default_group(&store, &group_id).await {
-        Ok(is_default) => is_default,
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                group_id = %group_id,
-                "Failed to check if group is default"
-            );
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "success": false,
-                "message": format!("Failed to check group status: {}", e)
-            }));
-        }
-    };
-
-    if is_default_group {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Cannot delete a default API group. Default groups are read-only."
-        }));
-    }
 
     match store.delete_user_api_group(&email, &group_id).await {
         Ok(deleted) => {

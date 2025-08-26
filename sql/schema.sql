@@ -1,7 +1,7 @@
--- New schema for API groups and endpoints
+-- Updated schema without is_default concept
 PRAGMA foreign_keys = ON;
 
--- Keep user_preferences table, but focus it just on preferences and credit
+-- Keep user_preferences table for preferences and credit
 CREATE TABLE IF NOT EXISTS user_preferences (
     email VARCHAR NOT NULL,
     hidden_defaults TEXT NOT NULL DEFAULT '', -- Comma-separated list of endpoint IDs
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     PRIMARY KEY (email)
 );
 
--- New table for API keys
+-- API keys table
 CREATE TABLE IF NOT EXISTS api_keys (
     id VARCHAR NOT NULL,
     email VARCHAR NOT NULL,
@@ -24,22 +24,19 @@ CREATE TABLE IF NOT EXISTS api_keys (
     FOREIGN KEY (email) REFERENCES user_preferences(email)
 );
 
-
--- API Groups table
+-- API Groups table (no is_default column)
 CREATE TABLE IF NOT EXISTS api_groups (
     id VARCHAR PRIMARY KEY,
     name VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
-    base VARCHAR NOT NULL DEFAULT 'http://localhost:3000',
-    is_default VARCHAR NOT NULL DEFAULT true
+    base VARCHAR NOT NULL DEFAULT 'http://localhost:3000'
 );
 
--- Modified endpoints table with group reference
+-- Endpoints table with group reference (no is_default column)
 CREATE TABLE IF NOT EXISTS endpoints (
     id VARCHAR PRIMARY KEY,
     text VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
-    is_default VARCHAR NOT NULL DEFAULT true,
     verb VARCHAR NOT NULL DEFAULT 'GET',
     base VARCHAR NOT NULL DEFAULT 'http://localhost:3000',
     path VARCHAR NOT NULL DEFAULT '',
@@ -55,7 +52,7 @@ CREATE TABLE IF NOT EXISTS user_groups (
     PRIMARY KEY (email, group_id)
 );
 
--- User endpoint associations (no change)
+-- User endpoint associations
 CREATE TABLE IF NOT EXISTS user_endpoints (
     email VARCHAR NOT NULL,
     endpoint_id VARCHAR NOT NULL,
@@ -63,7 +60,7 @@ CREATE TABLE IF NOT EXISTS user_endpoints (
     PRIMARY KEY (email, endpoint_id)
 );
 
--- Parameters table (no change)
+-- Parameters table
 CREATE TABLE IF NOT EXISTS parameters (
     endpoint_id VARCHAR,
     name VARCHAR NOT NULL,
@@ -72,7 +69,7 @@ CREATE TABLE IF NOT EXISTS parameters (
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 
--- Parameter alternatives (no change)
+-- Parameter alternatives
 CREATE TABLE IF NOT EXISTS parameter_alternatives (
     endpoint_id VARCHAR,
     parameter_name VARCHAR,
@@ -80,8 +77,6 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 
--- Create index on email for faster lookups
+-- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
--- Create index on key_hash for faster validation
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-

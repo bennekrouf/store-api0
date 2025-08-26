@@ -1,6 +1,5 @@
 // src/main.rs
 mod add_api_group;
-mod check_is_default_group;
 mod config;
 mod db_pool;
 mod delete_api_group;
@@ -78,13 +77,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = "../db/";
     std::fs::create_dir_all(&path).expect("Failed to create database directory");
     let db_file = format!("{}endpoints.db", &path);
-    let mut store = EndpointStore::new(&db_file).await?;
+    let store = EndpointStore::new(&db_file).await?;
 
     // Load default API groups from YAML and initialize DB
     let config_content = std::fs::read_to_string("endpoints.yaml")?;
 
     // Try parsing as the new ApiStorage format
-    let api_storage: ApiStorage = match serde_yaml::from_str(&config_content) {
+    let _api_storage: ApiStorage = match serde_yaml::from_str(&config_content) {
         Ok(storage) => storage,
         Err(e) => {
             // If parsing as new format fails, try to convert from old format
@@ -174,9 +173,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             ApiStorage { api_groups }
         }
     };
-
-    // Initialize the store with the default API groups
-    store.initialize_if_empty(&api_storage.api_groups).await?;
 
     // Wrap the store in an Arc for sharing between servers
     let store_arc = Arc::new(store);

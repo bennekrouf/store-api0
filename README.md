@@ -23,7 +23,6 @@ Each endpoint consists of:
 - `text`: Display text or short description
 - `description`: Optional longer description (defaults to empty string)
 - `verb`: HTTP verb (GET, POST, PUT, DELETE, etc. - defaults to "GET")
-- `is_default`: Whether this is a default endpoint (cannot be modified/deleted)
 - `parameters`: List of parameters (can be empty)
 
 Each parameter consists of:

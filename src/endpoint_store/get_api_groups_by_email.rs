@@ -2,7 +2,6 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, Parameter, StoreError,
 };
-// use duckdb::ToSql;
 use std::collections::HashMap;
 use rusqlite::ToSql;
 
@@ -17,22 +16,8 @@ pub async fn get_api_groups_by_email(
     let mut conn = store.get_conn().await?;
     let tx = conn.transaction().to_store_error()?;
 
-    // Check if user has custom groups
-    let has_custom: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM user_groups WHERE email = ?)",
-            [email],
-            |row| row.get(0),
-        )
-        .to_store_error()?;
-
-    let result = if has_custom {
-        tracing::info!(email = %email, "Fetching custom groups and endpoints");
-        fetch_custom_groups_with_endpoints(&tx, email)?
-    } else {
-        tracing::info!(email = %email, "Fetching default groups and endpoints");
-        fetch_default_groups_with_endpoints(&tx)?
-    };
+    tracing::info!(email = %email, "Fetching custom groups and endpoints");
+    let result = fetch_custom_groups_with_endpoints(&tx, email)?;
 
     tracing::info!(
         group_count = result.len(),
@@ -69,42 +54,6 @@ fn fetch_custom_groups_with_endpoints(
             group_id = %group.id,
             endpoint_count = endpoints.len(),
             "Added endpoints to custom group"
-        );
-
-        result.push(ApiGroupWithEndpoints { group, endpoints });
-    }
-
-    Ok(result)
-}
-
-/// Fetches default API groups and endpoints
-fn fetch_default_groups_with_endpoints(
-    tx: &DbTransaction,
-) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-    tracing::debug!("Fetching default groups and endpoints 2");
-
-    // Get default groups
-    let groups_query = r#"
-        SELECT g.id, g.name, g.description, g.base
-        FROM api_groups g
-        WHERE g.is_default = true
-    "#;
-
-    let groups = fetch_groups(tx, groups_query, &[])?;
-    let mut result = Vec::new();
-
-    for group in groups {
-        tracing::info!(
-            group_id = %group.id,
-            group_name = %group.name,
-            "Processing default group FOR LOOP !!!!"
-        );
-        let endpoints = fetch_default_endpoints(tx, &group.id)?;
-
-        tracing::debug!(
-            group_id = %group.id,
-            endpoint_count = endpoints.len(),
-            "Added endpoints to default group"
         );
 
         result.push(ApiGroupWithEndpoints { group, endpoints });
@@ -152,12 +101,12 @@ fn fetch_custom_endpoints(
     email: &str,
     group_id: &str,
 ) -> Result<Vec<Endpoint>, StoreError> {
+    // Fixed query - removed one field to match the 10-element tuple
     let endpoints_query = r#"
         SELECT 
             e.id, e.text, e.description, e.verb, e.base, e.path, 
             p.name, p.description, p.required, 
-            STRING_AGG(pa.alternative, ',') as alternatives, 
-            e.is_default as is_default
+            STRING_AGG(pa.alternative, ',') as alternatives
         FROM endpoints e
         INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
@@ -179,17 +128,16 @@ fn fetch_custom_endpoints(
     let endpoint_rows_iter = stmt
         .query_map([email, group_id], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<String>>(10)?,
+                row.get::<_, String>(0)?,              // e.id
+                row.get::<_, String>(1)?,              // e.text
+                row.get::<_, String>(2)?,              // e.description
+                row.get::<_, String>(3)?,              // e.verb
+                row.get::<_, String>(4)?,              // e.base
+                row.get::<_, String>(5)?,              // e.path
+                row.get::<_, Option<String>>(6)?,      // p.name
+                row.get::<_, Option<String>>(7)?,      // p.description
+                row.get::<_, Option<String>>(8)?,      // p.required
+                row.get::<_, Option<String>>(9)?,      // alternatives
             ))
         })
         .to_store_error()?;
@@ -212,8 +160,7 @@ fn fetch_custom_endpoints(
         param_name,
         param_desc,
         required,
-        alternatives_str,
-        is_default,
+        alternatives_str
     ) in endpoint_rows
     {
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
@@ -231,8 +178,7 @@ fn fetch_custom_endpoints(
                 base,
                 path: path_value,
                 parameters: Vec::new(),
-                group_id: group_id.to_string(),
-                is_default,
+                group_id: group_id.to_string()
             }
         });
 
@@ -265,104 +211,4 @@ fn fetch_custom_endpoints(
     );
 
     Ok(result)
-}
-
-/// Fetches default endpoints for a specific group
-fn fetch_default_endpoints(
-    tx: &DbTransaction,
-    group_id: &str,
-) -> Result<Vec<Endpoint>, StoreError> {
-    let endpoints_query = r#"
-        SELECT 
-            e.id, e.text, e.description, e.verb, e.base, e.path,
-            p.name, p.description, p.required, STRING_AGG(pa.alternative, ',') as alternatives,
-            e.is_default as is_default
-        FROM endpoints e
-        LEFT JOIN parameters p ON e.id = p.endpoint_id
-        LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
-        WHERE e.group_id = ? AND e.is_default = true
-        GROUP BY 
-            e.id, e.text, e.description, e.verb, e.base, e.path, 
-            p.name, p.description, p.required
-    "#;
-
-    fetch_endpoints(tx, endpoints_query, &[&group_id], group_id)
-}
-
-/// Helper function to fetch and process endpoints
-fn fetch_endpoints(
-    tx: &DbTransaction,
-    query: &str,
-    params: &[&dyn ToSql],
-    group_id: &str,
-) -> Result<Vec<Endpoint>, StoreError> {
-    let mut stmt = tx.prepare(query).to_store_error()?;
-
-    let endpoint_rows_iter = stmt
-        .query_map(params, |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<String>>(10)?,
-            ))
-        })
-        .to_store_error()?;
-
-    let mut endpoint_rows = Vec::new();
-    for row_result in endpoint_rows_iter {
-        endpoint_rows.push(row_result.to_store_error()?);
-    }
-
-    // Process endpoint rows into endpoints with parameters
-    let mut endpoints_map = HashMap::new();
-
-    for (
-        id,
-        text,
-        description,
-        verb,
-        base,
-        path,
-        param_name,
-        param_desc,
-        required,
-        alternatives_str,
-        is_default,
-    ) in endpoint_rows
-    {
-        let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| Endpoint {
-            id,
-            text,
-            description,
-            verb,
-            base,
-            path,
-            parameters: Vec::new(),
-            group_id: group_id.to_string(),
-            is_default,
-        });
-
-        if let (Some(name), Some(desc), Some(req)) = (param_name, param_desc, required) {
-            let alternatives = alternatives_str
-                .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
-                .unwrap_or_default();
-
-            endpoint.parameters.push(Parameter {
-                name,
-                description: desc,
-                required: req,
-                alternatives,
-            });
-        }
-    }
-
-    Ok(endpoints_map.into_values().collect())
 }

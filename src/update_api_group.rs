@@ -1,5 +1,4 @@
 use crate::{
-    check_is_default_group::check_is_default_group,
     endpoint_store::{generate_id_from_text, EndpointStore},
     models::UpdateApiGroupRequest,
 };
@@ -34,29 +33,6 @@ pub async fn update_api_group(
         return HttpResponse::BadRequest().json(serde_json::json!({
             "success": false,
             "message": "Base URL cannot be empty"
-        }));
-    }
-
-    // Check if group is a default group
-    let is_default_group = match check_is_default_group(&store, group_id).await {
-        Ok(is_default) => is_default,
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                group_id = %group_id,
-                "Failed to check if group is default"
-            );
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "success": false,
-                "message": format!("Failed to check group status: {}", e)
-            }));
-        }
-    };
-
-    if is_default_group {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Cannot update a default API group. Default groups are read-only."
         }));
     }
 

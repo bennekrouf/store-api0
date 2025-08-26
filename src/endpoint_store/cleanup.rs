@@ -17,7 +17,7 @@ pub async fn fallback_clean_user_data(
             "SELECT e.id 
             FROM endpoints e
             JOIN user_endpoints ue ON e.id = ue.endpoint_id
-            WHERE ue.email = ? AND e.is_default = false",
+            WHERE ue.email = ?",
         ).to_store_error()?;
 
         let endpoint_ids: Vec<String> = stmt
@@ -81,7 +81,7 @@ pub async fn force_clean_user_data(
         SELECT e.id 
         FROM endpoints e
         JOIN user_endpoints ue ON e.id = ue.endpoint_id
-        WHERE ue.email = ? AND e.is_default = false",
+        WHERE ue.email = ?",
         [email],
     ).to_store_error()?;
 

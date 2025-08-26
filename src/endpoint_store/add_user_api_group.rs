@@ -31,7 +31,7 @@ pub async fn add_user_api_group(
     if !group_exists {
         // Insert new group
         tx.execute(
-            "INSERT INTO api_groups (id, name, description, base, is_default) VALUES (?, ?, ?, ?, false)",
+            "INSERT INTO api_groups (id, name, description, base) VALUES (?, ?, ?, ?)",
             &[
                 group_id,
                 &group.name,
@@ -40,20 +40,12 @@ pub async fn add_user_api_group(
             ],
         ).to_store_error()?;
     } else {
-        // Check if it's a default group
-        let is_default: bool = tx.query_row(
-            "SELECT is_default FROM api_groups WHERE id = ?",
-            [group_id],
-            |row| row.get(0),
-        ).to_store_error()?;
 
-        if !is_default {
-            // Update existing non-default group
-            tx.execute(
-                "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
-                &[&group.name, &group.description, &group.base, group_id],
-            ).to_store_error()?;
-        }
+    tx.execute(
+        "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+        &[&group.name, &group.description, &group.base, group_id],
+    ).to_store_error()?;
+
     }
 
     // Associate group with user
@@ -76,8 +68,8 @@ pub async fn add_user_api_group(
         if !endpoint_exists {
             // Insert new endpoint
             tx.execute(
-                "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, is_default) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, false)",
+                "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)",
                 &[
                     &endpoint.id,
                     &endpoint.text,
@@ -89,28 +81,19 @@ pub async fn add_user_api_group(
                 ],
             ).to_store_error()?;
         } else {
-            // Check if it's a default endpoint
-            let is_default: bool = tx.query_row(
-                "SELECT is_default FROM endpoints WHERE id = ?",
-                [&endpoint.id],
-                |row| row.get(0),
+            // Update existing non-default endpoint
+            tx.execute(
+                "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
+                &[
+                    &endpoint.text,
+                    &endpoint.description,
+                    &endpoint.verb,
+                    &endpoint.base,
+                    &endpoint.path,
+                    group_id,
+                    &endpoint.id,
+                ],
             ).to_store_error()?;
-
-            if !is_default {
-                // Update existing non-default endpoint
-                tx.execute(
-                    "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
-                    &[
-                        &endpoint.text,
-                        &endpoint.description,
-                        &endpoint.verb,
-                        &endpoint.base,
-                        &endpoint.path,
-                        group_id,
-                        &endpoint.id,
-                    ],
-                ).to_store_error()?;
-            }
         }
 
         // Associate endpoint with user
@@ -119,46 +102,37 @@ pub async fn add_user_api_group(
             &[email, &endpoint.id],
         ).to_store_error()?;
 
-        // Handle parameters for non-default endpoints
-        let is_default: bool = tx.query_row(
-            "SELECT is_default FROM endpoints WHERE id = ?",
+        // Clean up existing parameters
+        tx.execute(
+            "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
             [&endpoint.id],
-            |row| row.get(0),
         ).to_store_error()?;
 
-        if !is_default {
-            // Clean up existing parameters
+        tx.execute(
+            "DELETE FROM parameters WHERE endpoint_id = ?",
+            [&endpoint.id],
+        ).to_store_error()?;
+
+        // Add parameters
+        for param in &endpoint.parameters {
             tx.execute(
-                "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
-                [&endpoint.id],
+                "INSERT INTO parameters (endpoint_id, name, description, required) 
+                VALUES (?, ?, ?, ?)",
+                &[
+                    &endpoint.id,
+                    &param.name,
+                    &param.description,
+                    &param.required.to_string(),
+                ],
             ).to_store_error()?;
 
-            tx.execute(
-                "DELETE FROM parameters WHERE endpoint_id = ?",
-                [&endpoint.id],
-            ).to_store_error()?;
-
-            // Add parameters
-            for param in &endpoint.parameters {
+            // Add parameter alternatives
+            for alt in &param.alternatives {
                 tx.execute(
-                    "INSERT INTO parameters (endpoint_id, name, description, required) 
-                    VALUES (?, ?, ?, ?)",
-                    &[
-                        &endpoint.id,
-                        &param.name,
-                        &param.description,
-                        &param.required.to_string(),
-                    ],
+                    "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
+                    VALUES (?, ?, ?)",
+                    &[&endpoint.id, &param.name, alt],
                 ).to_store_error()?;
-
-                // Add parameter alternatives
-                for alt in &param.alternatives {
-                    tx.execute(
-                        "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
-                        VALUES (?, ?, ?)",
-                        &[&endpoint.id, &param.name, alt],
-                    ).to_store_error()?;
-                }
             }
         }
 

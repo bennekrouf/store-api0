@@ -1,5 +1,5 @@
 use crate::endpoint_store::{EndpointStore, StoreError, ApiGroupWithEndpoints, generate_id_from_text};
-
+use rusqlite::ToSql;
 use crate::endpoint_store::db_helpers::ResultExt;
 /// Replaces all API groups and endpoints for a user
 pub async fn replace_user_api_groups(
@@ -62,25 +62,16 @@ pub async fn replace_user_api_groups(
             // Create new group
             tracing::debug!(group_id = %group_id, "Creating new API group");
             tx.execute(
-                "INSERT INTO api_groups (id, name, description, base, is_default) VALUES (?, ?, ?, ?, false)",
+                "INSERT INTO api_groups (id, name, description, base) VALUES (?, ?, ?, ?)",
                 &[&group_id, &group.name, &group.description, &group.base],
             ).to_store_error()?;
         } else {
-            // Check if it's a default group
-            let is_default: bool = tx.query_row(
-                "SELECT is_default FROM api_groups WHERE id = ?",
-                [&group_id],
-                |row| row.get(0),
+            // Update existing non-default group
+            tracing::debug!(group_id = %group_id, "Updating existing API group");
+            tx.execute(
+                "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+                &[&group.name, &group.description, &group.base, &group_id],
             ).to_store_error()?;
-
-            if !is_default {
-                // Update existing non-default group
-                tracing::debug!(group_id = %group_id, "Updating existing API group");
-                tx.execute(
-                    "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
-                    &[&group.name, &group.description, &group.base, &group_id],
-                ).to_store_error()?;
-            }
         }
 
         // Link group to user
@@ -108,43 +99,38 @@ pub async fn replace_user_api_groups(
             if !endpoint_exists {
                 // Create new endpoint
                 tracing::debug!(endpoint_id = %endpoint_id, "Creating new endpoint");
+
+
+                let params: &[&dyn ToSql] = &[
+                    &endpoint_id as &dyn ToSql,
+                    &endpoint.text,
+                    &endpoint.description,
+                    &endpoint.verb,
+                    &endpoint.base,
+                    &endpoint.path,
+                    &group_id,
+                ];
+
                 tx.execute(
-                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, is_default) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, false)",
+                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params,
+                ).to_store_error()?;
+            } else {
+                // Check if it's a default endpoint
+                tracing::debug!(endpoint_id = %endpoint_id, "Updating existing endpoint");
+                tx.execute(
+                    "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
                     &[
-                        &endpoint_id,
                         &endpoint.text,
                         &endpoint.description,
                         &endpoint.verb,
                         &endpoint.base,
                         &endpoint.path,
                         &group_id,
+                        &endpoint_id,
                     ],
                 ).to_store_error()?;
-            } else {
-                // Check if it's a default endpoint
-                let is_default: bool = tx.query_row(
-                    "SELECT is_default FROM endpoints WHERE id = ?",
-                    [&endpoint_id],
-                    |row| row.get(0),
-                ).to_store_error()?;
-
-                if !is_default {
-                    // Update existing non-default endpoint
-                    tracing::debug!(endpoint_id = %endpoint_id, "Updating existing endpoint");
-                    tx.execute(
-                        "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
-                        &[
-                            &endpoint.text,
-                            &endpoint.description,
-                            &endpoint.verb,
-                            &endpoint.base,
-                            &endpoint.path,
-                            &group_id,
-                            &endpoint_id,
-                        ],
-                    ).to_store_error()?;
-                }
             }
 
             // Link endpoint to user
@@ -153,46 +139,37 @@ pub async fn replace_user_api_groups(
                 &[email, &endpoint_id],
             ).to_store_error()?;
 
-            // Process parameters for non-default endpoints
-            let is_default: bool = tx.query_row(
-                "SELECT is_default FROM endpoints WHERE id = ?",
+            // Clean up existing parameters first
+            tx.execute(
+                "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
                 [&endpoint_id],
-                |row| row.get(0),
             ).to_store_error()?;
 
-            if !is_default {
-                // Clean up existing parameters first
+            tx.execute(
+                "DELETE FROM parameters WHERE endpoint_id = ?",
+                [&endpoint_id],
+            ).to_store_error()?;
+
+            // Add new parameters
+            for param in &endpoint.parameters {
                 tx.execute(
-                    "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
-                    [&endpoint_id],
+                    "INSERT INTO parameters (endpoint_id, name, description, required) 
+                        VALUES (?, ?, ?, ?)",
+                    &[
+                        &endpoint_id,
+                        &param.name,
+                        &param.description,
+                        &param.required,
+                    ],
                 ).to_store_error()?;
 
-                tx.execute(
-                    "DELETE FROM parameters WHERE endpoint_id = ?",
-                    [&endpoint_id],
-                ).to_store_error()?;
-
-                // Add new parameters
-                for param in &endpoint.parameters {
+                // Add parameter alternatives
+                for alt in &param.alternatives {
                     tx.execute(
-                        "INSERT INTO parameters (endpoint_id, name, description, required) 
-                         VALUES (?, ?, ?, ?)",
-                        &[
-                            &endpoint_id,
-                            &param.name,
-                            &param.description,
-                            &param.required.to_string(),
-                        ],
+                        "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
+                            VALUES (?, ?, ?)",
+                        &[&endpoint_id, &param.name, alt],
                     ).to_store_error()?;
-
-                    // Add parameter alternatives
-                    for alt in &param.alternatives {
-                        tx.execute(
-                            "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
-                             VALUES (?, ?, ?)",
-                            &[&endpoint_id, &param.name, alt],
-                        ).to_store_error()?;
-                    }
                 }
             }
 
