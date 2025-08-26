@@ -8,11 +8,9 @@ pub struct EnhancedApiGroupsResponse {
     pub success: bool,
     pub api_groups: Vec<crate::endpoint_store::ApiGroupWithEndpoints>,
     pub message: String,
-    // Auto-generated API key for new users
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_prefix: Option<String>,
+    // Remove API key fields since we won't auto-generate keys
+    pub is_new_user: bool,
+    pub credit_balance: i64,
 }
 
 pub async fn get_api_groups(
@@ -23,16 +21,16 @@ pub async fn get_api_groups(
     tracing::info!(email = %email, "Received HTTP get API groups request");
 
     // Check if this is a new user by looking for existing API keys
-    let is_new_user = match store.get_api_keys_status(&email).await {
+    let (is_new_user, current_balance) = match store.get_api_keys_status(&email).await {
         Ok(status) => {
             tracing::info!(
                 email = %email,
                 has_keys = status.has_keys,
                 active_key_count = status.active_key_count,
-                keys_length = status.keys.len(),
+                current_balance = status.balance,
                 "API key status check result"
             );
-            !status.has_keys
+            (!status.has_keys, status.balance)
         }
         Err(e) => {
             tracing::warn!(
@@ -40,57 +38,46 @@ pub async fn get_api_groups(
                 email = %email,
                 "Failed to check API key status, assuming new user"
             );
-            true // Assume new user if we can't check
+            (true, 0) // Assume new user if we can't check
         }
     };
 
     tracing::info!(
         email = %email,
         is_new_user = is_new_user,
-        "Computed is_new_user flag"
+        current_balance = current_balance,
+        "Computed user status"
     );
 
     let mut response = EnhancedApiGroupsResponse {
         success: true,
         api_groups: vec![],
         message: "API groups successfully retrieved".to_string(),
-        api_key: None,
-        key_prefix: None,
+        is_new_user,
+        credit_balance: current_balance,
     };
 
-    // Auto-create API key for new users
-    if is_new_user {
-        tracing::info!(email = %email, "New user detected, creating default API key with $5 credit");
+    // Add default credit for new users (without creating an API key)
+    if is_new_user && current_balance == 0 {
+        tracing::info!(email = %email, "New user detected, adding $5 default credit");
 
-        match store.generate_api_key(&email, "Default API Key").await {
-            Ok((api_key, key_prefix, _)) => {
-                // Add $5 default credit (500 cents)
-                if let Err(e) = store.update_credit_balance(&email, 500).await {
-                    tracing::warn!(
-                        error = %e,
-                        email = %email,
-                        "Failed to add default credit, but continuing"
-                    );
-                }
-
+        match store.update_credit_balance(&email, 500).await {
+            Ok(new_balance) => {
                 tracing::info!(
                     email = %email,
-                    key_prefix = %key_prefix,
-                    "Auto-generated API key with $5 credit for new user"
+                    new_balance = new_balance,
+                    "Added $5 default credit for new user"
                 );
-                response.api_key = Some(api_key);
-                response.key_prefix = Some(key_prefix);
-                response.message =
-                    "Welcome! Your API key and $5 credit have been added to your account."
-                        .to_string();
+                response.credit_balance = new_balance;
+                response.message = "Welcome! $5 credit has been added to your account. Create an API key to start using the service.".to_string();
             }
             Err(e) => {
                 tracing::error!(
                     error = %e,
                     email = %email,
-                    "Failed to auto-generate API key for new user"
+                    "Failed to add default credit for new user"
                 );
-                // Continue anyway - user can manually create key later
+                response.message = "Welcome! Please create an API key to start using the service.".to_string();
             }
         }
     }
@@ -102,6 +89,7 @@ pub async fn get_api_groups(
                 email = %email,
                 group_count = api_groups.len(),
                 is_new_user = is_new_user,
+                credit_balance = response.credit_balance,
                 "Successfully retrieved API groups"
             );
 

@@ -56,14 +56,6 @@ impl EndpointStore {
         Ok(store)
     }
 
-/// Gets endpoints for a specific group ID
-    pub(crate) async fn get_endpoints_by_group_id(
-        &self,
-        group_id: &str,
-    ) -> Result<Vec<Endpoint>, StoreError> {
-        get_endpoints_by_group_id(self, group_id).await
-    }
-
     /// Get a connection from the pool
     pub async fn get_conn(&self) -> Result<MobcSQLiteConnection, StoreError> {
         self.pool
