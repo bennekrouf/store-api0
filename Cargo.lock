@@ -841,29 +841,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
-name = "grpc_logger"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1f3e7a33e34842f3c4303101f787969ae859ec91653fc169127f1f5c42fb836"
-dependencies = [
- "chrono",
- "futures",
- "prost",
- "serde",
- "serde_yaml",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
- "tonic-reflection",
- "tonic-web",
- "tower-http 0.6.2",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "h2"
 version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2230,7 +2207,6 @@ dependencies = [
  "base64",
  "chrono",
  "futures",
- "grpc_logger",
  "h2 0.4.10",
  "mobc",
  "prost",

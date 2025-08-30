@@ -13,15 +13,6 @@ database:
   cache_size_mb: 100
   memory_limit_mb: 500
 
-# gRPC connection for logging
-grpc:
-  logger:
-    host: localhost
-    port: 50052
-    timeout_ms: 5000
-    retry_max: 3
-    retry_delay_ms: 1000
-
 # Metrics and monitoring
 metrics:
   enabled: true
