@@ -77,7 +77,7 @@ fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
         exe_dir.join("config.yaml"), // Same dir as exe
         exe_dir.parent().unwrap_or(exe_dir).join("config.yaml"), // Parent dir
         exe_dir.join("..").join("config.yaml"), // Explicit parent
-        PathBuf::from("/opt/api0/config.yaml"), // Absolute fallback
+        PathBuf::from("/opt/api0/store/config.yaml"), // Absolute fallback
         PathBuf::from("./config.yaml"), // Current working dir
     ];
 
@@ -412,4 +412,3 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing::info!("Application shutting down");
     Ok(())
 }
-
