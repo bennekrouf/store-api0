@@ -1,11 +1,9 @@
 whoami: "api-store"
 output: "grpc" # Options: console, file, grpc
 level: "info"
-grpc:
-  address: "0.0.0.0"
-  port: 50057
-# file_path: "logs"
-# file_name: "app.log"
+# grpc:
+#   address: "0.0.0.0"
+#   port: 50057
 log_fields:
   include_thread_id: false
   include_target: false
@@ -18,7 +16,7 @@ debug_mode:
 log_all_messages: false
 server:
   grpc:
-    host: "127.0.0.1"
+    host: "0.0.0.0"
     port: 50057
   http:
     host: "127.0.0.1"
