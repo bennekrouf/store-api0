@@ -48,7 +48,7 @@ impl Config {
 
     pub fn formatter_url(&self) -> String {
         let host = self.formatter_host.as_deref().unwrap_or("localhost");
-        let port = self.formatter_port.unwrap_or(8080);
+        let port = self.formatter_port.unwrap_or(6001);
         format!("http://{}:{}/format-yaml", host, port)
     }
 }
@@ -70,7 +70,7 @@ impl Default for Config {
                     port: 5007,
                 },
             },
-            formatter_port: Some(8080),
+            formatter_port: Some(6001),
             formatter_host: Some("localhost".to_string()),
         }
     }

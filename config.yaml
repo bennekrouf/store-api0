@@ -22,5 +22,4 @@ server:
     host: "127.0.0.1"
     port: 5007
 formatter_host: "127.0.0.1"
-formatter_port: 8080
-# formatter_host: "0.0.0.0"  # Docker service name or hostname
+formatter_port: 6001

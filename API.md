@@ -63,7 +63,7 @@ X-API-Key: sk_live_yourApiKeyHere
 ## External Services
 
 The backend connects to a YAML formatter service:
-- **Formatter Service**: `http://localhost:8080/format-yaml`
+- **Formatter Service**: `http://localhost:6001/format-yaml`
 
 ## gRPC Services
 
