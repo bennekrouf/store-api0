@@ -180,44 +180,43 @@ pub async fn upload_api_config(
         };
 
     // Parse the content based on file extension
-    let api_storage = if upload_data.file_name.ends_with(".yaml")
-        || upload_data.file_name.ends_with(".yml")
-    {
-        match serde_yaml::from_str::<ApiStorage>(&processed_content) {
-            Ok(storage) => storage,
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    content_preview = %processed_content.chars().take(200).collect::<String>(),
-                    "Failed to parse YAML content"
-                );
-                return HttpResponse::BadRequest().json(UploadResponse {
-                    success: false,
-                    message: format!("Invalid YAML format: {}", e),
-                    imported_count: 0,
-                    group_count: 0,
-                });
+    let api_storage =
+        if upload_data.file_name.ends_with(".yaml") || upload_data.file_name.ends_with(".yml") {
+            match serde_yaml::from_str::<ApiStorage>(&processed_content) {
+                Ok(storage) => storage,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        content_preview = %processed_content.chars().take(200).collect::<String>(),
+                        "Failed to parse YAML content"
+                    );
+                    return HttpResponse::BadRequest().json(UploadResponse {
+                        success: false,
+                        message: format!("Invalid YAML format: {}", e),
+                        imported_count: 0,
+                        group_count: 0,
+                    });
+                }
             }
-        }
-    } else if upload_data.file_name.ends_with(".json") {
-        match serde_json::from_str::<ApiStorage>(&processed_content) {
-            Ok(storage) => storage,
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    content_preview = %processed_content.chars().take(200).collect::<String>(),
-                    "Failed to parse JSON content"
-                );
-                return HttpResponse::BadRequest().json(UploadResponse {
-                    success: false,
-                    message: format!("Invalid JSON format: {}", e),
-                    imported_count: 0,
-                    group_count: 0,
-                });
+        } else if upload_data.file_name.ends_with(".json") {
+            match serde_json::from_str::<ApiStorage>(&processed_content) {
+                Ok(storage) => storage,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        content_preview = %processed_content.chars().take(200).collect::<String>(),
+                        "Failed to parse JSON content"
+                    );
+                    return HttpResponse::BadRequest().json(UploadResponse {
+                        success: false,
+                        message: format!("Invalid JSON format: {}", e),
+                        imported_count: 0,
+                        group_count: 0,
+                    });
+                }
             }
-        }
-    } else {
-        return HttpResponse::BadRequest().json(UploadResponse {
+        } else {
+            return HttpResponse::BadRequest().json(UploadResponse {
             success: false,
             message:
                 "Unsupported file format. Please upload YAML (.yaml/.yml) or JSON (.json) files."
@@ -225,7 +224,7 @@ pub async fn upload_api_config(
             imported_count: 0,
             group_count: 0,
         });
-    };
+        };
 
     // Validate and process API groups
     let group_count = api_storage.api_groups.len();
@@ -236,6 +235,29 @@ pub async fn upload_api_config(
             imported_count: 0,
             group_count: 0,
         });
+    }
+
+    // After parsing, before processing groups
+    for group in &api_storage.api_groups {
+        if group.group.base.trim().is_empty() {
+            return HttpResponse::BadRequest().json(UploadResponse {
+                success: false,
+                message: format!("API group '{}' must have a base URL", group.group.name),
+                imported_count: 0,
+                group_count: 0,
+            });
+        }
+
+        for endpoint in &group.endpoints {
+            if endpoint.base.trim().is_empty() {
+                return HttpResponse::BadRequest().json(UploadResponse {
+                    success: false,
+                    message: format!("Endpoint '{}' must have a base URL", endpoint.text),
+                    imported_count: 0,
+                    group_count: 0,
+                });
+            }
+        }
     }
 
     // Process groups and endpoints
@@ -298,4 +320,3 @@ pub async fn upload_api_config(
         }
     }
 }
-

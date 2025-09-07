@@ -6,9 +6,9 @@ fn default_verb() -> String {
     "GET".to_string()
 }
 
-fn default_base_url() -> String {
-    "http://localhost:3000".to_string()
-}
+// fn default_base_url() -> String {
+//     "".to_string()
+// }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserPreferences {
@@ -46,7 +46,6 @@ pub struct Endpoint {
     #[serde(default = "default_verb")]
     #[serde(alias = "method")] // Allow 'method' as an alternative name
     pub verb: String,
-    #[serde(default = "default_base_url")]
     pub base: String,
     #[serde(default = "String::new")]
     pub path: String,
@@ -61,7 +60,6 @@ pub struct ApiGroup {
     pub name: String,
     #[serde(default = "String::new")]
     pub description: String,
-    #[serde(default = "default_base_url")]
     pub base: String,
 }
 

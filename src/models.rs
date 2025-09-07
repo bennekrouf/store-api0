@@ -38,13 +38,6 @@ pub struct UploadResponse {
     pub group_count: i32,
 }
 
-// #[derive(Debug, Serialize)]
-// pub struct ApiGroupsResponse {
-//     pub success: bool,
-//     pub api_groups: Vec<ApiGroupWithEndpoints>,
-//     pub message: String,
-// }
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct AddApiGroupRequest {
     pub email: String,
