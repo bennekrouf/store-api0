@@ -2,11 +2,12 @@
 mod add_user_api_group;
 mod api_key_management;
 mod cleanup;
-mod db_helpers;
+pub mod db_helpers;
 mod delete_user_api_group;
 mod errors;
 mod get_api_groups_by_email;
 mod get_create_user_api_groups;
+mod manage_single_endpoint;
 
 pub mod models;
 mod replace_user_api_groups;
@@ -29,6 +30,22 @@ pub struct EndpointStore {
 }
 
 impl EndpointStore {
+    /// Gets the base URL for a group
+    /// Gets the base URL for a group
+    pub async fn get_group_base_url(&self, group_id: &str) -> Result<String, StoreError> {
+        let conn = self.get_conn().await?;
+
+        let base_url: String = conn
+            .query_row(
+                "SELECT base FROM api_groups WHERE id = ?",
+                [group_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| StoreError::Database("Group not found".to_string()))?;
+
+        Ok(base_url)
+    }
+
     /// Creates a new EndpointStore instance with the given database path
     pub async fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
         tracing::info!(
@@ -36,20 +53,32 @@ impl EndpointStore {
             db_path.as_ref()
         );
 
-        let pool = create_db_pool(
-            db_path,
-            10,                            // max pool size
-            Some(Duration::from_secs(60)), // max idle timeout
-        )
-        .map_err(|e| StoreError::Pool(format!("Failed to create connection pool: {:?}", e)))?;
+        let pool = create_db_pool(db_path, 10, Some(Duration::from_secs(60)))
+            .map_err(|e| StoreError::Pool(format!("Failed to create connection pool: {:?}", e)))?;
 
         let store = Self { pool };
-        // Get a connection to initialize the schema
+
+        // Get a connection and execute schema statements individually
         let conn = store.get_conn().await?;
 
-        // Create tables with the schema
-        conn.execute_batch(include_str!("../../sql/schema.sql"))
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        // Split the schema into individual statements and execute them
+        let schema = include_str!("../../sql/schema.sql");
+        let statements: Vec<&str> = schema
+            .split(';')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && !s.starts_with("--"))
+            .collect();
+
+        for statement in statements {
+            if !statement.is_empty() {
+                conn.execute(statement, []).map_err(|e| {
+                    StoreError::Database(format!(
+                        "Schema execution failed on statement '{}': {}",
+                        statement, e
+                    ))
+                })?;
+            }
+        }
 
         Ok(store)
     }
@@ -94,10 +123,7 @@ impl EndpointStore {
         let filtered_groups = api_groups
             .into_iter()
             .map(|group| {
-                let filtered_endpoints = group
-                    .endpoints
-                    .into_iter()
-                    .collect();
+                let filtered_endpoints = group.endpoints.into_iter().collect();
 
                 ApiGroupWithEndpoints {
                     group: group.group,
@@ -213,5 +239,13 @@ impl EndpointStore {
     /// Gets credit balance for a user
     pub async fn get_credit_balance(&self, email: &str) -> Result<i64, StoreError> {
         api_key_management::get_credit_balance(self, email).await
+    }
+
+    pub async fn manage_single_endpoint(
+        &self,
+        email: &str,
+        endpoint: &Endpoint,
+    ) -> Result<String, StoreError> {
+        manage_single_endpoint::manage_single_endpoint(self, email, endpoint).await
     }
 }

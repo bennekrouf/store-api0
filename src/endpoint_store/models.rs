@@ -23,12 +23,45 @@ pub struct UpdatePreferenceRequest {
     pub endpoint_id: String,
 }
 
+use serde::Deserializer;
+
+// Helper function for flexible boolean parsing
+fn deserialize_flexible_bool<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum FlexibleBool {
+        Bool(bool),
+        String(String),
+    }
+
+    match FlexibleBool::deserialize(deserializer)? {
+        FlexibleBool::Bool(b) => Ok(b.to_string()),
+        FlexibleBool::String(s) => {
+            // Validate string is a valid boolean representation
+            match s.to_lowercase().as_str() {
+                "true" | "false" => Ok(s.to_lowercase()),
+                _ => Err(Error::custom(
+                    "Invalid boolean string, must be 'true' or 'false'",
+                )),
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Parameter {
     pub name: String,
     #[serde(default = "String::new")]
     pub description: String,
-    #[serde(default)]
+    #[serde(
+        default = "default_false_string",
+        deserialize_with = "deserialize_flexible_bool"
+    )]
     pub required: String,
     #[serde(default)]
     pub alternatives: Vec<String>,
@@ -36,7 +69,7 @@ pub struct Parameter {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Endpoint {
-    #[serde(default = "generate_uuid")]
+    #[serde(default = "String::new")] // Allow empty, will be auto-generated
     pub id: String,
     pub text: String,
     #[serde(default = "String::new")]
@@ -44,13 +77,18 @@ pub struct Endpoint {
     #[serde(default)]
     pub parameters: Vec<Parameter>,
     #[serde(default = "default_verb")]
-    #[serde(alias = "method")] // Allow 'method' as an alternative name
+    #[serde(alias = "method")]
     pub verb: String,
+    #[serde(default = "String::new")] // Allow empty, will inherit from group
     pub base: String,
     #[serde(default = "String::new")]
     pub path: String,
-    #[serde(default = "String::new")]
+    #[serde(default = "String::new")] // Allow empty, will be set by parent group
     pub group_id: String,
+}
+
+fn default_false_string() -> String {
+    "false".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

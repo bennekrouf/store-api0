@@ -9,6 +9,7 @@ use crate::get_api_keys_status::get_api_keys_status;
 use crate::get_credit_balance_handler::get_credit_balance_handler;
 use crate::get_user_preferences::get_user_preferences;
 use crate::health_check::health_check;
+use crate::manage_endpoint::manage_endpoint;
 use crate::record_api_key_usage::record_api_key_usage;
 use crate::reset_user_preferences::reset_user_preferences;
 use crate::revoke_all_api_keys_handler::revoke_all_api_keys_handler;
@@ -18,7 +19,6 @@ use crate::update_credit_balance_handler::update_credit_balance_handler;
 use crate::update_user_preferences::update_user_preferences;
 use crate::upload_api_config::upload_api_config;
 use crate::validate_api_key::validate_api_key;
-
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpServer};
@@ -67,6 +67,7 @@ pub async fn start_http_server(
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))
+                            .route("/endpoint", web::post().to(manage_endpoint))
                             .route(
                                 "/groups/{email}/{group_id}",
                                 web::delete().to(delete_api_group),

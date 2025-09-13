@@ -1,10 +1,18 @@
 use crate::endpoint_store::ApiGroupWithEndpoints;
 use serde::{Deserialize, Serialize};
 
+use crate::endpoint_store::Endpoint;
 // Request and Response models for API key validation
 #[derive(Debug, Deserialize)]
 pub struct ValidateKeyRequest {
     pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ManageEndpointRequest {
+    pub email: String,
+    pub group_id: String,
+    pub endpoint: Endpoint,
 }
 
 #[derive(Debug, Serialize)]

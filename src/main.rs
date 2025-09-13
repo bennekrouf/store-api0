@@ -14,6 +14,7 @@ mod get_user_preferences;
 mod grpc_server;
 mod health_check;
 mod http_server;
+mod manage_endpoint;
 mod models;
 mod record_api_key_usage;
 mod reset_user_preferences;

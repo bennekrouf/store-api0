@@ -4,7 +4,7 @@ PRAGMA foreign_keys = ON;
 -- Keep user_preferences table for preferences and credit
 CREATE TABLE IF NOT EXISTS user_preferences (
     email VARCHAR NOT NULL,
-    hidden_defaults TEXT NOT NULL DEFAULT '', -- Comma-separated list of endpoint IDs
+    hidden_defaults TEXT NOT NULL DEFAULT '',
     credit_balance INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (email)
 );

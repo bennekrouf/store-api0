@@ -1,6 +1,6 @@
 // src/endpoint_store/add_user_api_group.rs
-use crate::endpoint_store::{EndpointStore, StoreError, ApiGroupWithEndpoints};
 use crate::endpoint_store::db_helpers::ResultExt;
+use crate::endpoint_store::{ApiGroupWithEndpoints, EndpointStore, StoreError};
 
 /// Adds a single API group for a user
 pub async fn add_user_api_group(
@@ -9,7 +9,7 @@ pub async fn add_user_api_group(
     api_group: &ApiGroupWithEndpoints,
 ) -> Result<usize, StoreError> {
     let mut conn = store.get_conn().await?;
-    
+
     let group = &api_group.group;
     let group_id = &group.id;
 
@@ -22,48 +22,48 @@ pub async fn add_user_api_group(
     let tx = conn.transaction().to_store_error()?;
 
     // Check if group exists
-    let group_exists: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM api_groups WHERE id = ?)",
-        [group_id],
-        |row| row.get(0),
-    ).to_store_error()?;
+    let group_exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM api_groups WHERE id = ?)",
+            [group_id],
+            |row| row.get(0),
+        )
+        .to_store_error()?;
 
     if !group_exists {
         // Insert new group
         tx.execute(
             "INSERT INTO api_groups (id, name, description, base) VALUES (?, ?, ?, ?)",
-            &[
-                group_id,
-                &group.name,
-                &group.description,
-                &group.base,
-            ],
-        ).to_store_error()?;
+            &[group_id, &group.name, &group.description, &group.base],
+        )
+        .to_store_error()?;
     } else {
-
-    tx.execute(
-        "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
-        &[&group.name, &group.description, &group.base, group_id],
-    ).to_store_error()?;
-
+        tx.execute(
+            "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+            &[&group.name, &group.description, &group.base, group_id],
+        )
+        .to_store_error()?;
     }
 
     // Associate group with user
     tx.execute(
         "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
         &[email, group_id],
-    ).to_store_error()?;
+    )
+    .to_store_error()?;
 
     // Add endpoints
     let mut endpoint_count = 0;
 
     for endpoint in &api_group.endpoints {
         // Check if endpoint exists
-        let endpoint_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
-            [&endpoint.id],
-            |row| row.get(0),
-        ).to_store_error()?;
+        let endpoint_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
+                [&endpoint.id],
+                |row| row.get(0),
+            )
+            .to_store_error()?;
 
         if !endpoint_exists {
             // Insert new endpoint
@@ -79,7 +79,8 @@ pub async fn add_user_api_group(
                     &endpoint.path,
                     group_id,
                 ],
-            ).to_store_error()?;
+            )
+            .to_store_error()?;
         } else {
             // Update existing non-default endpoint
             tx.execute(
@@ -100,18 +101,21 @@ pub async fn add_user_api_group(
         tx.execute(
             "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
             &[email, &endpoint.id],
-        ).to_store_error()?;
+        )
+        .to_store_error()?;
 
         // Clean up existing parameters
         tx.execute(
             "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
             [&endpoint.id],
-        ).to_store_error()?;
+        )
+        .to_store_error()?;
 
         tx.execute(
             "DELETE FROM parameters WHERE endpoint_id = ?",
             [&endpoint.id],
-        ).to_store_error()?;
+        )
+        .to_store_error()?;
 
         // Add parameters
         for param in &endpoint.parameters {
@@ -124,7 +128,8 @@ pub async fn add_user_api_group(
                     &param.description,
                     &param.required.to_string(),
                 ],
-            ).to_store_error()?;
+            )
+            .to_store_error()?;
 
             // Add parameter alternatives
             for alt in &param.alternatives {
@@ -132,7 +137,8 @@ pub async fn add_user_api_group(
                     "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
                     VALUES (?, ?, ?)",
                     &[&endpoint.id, &param.name, alt],
-                ).to_store_error()?;
+                )
+                .to_store_error()?;
             }
         }
 
@@ -145,7 +151,7 @@ pub async fn add_user_api_group(
         endpoint_count = endpoint_count,
         "API group successfully added"
     );
-    
+
     tx.commit().to_store_error()?;
     Ok(endpoint_count)
 }

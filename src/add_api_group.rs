@@ -6,7 +6,6 @@ use crate::{
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
-// Handler for adding a new API group
 pub async fn add_api_group(
     store: web::Data<Arc<EndpointStore>>,
     add_data: web::Json<AddApiGroupRequest>,
@@ -35,23 +34,29 @@ pub async fn add_api_group(
         }));
     }
 
-    // Generate ID if not provided
+    // Generate group ID if not provided
     if api_group.group.id.trim().is_empty() {
         api_group.group.id = generate_id_from_text(&api_group.group.name);
     }
 
-    // Set group_id on all endpoints
+    // Process endpoints with inheritance and auto-generation
     for endpoint in &mut api_group.endpoints {
         // Generate endpoint ID if not provided
         if endpoint.id.trim().is_empty() {
             endpoint.id = generate_id_from_text(&endpoint.text);
         }
+
+        // Set group_id from parent group
         endpoint.group_id = api_group.group.id.clone();
+
+        // Inherit base URL from group if endpoint base is empty
+        if endpoint.base.trim().is_empty() {
+            endpoint.base = api_group.group.base.clone();
+        }
     }
 
-    // Add the API group
-    let groups = vec![api_group.clone()];
-    match store.replace_user_api_groups(email, groups).await {
+    // Add the API group (don't replace existing ones)
+    match store.add_user_api_group(email, &api_group).await {
         Ok(endpoint_count) => {
             tracing::info!(
                 email = %email,
