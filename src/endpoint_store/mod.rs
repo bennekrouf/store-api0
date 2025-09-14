@@ -68,8 +68,6 @@ impl EndpointStore {
 
         let store = Self { pool };
 
-        store.initialize_system_domains().await?;
-
         // Get a connection and execute schema statements individually
         let conn = store.get_conn().await?;
 
@@ -92,6 +90,7 @@ impl EndpointStore {
             }
         }
 
+        store.initialize_system_domains().await?;
         Ok(store)
     }
 
