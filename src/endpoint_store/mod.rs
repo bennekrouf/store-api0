@@ -79,13 +79,28 @@ impl EndpointStore {
             .filter(|s| !s.is_empty() && !s.starts_with("--"))
             .collect();
 
-        for statement in statements {
-            if !statement.is_empty() {
-                conn.execute(statement, []).map_err(|e| {
-                    StoreError::Database(format!(
-                        "Schema execution failed on statement '{}': {}",
-                        statement, e
-                    ))
+        // Execute PRAGMA statements first
+        for statement in &statements {
+            if statement.starts_with("PRAGMA") {
+                conn.execute(statement, [])
+                    .map_err(|e| StoreError::Database(format!("PRAGMA execution failed: {}", e)))?;
+            }
+        }
+
+        // Execute CREATE TABLE statements
+        for statement in &statements {
+            if statement.starts_with("CREATE TABLE") {
+                conn.execute(statement, []).map_err(|_e| {
+                    StoreError::Database(format!("CREATE TABLE failed on: {}", statement))
+                })?;
+            }
+        }
+
+        // Execute CREATE INDEX statements last
+        for statement in &statements {
+            if statement.starts_with("CREATE INDEX") {
+                conn.execute(statement, []).map_err(|_e| {
+                    StoreError::Database(format!("CREATE INDEX failed on: {}", statement))
                 })?;
             }
         }
