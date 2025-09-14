@@ -77,9 +77,6 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 
--- Create indexes for better performance
-CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
-CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 
 CREATE TABLE IF NOT EXISTS domains (
     id VARCHAR NOT NULL,
@@ -95,3 +92,8 @@ CREATE TABLE IF NOT EXISTS domains (
 
 CREATE INDEX IF NOT EXISTS idx_domains_email ON domains(email);
 CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);
+
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
