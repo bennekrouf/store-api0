@@ -6,10 +6,6 @@ fn default_verb() -> String {
     "GET".to_string()
 }
 
-// fn default_base_url() -> String {
-//     "".to_string()
-// }
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserPreferences {
     pub email: String,
@@ -209,4 +205,14 @@ pub struct ApiUsageLog {
     pub response_time_ms: Option<i64>,
     pub request_size: Option<i64>,
     pub response_size: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuthorizedDomain {
+    pub id: String,
+    pub email: String,
+    pub domain: String,
+    pub verified: bool,
+    pub added_at: String,
+    pub last_used: Option<String>,
 }

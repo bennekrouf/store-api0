@@ -1,6 +1,7 @@
 // src/endpoint_store/mod.rs
 mod add_user_api_group;
 mod api_key_management;
+mod authorized_domains;
 mod cleanup;
 pub mod db_helpers;
 mod delete_user_api_group;
@@ -8,7 +9,6 @@ mod errors;
 mod get_api_groups_by_email;
 mod get_create_user_api_groups;
 mod manage_single_endpoint;
-
 pub mod models;
 mod replace_user_api_groups;
 mod user_preferences;
@@ -30,6 +30,16 @@ pub struct EndpointStore {
 }
 
 impl EndpointStore {
+    /// Get all authorized domains for CORS
+    pub async fn get_all_authorized_domains(&self) -> Result<Vec<String>, StoreError> {
+        authorized_domains::get_all_authorized_domains(self).await
+    }
+
+    /// Initialize system domains
+    pub async fn initialize_system_domains(&self) -> Result<(), StoreError> {
+        authorized_domains::initialize_system_domains(self).await
+    }
+
     /// Gets the base URL for a group
     /// Gets the base URL for a group
     pub async fn get_group_base_url(&self, group_id: &str) -> Result<String, StoreError> {
@@ -57,6 +67,8 @@ impl EndpointStore {
             .map_err(|e| StoreError::Pool(format!("Failed to create connection pool: {:?}", e)))?;
 
         let store = Self { pool };
+
+        store.initialize_system_domains().await?;
 
         // Get a connection and execute schema statements individually
         let conn = store.get_conn().await?;

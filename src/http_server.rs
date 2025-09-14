@@ -6,6 +6,7 @@ use crate::generate_api_key::generate_api_key;
 use crate::get_api_groups::get_api_groups;
 use crate::get_api_key_usage::get_api_key_usage;
 use crate::get_api_keys_status::get_api_keys_status;
+use crate::get_authorized_domains::get_authorized_domains;
 use crate::get_credit_balance_handler::get_credit_balance_handler;
 use crate::get_user_preferences::get_user_preferences;
 use crate::health_check::health_check;
@@ -68,6 +69,7 @@ pub async fn start_http_server(
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))
                             .route("/endpoint", web::post().to(manage_endpoint))
+                            .route("/domains/authorized", web::get().to(get_authorized_domains))
                             .route(
                                 "/groups/{email}/{group_id}",
                                 web::delete().to(delete_api_group),

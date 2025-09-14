@@ -80,3 +80,18 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+CREATE TABLE IF NOT EXISTS domains (
+    id VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    domain VARCHAR NOT NULL,
+    verified BOOLEAN NOT NULL DEFAULT false,
+    added_at VARCHAR NOT NULL,
+    last_used VARCHAR,
+    verification_token VARCHAR,
+    PRIMARY KEY (id),
+    UNIQUE(email, domain)
+);
+
+CREATE INDEX IF NOT EXISTS idx_domains_email ON domains(email);
+CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);

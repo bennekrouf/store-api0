@@ -9,6 +9,7 @@ mod generate_api_key;
 mod get_api_groups;
 mod get_api_key_usage;
 mod get_api_keys_status;
+mod get_authorized_domains;
 mod get_credit_balance_handler;
 mod get_user_preferences;
 mod grpc_server;
@@ -25,7 +26,6 @@ mod update_credit_balance_handler;
 mod update_user_preferences;
 mod upload_api_config;
 mod validate_api_key;
-
 use config::Config;
 use formatter::YamlFormatter;
 
