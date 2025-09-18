@@ -185,6 +185,20 @@ Save content to a file.
 }
 ```
 
+
+
+### Evaluate am i a good fit for this job
+# Job fit analysis
+curl -X POST http://localhost:4002/api/analyze-job-fit \
+  -H "Authorization: Bearer <firebase-id-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_url": "https://www.linkedin.com/jobs/view/1234567890",
+    "person_name": "john-doe"
+  }'
+
+
+
 ## Error Handling
 
 ### Authentication Errors
@@ -223,3 +237,7 @@ Save content to a file.
 - **Editable:** `.typ` (Typst templates), `.toml` (configuration)
 - **Uploadable:** Image files (PNG, JPG, etc.) for profile pictures
 - **Generated:** PDF files for CV output
+
+
+
+

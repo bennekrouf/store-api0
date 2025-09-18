@@ -28,10 +28,11 @@ pub async fn add_api_group(
     }
 
     if api_group.group.base.trim().is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "success": false,
-            "message": "Base URL cannot be empty"
-        }));
+        api_group.group.base = "https://api.example.com".to_string();
+        // return HttpResponse::BadRequest().json(serde_json::json!({
+        //     "success": false,
+        //     "message": "Base URL cannot be empty"
+        // }));
     }
 
     // Generate group ID if not provided

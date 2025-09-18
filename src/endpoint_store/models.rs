@@ -94,6 +94,7 @@ pub struct ApiGroup {
     pub name: String,
     #[serde(default = "String::new")]
     pub description: String,
+    #[serde(default = "String::new")]
     pub base: String,
 }
 

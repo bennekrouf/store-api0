@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS api_groups (
     id VARCHAR PRIMARY KEY,
     name VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
-    base VARCHAR NOT NULL
+    base VARCHAR NOT NULL DEFAULT ''
 );
 
 -- Endpoints table with group reference (no is_default column)
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     text VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
     verb VARCHAR NOT NULL DEFAULT 'GET',
-    base VARCHAR NOT NULL,
+    base VARCHAR NOT NULL DEFAULT '',
     path VARCHAR NOT NULL DEFAULT '',
     group_id VARCHAR,
     FOREIGN KEY (group_id) REFERENCES api_groups(id)

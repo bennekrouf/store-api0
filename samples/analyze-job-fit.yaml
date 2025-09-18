@@ -1,0 +1,8 @@
+# Job fit analysis
+curl -X POST http://localhost:4002/api/analyze-job-fit \
+  -H "Authorization: Bearer <firebase-id-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_url": "https://www.linkedin.com/jobs/view/1234567890",
+    "person_name": "john-doe"
+  }'

@@ -238,27 +238,27 @@ pub async fn upload_api_config(
     }
 
     // After parsing, before processing groups
-    for group in &api_storage.api_groups {
-        if group.group.base.trim().is_empty() {
-            return HttpResponse::BadRequest().json(UploadResponse {
-                success: false,
-                message: format!("API group '{}' must have a base URL", group.group.name),
-                imported_count: 0,
-                group_count: 0,
-            });
-        }
-
-        for endpoint in &group.endpoints {
-            if endpoint.base.trim().is_empty() {
-                return HttpResponse::BadRequest().json(UploadResponse {
-                    success: false,
-                    message: format!("Endpoint '{}' must have a base URL", endpoint.text),
-                    imported_count: 0,
-                    group_count: 0,
-                });
-            }
-        }
-    }
+    // for group in &api_storage.api_groups {
+    //     if group.group.base.trim().is_empty() {
+    //         return HttpResponse::BadRequest().json(UploadResponse {
+    //             success: false,
+    //             message: format!("API group '{}' must have a base URL", group.group.name),
+    //             imported_count: 0,
+    //             group_count: 0,
+    //         });
+    //     }
+    //
+    //     for endpoint in &group.endpoints {
+    //         if endpoint.base.trim().is_empty() {
+    //             return HttpResponse::BadRequest().json(UploadResponse {
+    //                 success: false,
+    //                 message: format!("Endpoint '{}' must have a base URL", endpoint.text),
+    //                 imported_count: 0,
+    //                 group_count: 0,
+    //             });
+    //         }
+    //     }
+    // }
 
     // Process groups and endpoints
     let mut processed_groups = Vec::new();
@@ -268,12 +268,22 @@ pub async fn upload_api_config(
             group.group.id = generate_id_from_text(&group.group.name);
         }
 
+        // Provide default base URL if empty
+        if group.group.base.trim().is_empty() {
+            group.group.base = "https://api.example.com".to_string();
+        }
+
         // Process endpoints
         let mut processed_endpoints = Vec::new();
         for mut endpoint in group.endpoints {
             // Generate ID for endpoint if missing
             if endpoint.id.trim().is_empty() {
                 endpoint.id = generate_id_from_text(&endpoint.text);
+            }
+
+            // Inherit from group or provide default if empty
+            if endpoint.base.trim().is_empty() {
+                endpoint.base = group.group.base.clone();
             }
 
             endpoint.group_id = group.group.id.clone();
