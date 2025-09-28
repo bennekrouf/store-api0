@@ -9,6 +9,29 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     PRIMARY KEY (email)
 );
 
+-- API usage logs table for detailed tracking
+CREATE TABLE IF NOT EXISTS api_usage_logs (
+    id VARCHAR NOT NULL,
+    key_id VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    endpoint_path VARCHAR NOT NULL,
+    method VARCHAR NOT NULL,
+    timestamp VARCHAR NOT NULL,
+    response_status INTEGER,
+    response_time_ms INTEGER,
+    request_size INTEGER,
+    response_size INTEGER,
+    ip_address VARCHAR,
+    user_agent VARCHAR,
+    usage_estimated BOOLEAN,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    total_tokens INTEGER,
+    model_used VARCHAR,
+    PRIMARY KEY (id),
+    FOREIGN KEY (key_id) REFERENCES api_keys(id)
+);
+
 -- API keys table
 CREATE TABLE IF NOT EXISTS api_keys (
     id VARCHAR NOT NULL,
@@ -96,4 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_key_id ON api_usage_logs(key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_email ON api_usage_logs(email);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_timestamp ON api_usage_logs(timestamp);
+
 

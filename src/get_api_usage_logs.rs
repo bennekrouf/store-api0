@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use crate::endpoint_store::EndpointStore;
 
-/// Handler for getting detailed API usage logs
+/// Handler for getting detailed API usage logs with token information
 pub async fn get_api_usage_logs(
     store: web::Data<Arc<EndpointStore>>,
     path_params: web::Path<(String, String)>, // (email, key_id)
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let (email, key_id) = path_params.into_inner();
-    
+
     // Extract limit from query parameters if provided
     let limit = query.get("limit").and_then(|l| l.parse::<i64>().ok());
 
@@ -28,7 +28,7 @@ pub async fn get_api_usage_logs(
                 email = %email,
                 key_id = %key_id,
                 log_count = logs.len(),
-                "Successfully retrieved API usage logs"
+                "Successfully retrieved API usage logs with token data"
             );
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,

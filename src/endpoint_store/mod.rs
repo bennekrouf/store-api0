@@ -9,6 +9,7 @@ mod errors;
 mod get_api_groups_by_email;
 mod get_create_user_api_groups;
 mod manage_single_endpoint;
+use crate::endpoint_store::db_helpers::ResultExt;
 pub mod models;
 mod replace_user_api_groups;
 mod user_preferences;
@@ -255,6 +256,98 @@ impl EndpointStore {
     /// Gets usage statistics for a specific API key
     pub async fn get_api_key_usage(&self, key_id: &str) -> Result<Option<ApiKeyInfo>, StoreError> {
         api_key_management::get_api_key_usage(self, key_id).await
+    }
+
+    /// Log detailed API usage with token information
+    pub async fn log_api_usage(&self, request: &LogApiUsageRequest) -> Result<String, StoreError> {
+        let conn = self.get_conn().await?;
+        let log_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO api_usage_logs (
+            id, key_id, email, endpoint_path, method, timestamp,
+            response_status, response_time_ms, request_size, response_size,
+            ip_address, user_agent, usage_estimated, input_tokens,
+            output_tokens, total_tokens, model_used
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                log_id,
+                request.key_id,
+                request.email,
+                request.endpoint_path,
+                request.method,
+                now,
+                request.status_code,
+                request.response_time_ms,
+                request.request_size_bytes,
+                request.response_size_bytes,
+                request.ip_address,
+                request.user_agent,
+                request.usage.as_ref().map(|u| u.estimated),
+                request.usage.as_ref().map(|u| u.input_tokens),
+                request.usage.as_ref().map(|u| u.output_tokens),
+                request.usage.as_ref().map(|u| u.total_tokens),
+                request.usage.as_ref().map(|u| u.model.clone()),
+            ],
+        )
+        .to_store_error()?;
+
+        Ok(log_id)
+    }
+
+    /// Get API usage logs for a key
+    pub async fn get_api_usage_logs(
+        &self,
+        key_id: &str,
+        limit: Option<i64>,
+    ) -> Result<Vec<ApiUsageLog>, StoreError> {
+        let conn = self.get_conn().await?;
+        let limit = limit.unwrap_or(50).min(100);
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, key_id, email, endpoint_path, method, timestamp,
+                response_status, response_time_ms, request_size, response_size,
+                ip_address, user_agent, usage_estimated, input_tokens,
+                output_tokens, total_tokens, model_used
+         FROM api_usage_logs 
+         WHERE key_id = ? 
+         ORDER BY timestamp DESC 
+         LIMIT ?",
+            )
+            .to_store_error()?;
+
+        let logs_iter = stmt
+            .query_map([key_id, &limit.to_string()], |row| {
+                Ok(ApiUsageLog {
+                    id: row.get(0)?,
+                    key_id: row.get(1)?,
+                    email: row.get(2)?,
+                    endpoint_path: row.get(3)?,
+                    method: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    response_status: row.get(6)?,
+                    response_time_ms: row.get(7)?,
+                    request_size: row.get(8)?,
+                    response_size: row.get(9)?,
+                    ip_address: row.get(10)?,
+                    user_agent: row.get(11)?,
+                    usage_estimated: row.get(12)?,
+                    input_tokens: row.get(13)?,
+                    output_tokens: row.get(14)?,
+                    total_tokens: row.get(15)?,
+                    model_used: row.get(16)?,
+                })
+            })
+            .to_store_error()?;
+
+        let mut logs = Vec::new();
+        for log_result in logs_iter {
+            logs.push(log_result.to_store_error()?);
+        }
+
+        Ok(logs)
     }
 
     /// Updates credit balance for a user

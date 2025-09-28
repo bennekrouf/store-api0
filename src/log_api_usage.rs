@@ -2,11 +2,9 @@
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
-use crate::{
-    endpoint_store::{EndpointStore, LogApiUsageRequest, LogApiUsageResponse},
-};
+use crate::endpoint_store::{EndpointStore, LogApiUsageRequest, LogApiUsageResponse};
 
-/// Handler for logging detailed API usage
+/// Handler for logging detailed API usage with token information
 pub async fn log_api_usage(
     store: web::Data<Arc<EndpointStore>>,
     request: web::Json<LogApiUsageRequest>,
@@ -18,7 +16,10 @@ pub async fn log_api_usage(
         email = %log_request.email,
         endpoint = %log_request.endpoint_path,
         method = %log_request.method,
-        "Received HTTP log API usage request"
+        has_token_usage = log_request.usage.is_some(),
+        total_tokens = log_request.usage.as_ref().map(|u| u.total_tokens),
+        model = log_request.usage.as_ref().map(|u| u.model.as_str()).unwrap_or("none"),
+        "Received HTTP log API usage request with token data"
     );
 
     match store.log_api_usage(&log_request).await {
@@ -26,7 +27,8 @@ pub async fn log_api_usage(
             tracing::info!(
                 key_id = %log_request.key_id,
                 log_id = %log_id,
-                "Successfully logged API usage"
+                total_tokens = log_request.usage.as_ref().map(|u| u.total_tokens),
+                "Successfully logged API usage with token data"
             );
             HttpResponse::Ok().json(LogApiUsageResponse {
                 success: true,
@@ -48,3 +50,4 @@ pub async fn log_api_usage(
         }
     }
 }
+

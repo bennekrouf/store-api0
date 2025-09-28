@@ -176,15 +176,29 @@ pub struct CreditBalanceResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TokenUsage {
+    pub estimated: bool,
+    pub input_tokens: i64,
+    pub model: String,
+    pub output_tokens: i64,
+    pub total_tokens: i64,
+}
+
+// Update existing LogApiUsageRequest
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LogApiUsageRequest {
     pub key_id: String,
     pub email: String,
     pub endpoint_path: String,
     pub method: String,
-    pub response_status: Option<i32>,
+    pub status_code: Option<i32>,
     pub response_time_ms: Option<i64>,
-    pub request_size: Option<i64>,
-    pub response_size: Option<i64>,
+    pub request_size_bytes: Option<i64>,
+    pub response_size_bytes: Option<i64>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    // Add token usage
+    pub usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -206,6 +220,14 @@ pub struct ApiUsageLog {
     pub response_time_ms: Option<i64>,
     pub request_size: Option<i64>,
     pub response_size: Option<i64>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    // Add token usage fields
+    pub usage_estimated: Option<bool>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub model_used: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
