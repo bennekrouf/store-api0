@@ -1,5 +1,5 @@
-use crate::endpoint_store::StoreError;
 use crate::db_pool::SQLiteConnectionManager;
+use crate::endpoint_store::StoreError;
 use mobc::Error as MobcError;
 
 pub trait ResultExt<T> {

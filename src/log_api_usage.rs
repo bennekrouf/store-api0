@@ -50,4 +50,3 @@ pub async fn log_api_usage(
         }
     }
 }
-

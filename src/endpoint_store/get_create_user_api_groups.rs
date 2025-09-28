@@ -1,16 +1,15 @@
-use crate::endpoint_store::{EndpointStore, StoreError, ApiGroupWithEndpoints, ApiGroup, Endpoint};
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::generate_id_from_text;
+use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, StoreError};
 
 /// Gets or creates API groups for a user
 pub async fn get_or_create_user_api_groups(
     store: &EndpointStore,
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-
     // Check if user already has API groups
     let existing_groups = store.get_api_groups_by_email(email).await?;
-    
+
     if !existing_groups.is_empty() {
         tracing::info!(
             email = %email,
@@ -56,7 +55,8 @@ pub async fn get_or_create_user_api_groups(
             &default_group.description,
             &default_group.base,
         ],
-    ).to_store_error()?;
+    )
+    .to_store_error()?;
 
     // Insert the sample endpoint
     tx.execute(
@@ -76,13 +76,15 @@ pub async fn get_or_create_user_api_groups(
     tx.execute(
         "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
         &[email, &default_group_id],
-    ).to_store_error()?;
+    )
+    .to_store_error()?;
 
     // Associate endpoint with user
     tx.execute(
         "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
         &[email, &sample_endpoint.id],
-    ).to_store_error()?;
+    )
+    .to_store_error()?;
 
     tx.commit().to_store_error()?;
 

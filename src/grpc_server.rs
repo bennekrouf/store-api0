@@ -1,20 +1,11 @@
 use crate::endpoint::endpoint_service_server::EndpointService;
 
 use crate::endpoint::{
-    ApiGroup as ProtoApiGroup,
-    Endpoint as ProtoEndpoint,
-    GetApiGroupsRequest,
-    GetApiGroupsResponse,
-    GetUserPreferencesRequest,
-    GetUserPreferencesResponse,
-    Parameter as ProtoParameter,
-    ResetUserPreferencesRequest,
-    ResetUserPreferencesResponse,
-    UpdateUserPreferencesRequest,
-    UpdateUserPreferencesResponse,
-    UploadApiGroupsRequest,
-    UploadApiGroupsResponse,
-    UserPreferences as ProtoUserPreferences,
+    ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
+    GetApiGroupsResponse, GetUserPreferencesRequest, GetUserPreferencesResponse,
+    Parameter as ProtoParameter, ResetUserPreferencesRequest, ResetUserPreferencesResponse,
+    UpdateUserPreferencesRequest, UpdateUserPreferencesResponse, UploadApiGroupsRequest,
+    UploadApiGroupsResponse, UserPreferences as ProtoUserPreferences,
 };
 use crate::formatter::YamlFormatter;
 

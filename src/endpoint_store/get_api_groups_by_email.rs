@@ -2,8 +2,8 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, Parameter, StoreError,
 };
-use std::collections::HashMap;
 use rusqlite::ToSql;
+use std::collections::HashMap;
 
 type DbTransaction<'a> = rusqlite::Transaction<'a>;
 
@@ -128,16 +128,16 @@ fn fetch_custom_endpoints(
     let endpoint_rows_iter = stmt
         .query_map([email, group_id], |row| {
             Ok((
-                row.get::<_, String>(0)?,              // e.id
-                row.get::<_, String>(1)?,              // e.text
-                row.get::<_, String>(2)?,              // e.description
-                row.get::<_, String>(3)?,              // e.verb
-                row.get::<_, String>(4)?,              // e.base
-                row.get::<_, String>(5)?,              // e.path
-                row.get::<_, Option<String>>(6)?,      // p.name
-                row.get::<_, Option<String>>(7)?,      // p.description
-                row.get::<_, Option<String>>(8)?,      // p.required
-                row.get::<_, Option<String>>(9)?,      // alternatives
+                row.get::<_, String>(0)?,         // e.id
+                row.get::<_, String>(1)?,         // e.text
+                row.get::<_, String>(2)?,         // e.description
+                row.get::<_, String>(3)?,         // e.verb
+                row.get::<_, String>(4)?,         // e.base
+                row.get::<_, String>(5)?,         // e.path
+                row.get::<_, Option<String>>(6)?, // p.name
+                row.get::<_, Option<String>>(7)?, // p.description
+                row.get::<_, Option<String>>(8)?, // p.required
+                row.get::<_, Option<String>>(9)?, // alternatives
             ))
         })
         .to_store_error()?;
@@ -160,7 +160,7 @@ fn fetch_custom_endpoints(
         param_name,
         param_desc,
         required,
-        alternatives_str
+        alternatives_str,
     ) in endpoint_rows
     {
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
@@ -178,7 +178,7 @@ fn fetch_custom_endpoints(
                 base,
                 path: path_value,
                 parameters: Vec::new(),
-                group_id: group_id.to_string()
+                group_id: group_id.to_string(),
             }
         });
 

@@ -3,7 +3,7 @@ use crate::db_pool::SQLiteConnectionManager;
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("Database error: {0}")]
-    Database(String), 
+    Database(String),
     #[error("Connection pool error: {0}")]
     Pool(String),
 }

@@ -77,7 +77,8 @@ pub async fn get_api_groups(
                     email = %email,
                     "Failed to add default credit for new user"
                 );
-                response.message = "Welcome! Please create an API key to start using the service.".to_string();
+                response.message =
+                    "Welcome! Please create an API key to start using the service.".to_string();
             }
         }
     }
