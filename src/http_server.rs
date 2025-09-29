@@ -13,7 +13,6 @@ use crate::get_user_preferences::get_user_preferences;
 use crate::health_check::health_check;
 use crate::log_api_usage::log_api_usage;
 use crate::manage_endpoint::manage_endpoint;
-use crate::record_api_key_usage::record_api_key_usage;
 use crate::reset_user_preferences::reset_user_preferences;
 use crate::revoke_all_api_keys_handler::revoke_all_api_keys_handler;
 use crate::revoke_api_key_handler::revoke_api_key_handler;
@@ -66,7 +65,6 @@ pub async fn start_http_server(
                         web::scope("/api")
                             // API groups endpoints
                             .route("/upload", web::post().to(upload_api_config))
-                            .route("/key/usage", web::post().to(record_api_key_usage))
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))

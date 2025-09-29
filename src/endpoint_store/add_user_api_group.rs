@@ -70,7 +70,7 @@ pub async fn add_user_api_group(
             tx.execute(
                 "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-                &[
+                [
                     &endpoint.id,
                     &endpoint.text,
                     &endpoint.description,

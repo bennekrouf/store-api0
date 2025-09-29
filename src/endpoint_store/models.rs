@@ -118,7 +118,6 @@ pub struct ApiKeyInfo {
     pub generated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_used: Option<String>,
-    pub usage_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -136,43 +135,9 @@ pub struct GenerateKeyRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GenerateKeyResponse {
-    pub success: bool,
-    pub message: String,
-    pub key: Option<String>,
-    pub key_prefix: Option<String>,
-    pub key_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RevokeKeyRequest {
-    pub email: String,
-    pub key_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RevokeKeyResponse {
-    pub success: bool,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct KeyStatusResponse {
-    pub success: bool,
-    pub key_preference: Option<KeyPreference>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UpdateCreditRequest {
     pub email: String,
     pub amount: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CreditBalanceResponse {
-    pub success: bool,
-    pub message: String,
-    pub balance: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -189,16 +154,17 @@ pub struct TokenUsage {
 pub struct LogApiUsageRequest {
     pub key_id: String,
     pub email: String,
-    pub endpoint_path: String,
-    pub method: String,
+    pub endpoint_path: String, // Always "/api/analyze" for api0
+    pub method: String,        // Always "POST" for api0
     pub status_code: Option<i32>,
     pub response_time_ms: Option<i64>,
     pub request_size_bytes: Option<i64>,
     pub response_size_bytes: Option<i64>,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
-    // Add token usage
     pub usage: Option<TokenUsage>,
+    // Add metadata for matched endpoint info (optional)
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -228,14 +194,5 @@ pub struct ApiUsageLog {
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub model_used: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AuthorizedDomain {
-    pub id: String,
-    pub email: String,
-    pub domain: String,
-    pub verified: bool,
-    pub added_at: String,
-    pub last_used: Option<String>,
+    pub metadata: Option<serde_json::Value>,
 }

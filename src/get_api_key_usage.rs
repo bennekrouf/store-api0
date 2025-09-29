@@ -15,7 +15,6 @@ pub async fn get_api_key_usage(
         Ok(usage) => {
             tracing::info!(
                 email = %email,
-                usage_count = usage.clone().unwrap().usage_count,
                 "Successfully retrieved API key usage"
             );
             HttpResponse::Ok().json(serde_json::json!({

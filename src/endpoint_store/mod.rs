@@ -264,13 +264,19 @@ impl EndpointStore {
         let log_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
+        // Serialize metadata to JSON string
+        let metadata_json = request
+            .metadata
+            .as_ref()
+            .and_then(|m| serde_json::to_string(m).ok());
+
         conn.execute(
             "INSERT INTO api_usage_logs (
             id, key_id, email, endpoint_path, method, timestamp,
             response_status, response_time_ms, request_size, response_size,
             ip_address, user_agent, usage_estimated, input_tokens,
-            output_tokens, total_tokens, model_used
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            output_tokens, total_tokens, model_used, metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 log_id,
                 request.key_id,
@@ -289,6 +295,7 @@ impl EndpointStore {
                 request.usage.as_ref().map(|u| u.output_tokens),
                 request.usage.as_ref().map(|u| u.total_tokens),
                 request.usage.as_ref().map(|u| u.model.clone()),
+                metadata_json,
             ],
         )
         .to_store_error()?;
@@ -308,18 +315,21 @@ impl EndpointStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, key_id, email, endpoint_path, method, timestamp,
-                response_status, response_time_ms, request_size, response_size,
-                ip_address, user_agent, usage_estimated, input_tokens,
-                output_tokens, total_tokens, model_used
-         FROM api_usage_logs 
-         WHERE key_id = ? 
-         ORDER BY timestamp DESC 
-         LIMIT ?",
+            response_status, response_time_ms, request_size, response_size,
+            ip_address, user_agent, usage_estimated, input_tokens,
+            output_tokens, total_tokens, model_used, metadata
+                FROM api_usage_logs 
+                WHERE key_id = ? 
+                ORDER BY timestamp DESC 
+                LIMIT ?",
             )
             .to_store_error()?;
 
         let logs_iter = stmt
             .query_map([key_id, &limit.to_string()], |row| {
+                let metadata_str: Option<String> = row.get(17)?;
+                let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
                 Ok(ApiUsageLog {
                     id: row.get(0)?,
                     key_id: row.get(1)?,
@@ -338,6 +348,7 @@ impl EndpointStore {
                     output_tokens: row.get(14)?,
                     total_tokens: row.get(15)?,
                     model_used: row.get(16)?,
+                    metadata,
                 })
             })
             .to_store_error()?;

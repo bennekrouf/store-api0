@@ -19,7 +19,6 @@ mod http_server;
 mod log_api_usage;
 mod manage_endpoint;
 mod models;
-mod record_api_key_usage;
 mod reset_user_preferences;
 mod revoke_all_api_keys_handler;
 mod revoke_api_key_handler;

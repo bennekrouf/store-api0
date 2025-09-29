@@ -142,7 +142,6 @@ pub async fn get_api_keys_status(
                 key_name: row.get(2)?,
                 generated_at: row.get(3)?,
                 last_used: row.get::<_, String>(4).ok().filter(|s| !s.is_empty()),
-                usage_count: row.get(5)?,
             })
         })
         .to_store_error()?;
@@ -266,7 +265,6 @@ pub async fn get_api_key_usage(
                 key_name: row.get(2)?,
                 generated_at: row.get(3)?,
                 last_used: row.get(4)?,
-                usage_count: row.get(5)?,
             })
         },
     );
