@@ -2,7 +2,7 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroupWithEndpoints, EndpointStore, StoreError,
 };
-use rusqlite::ToSql;
+
 /// Replaces all API groups and endpoints for a user
 pub async fn replace_user_api_groups(
     store: &EndpointStore,
@@ -23,7 +23,6 @@ pub async fn replace_user_api_groups(
                 "Failed to clean up user data, will try fallback approach"
             );
 
-            // Fallback approach
             match store.fallback_clean_user_data(email).await {
                 Ok(_) => tracing::info!(email = %email, "Fallback cleanup successful"),
                 Err(e) => {
@@ -39,8 +38,8 @@ pub async fn replace_user_api_groups(
 
     // Add new groups and endpoints
     let mut imported_count = 0;
-    let mut conn = store.get_conn().await?;
-    let tx = conn.transaction().to_store_error()?;
+    let mut client = store.get_conn().await?;
+    let tx = client.transaction().await.to_store_error()?;
 
     for group_with_endpoints in &api_groups {
         let group = &group_with_endpoints.group;
@@ -53,82 +52,71 @@ pub async fn replace_user_api_groups(
         };
 
         // Check if group exists
-        let group_exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM api_groups WHERE id = ?)",
-                [&group_id],
-                |row| row.get(0),
-            )
+        let group_exists_row = tx
+            .query_opt("SELECT 1 FROM api_groups WHERE id = $1", &[&group_id])
+            .await
             .to_store_error()?;
 
-        if !group_exists {
-            // Create new group
+        if group_exists_row.is_none() {
             tracing::debug!(group_id = %group_id, "Creating new API group");
             tx.execute(
-                "INSERT INTO api_groups (id, name, description, base) VALUES (?, ?, ?, ?)",
+                "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
                 &[&group_id, &group.name, &group.description, &group.base],
             )
+            .await
             .to_store_error()?;
         } else {
-            // Update existing non-default group
             tracing::debug!(group_id = %group_id, "Updating existing API group");
             tx.execute(
-                "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+                "UPDATE api_groups SET name = $1, description = $2, base = $3 WHERE id = $4",
                 &[&group.name, &group.description, &group.base, &group_id],
             )
+            .await
             .to_store_error()?;
         }
 
         // Link group to user
         tx.execute(
-            "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
-            &[email, &group_id],
+            "INSERT INTO user_groups (email, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            &[&email, &group_id],
         )
+        .await
         .to_store_error()?;
 
         // Process endpoints for this group
         for endpoint in &group_with_endpoints.endpoints {
-            // Generate ID if not provided
             let endpoint_id = if endpoint.id.is_empty() {
                 generate_id_from_text(&endpoint.text)
             } else {
                 endpoint.id.clone()
             };
 
-            // Check if endpoint exists
-            let endpoint_exists: bool = tx
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
-                    [&endpoint_id],
-                    |row| row.get(0),
-                )
+            let endpoint_exists_row = tx
+                .query_opt("SELECT 1 FROM endpoints WHERE id = $1", &[&endpoint_id])
+                .await
                 .to_store_error()?;
 
-            if !endpoint_exists {
-                // Create new endpoint
+            if endpoint_exists_row.is_none() {
                 tracing::debug!(endpoint_id = %endpoint_id, "Creating new endpoint");
-
-                let params: &[&dyn ToSql] = &[
-                    &endpoint_id as &dyn ToSql,
-                    &endpoint.text,
-                    &endpoint.description,
-                    &endpoint.verb,
-                    &endpoint.base,
-                    &endpoint.path,
-                    &group_id,
-                ];
-
                 tx.execute(
                     "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    params,
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    &[
+                        &endpoint_id,
+                        &endpoint.text,
+                        &endpoint.description,
+                        &endpoint.verb,
+                        &endpoint.base,
+                        &endpoint.path,
+                        &group_id,
+                    ],
                 )
+                .await
                 .to_store_error()?;
             } else {
-                // Check if it's a default endpoint
                 tracing::debug!(endpoint_id = %endpoint_id, "Updating existing endpoint");
                 tx.execute(
-                    "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
+                    "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6 WHERE id = $7",
                     &[
                         &endpoint.text,
                         &endpoint.description,
@@ -138,50 +126,54 @@ pub async fn replace_user_api_groups(
                         &group_id,
                         &endpoint_id,
                     ],
-                ).to_store_error()?;
+                )
+                .await
+                .to_store_error()?;
             }
 
             // Link endpoint to user
             tx.execute(
-                "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-                &[email, &endpoint_id],
+                "INSERT INTO user_endpoints (email, endpoint_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                &[&email, &endpoint_id],
             )
+            .await
             .to_store_error()?;
 
-            // Clean up existing parameters first
+            // Clean up existing parameters
             tx.execute(
-                "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
-                [&endpoint_id],
+                "DELETE FROM parameter_alternatives WHERE endpoint_id = $1",
+                &[&endpoint_id],
             )
+            .await
             .to_store_error()?;
 
             tx.execute(
-                "DELETE FROM parameters WHERE endpoint_id = ?",
-                [&endpoint_id],
+                "DELETE FROM parameters WHERE endpoint_id = $1",
+                &[&endpoint_id],
             )
+            .await
             .to_store_error()?;
 
             // Add new parameters
             for param in &endpoint.parameters {
+                let required = param.required.parse::<bool>().unwrap_or(false);
+
                 tx.execute(
                     "INSERT INTO parameters (endpoint_id, name, description, required) 
-                        VALUES (?, ?, ?, ?)",
-                    &[
-                        &endpoint_id,
-                        &param.name,
-                        &param.description,
-                        &param.required,
-                    ],
+                        VALUES ($1, $2, $3, $4)",
+                    &[&endpoint_id, &param.name, &param.description, &required],
                 )
+                .await
                 .to_store_error()?;
 
-                // Add parameter alternatives
                 for alt in &param.alternatives {
                     tx.execute(
                         "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
-                            VALUES (?, ?, ?)",
+                            VALUES ($1, $2, $3)",
                         &[&endpoint_id, &param.name, alt],
-                    ).to_store_error()?;
+                    )
+                    .await
+                    .to_store_error()?;
                 }
             }
 
@@ -196,6 +188,7 @@ pub async fn replace_user_api_groups(
         "Successfully imported API groups and endpoints"
     );
 
-    tx.commit().to_store_error()?;
+    tx.commit().await.to_store_error()?;
     Ok(imported_count)
 }
+

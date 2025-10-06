@@ -2,10 +2,7 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, Parameter, StoreError,
 };
-use rusqlite::ToSql;
 use std::collections::HashMap;
-
-type DbTransaction<'a> = rusqlite::Transaction<'a>;
 
 /// Gets all API groups and endpoints for a user
 pub async fn get_api_groups_by_email(
@@ -13,11 +10,10 @@ pub async fn get_api_groups_by_email(
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
     tracing::info!(email = %email, "Starting to fetch API groups and endpoints");
-    let mut conn = store.get_conn().await?;
-    let tx = conn.transaction().to_store_error()?;
+    let client = store.get_conn().await?;
 
     tracing::info!(email = %email, "Fetching custom groups and endpoints");
-    let result = fetch_custom_groups_with_endpoints(&tx, email)?;
+    let result = fetch_custom_groups_with_endpoints(&client, email).await?;
 
     tracing::info!(
         group_count = result.len(),
@@ -25,30 +21,39 @@ pub async fn get_api_groups_by_email(
         "Successfully fetched API groups and endpoints"
     );
 
-    tx.commit().to_store_error()?;
     Ok(result)
 }
 
 /// Fetches custom API groups and endpoints for a specific user
-fn fetch_custom_groups_with_endpoints(
-    tx: &DbTransaction,
+async fn fetch_custom_groups_with_endpoints(
+    client: &deadpool_postgres::Object,
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
     tracing::debug!(email = %email, "Fetching custom groups and endpoints");
 
-    // Get user's custom groups
     let groups_query = r#"
         SELECT g.id, g.name, g.description, g.base
         FROM api_groups g
         INNER JOIN user_groups ug ON g.id = ug.group_id
-        WHERE ug.email = ?
+        WHERE ug.email = $1
     "#;
 
-    let groups = fetch_groups(tx, groups_query, &[&email])?;
+    let rows = client
+        .query(groups_query, &[&email])
+        .await
+        .to_store_error()?;
+
     let mut result = Vec::new();
 
-    for group in groups {
-        let endpoints = fetch_custom_endpoints(tx, email, &group.id)?;
+    for row in rows {
+        let group = ApiGroup {
+            id: row.get(0),
+            name: row.get(1),
+            description: row.get(2),
+            base: row.get(3),
+        };
+
+        let endpoints = fetch_custom_endpoints(client, email, &group.id).await?;
 
         tracing::debug!(
             group_id = %group.id,
@@ -62,56 +67,22 @@ fn fetch_custom_groups_with_endpoints(
     Ok(result)
 }
 
-/// Helper function to fetch API groups using the provided query and parameters
-fn fetch_groups(
-    tx: &DbTransaction,
-    query: &str,
-    params: &[&dyn ToSql],
-) -> Result<Vec<ApiGroup>, StoreError> {
-    let mut stmt = tx.prepare(query).to_store_error()?;
-
-    let groups = stmt
-        .query_map(params, |row| {
-            Ok(ApiGroup {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                base: row.get(3)?,
-            })
-        })
-        .to_store_error()?;
-
-    let mut result = Vec::new();
-    for group_result in groups {
-        match group_result {
-            Ok(g) => result.push(g),
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to get API group");
-                continue;
-            }
-        }
-    }
-
-    Ok(result)
-}
-
 /// Fetches custom endpoints for a specific group and user
-fn fetch_custom_endpoints(
-    tx: &DbTransaction,
+async fn fetch_custom_endpoints(
+    client: &deadpool_postgres::Object,
     email: &str,
     group_id: &str,
 ) -> Result<Vec<Endpoint>, StoreError> {
-    // Fixed query - removed one field to match the 10-element tuple
     let endpoints_query = r#"
         SELECT 
             e.id, e.text, e.description, e.verb, e.base, e.path, 
             p.name, p.description, p.required, 
-            STRING_AGG(pa.alternative, ',') as alternatives
+            string_agg(pa.alternative, ',') as alternatives
         FROM endpoints e
         INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
-        WHERE ue.email = ? AND e.group_id = ?
+        WHERE ue.email = $1 AND e.group_id = $2
         GROUP BY 
             e.id, e.text, e.description, e.verb, e.base, e.path, 
             p.name, p.description, p.required
@@ -123,46 +94,25 @@ fn fetch_custom_endpoints(
         "Fetching custom endpoints"
     );
 
-    let mut stmt = tx.prepare(endpoints_query).to_store_error()?;
-
-    let endpoint_rows_iter = stmt
-        .query_map([email, group_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,         // e.id
-                row.get::<_, String>(1)?,         // e.text
-                row.get::<_, String>(2)?,         // e.description
-                row.get::<_, String>(3)?,         // e.verb
-                row.get::<_, String>(4)?,         // e.base
-                row.get::<_, String>(5)?,         // e.path
-                row.get::<_, Option<String>>(6)?, // p.name
-                row.get::<_, Option<String>>(7)?, // p.description
-                row.get::<_, Option<String>>(8)?, // p.required
-                row.get::<_, Option<String>>(9)?, // alternatives
-            ))
-        })
+    let rows = client
+        .query(endpoints_query, &[&email, &group_id])
+        .await
         .to_store_error()?;
 
-    let mut endpoint_rows = Vec::new();
-    for row_result in endpoint_rows_iter {
-        endpoint_rows.push(row_result.to_store_error()?);
-    }
+    let mut endpoints_map: HashMap<String, Endpoint> = HashMap::new();
 
-    // Process endpoint rows into endpoints with parameters
-    let mut endpoints_map = HashMap::new();
+    for row in rows {
+        let id: String = row.get(0);
+        let text: String = row.get(1);
+        let description: String = row.get(2);
+        let verb: String = row.get(3);
+        let base: String = row.get(4);
+        let path_value: String = row.get(5);
+        let param_name: Option<String> = row.get(6);
+        let param_desc: Option<String> = row.get(7);
+        let required: Option<bool> = row.get(8);
+        let alternatives_str: Option<String> = row.get(9);
 
-    for (
-        id,
-        text,
-        description,
-        verb,
-        base,
-        path_value,
-        param_name,
-        param_desc,
-        required,
-        alternatives_str,
-    ) in endpoint_rows
-    {
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
             tracing::debug!(
                 endpoint_id = %id,
@@ -196,7 +146,7 @@ fn fetch_custom_endpoints(
             endpoint.parameters.push(Parameter {
                 name,
                 description: desc,
-                required: req,
+                required: req.to_string(),
                 alternatives,
             });
         }
@@ -212,3 +162,4 @@ fn fetch_custom_endpoints(
 
     Ok(result)
 }
+

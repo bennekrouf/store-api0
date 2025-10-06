@@ -1,4 +1,3 @@
-// src/endpoint_store/add_user_api_group.rs
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{ApiGroupWithEndpoints, EndpointStore, StoreError};
 
@@ -8,7 +7,8 @@ pub async fn add_user_api_group(
     email: &str,
     api_group: &ApiGroupWithEndpoints,
 ) -> Result<usize, StoreError> {
-    let mut conn = store.get_conn().await?;
+    let mut client = store.get_conn().await?;
+    let tx = client.transaction().await.to_store_error()?;
 
     let group = &api_group.group;
     let group_id = &group.id;
@@ -19,58 +19,49 @@ pub async fn add_user_api_group(
         "Adding API group"
     );
 
-    let tx = conn.transaction().to_store_error()?;
-
     // Check if group exists
-    let group_exists: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM api_groups WHERE id = ?)",
-            [group_id],
-            |row| row.get(0),
-        )
+    let group_exists_row = tx
+        .query_opt("SELECT 1 FROM api_groups WHERE id = $1", &[group_id])
+        .await
         .to_store_error()?;
 
-    if !group_exists {
-        // Insert new group
+    if group_exists_row.is_none() {
         tx.execute(
-            "INSERT INTO api_groups (id, name, description, base) VALUES (?, ?, ?, ?)",
+            "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
             &[group_id, &group.name, &group.description, &group.base],
         )
+        .await
         .to_store_error()?;
     } else {
         tx.execute(
-            "UPDATE api_groups SET name = ?, description = ?, base = ? WHERE id = ?",
+            "UPDATE api_groups SET name = $1, description = $2, base = $3 WHERE id = $4",
             &[&group.name, &group.description, &group.base, group_id],
         )
+        .await
         .to_store_error()?;
     }
 
     // Associate group with user
     tx.execute(
-        "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
-        &[email, group_id],
+        "INSERT INTO user_groups (email, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        &[&email, group_id],
     )
+    .await
     .to_store_error()?;
 
-    // Add endpoints
     let mut endpoint_count = 0;
 
     for endpoint in &api_group.endpoints {
-        // Check if endpoint exists
-        let endpoint_exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM endpoints WHERE id = ?)",
-                [&endpoint.id],
-                |row| row.get(0),
-            )
+        let endpoint_exists_row = tx
+            .query_opt("SELECT 1 FROM endpoints WHERE id = $1", &[&endpoint.id])
+            .await
             .to_store_error()?;
 
-        if !endpoint_exists {
-            // Insert new endpoint
+        if endpoint_exists_row.is_none() {
             tx.execute(
                 "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
+                VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[
                     &endpoint.id,
                     &endpoint.text,
                     &endpoint.description,
@@ -80,11 +71,11 @@ pub async fn add_user_api_group(
                     group_id,
                 ],
             )
+            .await
             .to_store_error()?;
         } else {
-            // Update existing non-default endpoint
             tx.execute(
-                "UPDATE endpoints SET text = ?, description = ?, verb = ?, base = ?, path = ?, group_id = ? WHERE id = ?",
+                "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6 WHERE id = $7",
                 &[
                     &endpoint.text,
                     &endpoint.description,
@@ -94,50 +85,52 @@ pub async fn add_user_api_group(
                     group_id,
                     &endpoint.id,
                 ],
-            ).to_store_error()?;
+            )
+            .await
+            .to_store_error()?;
         }
 
-        // Associate endpoint with user
         tx.execute(
-            "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-            &[email, &endpoint.id],
+            "INSERT INTO user_endpoints (email, endpoint_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            &[&email, &endpoint.id],
         )
+        .await
         .to_store_error()?;
 
         // Clean up existing parameters
         tx.execute(
-            "DELETE FROM parameter_alternatives WHERE endpoint_id = ?",
-            [&endpoint.id],
+            "DELETE FROM parameter_alternatives WHERE endpoint_id = $1",
+            &[&endpoint.id],
         )
+        .await
         .to_store_error()?;
 
         tx.execute(
-            "DELETE FROM parameters WHERE endpoint_id = ?",
-            [&endpoint.id],
+            "DELETE FROM parameters WHERE endpoint_id = $1",
+            &[&endpoint.id],
         )
+        .await
         .to_store_error()?;
 
         // Add parameters
         for param in &endpoint.parameters {
+            let required = param.required.parse::<bool>().unwrap_or(false);
+
             tx.execute(
                 "INSERT INTO parameters (endpoint_id, name, description, required) 
-                VALUES (?, ?, ?, ?)",
-                &[
-                    &endpoint.id,
-                    &param.name,
-                    &param.description,
-                    &param.required.to_string(),
-                ],
+                VALUES ($1, $2, $3, $4)",
+                &[&endpoint.id, &param.name, &param.description, &required],
             )
+            .await
             .to_store_error()?;
 
-            // Add parameter alternatives
             for alt in &param.alternatives {
                 tx.execute(
                     "INSERT INTO parameter_alternatives (endpoint_id, parameter_name, alternative) 
-                    VALUES (?, ?, ?)",
+                    VALUES ($1, $2, $3)",
                     &[&endpoint.id, &param.name, alt],
                 )
+                .await
                 .to_store_error()?;
             }
         }
@@ -152,6 +145,7 @@ pub async fn add_user_api_group(
         "API group successfully added"
     );
 
-    tx.commit().to_store_error()?;
+    tx.commit().await.to_store_error()?;
     Ok(endpoint_count)
 }
+

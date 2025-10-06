@@ -9,7 +9,6 @@ pub async fn get_or_create_user_api_groups(
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
     // Check if user already has API groups
     let existing_groups = store.get_api_groups_by_email(email).await?;
-
     if !existing_groups.is_empty() {
         tracing::info!(
             email = %email,
@@ -20,8 +19,8 @@ pub async fn get_or_create_user_api_groups(
     }
 
     // Create a default group for new users if they don't have any
-    let mut conn = store.get_conn().await?;
-    let tx = conn.transaction().to_store_error()?;
+    let mut client = store.get_conn().await?;
+    let tx = client.transaction().await.to_store_error()?;
 
     tracing::info!(email = %email, "User has no API groups, creating a default one");
 
@@ -48,7 +47,7 @@ pub async fn get_or_create_user_api_groups(
 
     // Insert the default group
     tx.execute(
-        "INSERT INTO api_groups (id, name, description, base) VALUES (?, ?, ?, ?)",
+        "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
         &[
             &default_group.id,
             &default_group.name,
@@ -56,11 +55,12 @@ pub async fn get_or_create_user_api_groups(
             &default_group.base,
         ],
     )
+    .await
     .to_store_error()?;
 
     // Insert the sample endpoint
     tx.execute(
-        "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         &[
             &sample_endpoint.id,
             &sample_endpoint.text,
@@ -70,23 +70,27 @@ pub async fn get_or_create_user_api_groups(
             &sample_endpoint.path,
             &sample_endpoint.group_id,
         ],
-    ).to_store_error()?;
+    )
+    .await
+    .to_store_error()?;
 
     // Associate group with user
     tx.execute(
-        "INSERT OR IGNORE INTO user_groups (email, group_id) VALUES (?, ?)",
-        &[email, &default_group_id],
+        "INSERT INTO user_groups (email, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        &[&email, &default_group_id],
     )
+    .await
     .to_store_error()?;
 
     // Associate endpoint with user
     tx.execute(
-        "INSERT OR IGNORE INTO user_endpoints (email, endpoint_id) VALUES (?, ?)",
-        &[email, &sample_endpoint.id],
+        "INSERT INTO user_endpoints (email, endpoint_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        &[&email, &sample_endpoint.id],
     )
+    .await
     .to_store_error()?;
 
-    tx.commit().to_store_error()?;
+    tx.commit().await.to_store_error()?;
 
     // Create the result
     let default_api_group = ApiGroupWithEndpoints {
@@ -101,3 +105,4 @@ pub async fn get_or_create_user_api_groups(
 
     Ok(vec![default_api_group])
 }
+

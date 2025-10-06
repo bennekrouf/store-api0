@@ -38,7 +38,7 @@ use endpoint::endpoint_service_server::EndpointServiceServer;
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tonic::transport::Server;
 use tonic_reflection::server::Builder;
@@ -95,42 +95,18 @@ fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
     Err("config.yaml not found in any expected location. Please set CONFIG_PATH environment variable or place config.yaml in the executable directory.".into())
 }
 
-fn resolve_db_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
-    let db_path_str = env::var("DB_PATH").unwrap_or_else(|_| {
-        // Default to a directory relative to the executable
-        let exe_path = env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-        let exe_dir = exe_path.parent().unwrap_or(Path::new("."));
-        exe_dir.join("db").to_string_lossy().to_string()
-    });
-
-    let db_dir = PathBuf::from(&db_path_str);
-
-    // Ensure the directory exists
-    if let Err(e) = std::fs::create_dir_all(&db_dir) {
-        return Err(format!(
-            "Failed to create database directory {}: {}",
-            db_dir.display(),
-            e
-        )
-        .into());
+fn get_database_url() -> Result<String, Box<dyn Error + Send + Sync>> {
+    // Try environment variable first
+    if let Ok(db_url) = env::var("DATABASE_URL") {
+        tracing::info!("Using DATABASE_URL from environment: {}", db_url);
+        return Ok(db_url);
     }
 
-    // Test write permissions
-    let test_file = db_dir.join(".write_test");
-    if let Err(e) = std::fs::write(&test_file, "test") {
-        return Err(format!(
-            "Cannot write to database directory {}: {}",
-            db_dir.display(),
-            e
-        )
-        .into());
-    }
-    let _ = std::fs::remove_file(test_file); // Clean up test file
-
-    let db_file = db_dir.join("endpoints.db");
-    tracing::info!("Using database file: {}", db_file.display());
-
-    Ok(db_file)
+    // Fallback to default if DATABASE_URL not set
+    let default_url =
+        "postgresql://api_store_dev_user:strong_password_1@localhost:5433/api-store-dev";
+    tracing::warn!("DATABASE_URL not set, using default: {}", default_url);
+    Ok(default_url.to_string())
 }
 
 fn resolve_endpoints_config_path() -> Option<PathBuf> {
@@ -208,8 +184,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let formatter = Arc::new(YamlFormatter::new(&formatter_url));
 
     // Resolve database path
-    let db_file = resolve_db_path()?;
-    let store = EndpointStore::new(&db_file).await.map_err(|e| {
+    let database_url = get_database_url()?;
+    let store = EndpointStore::new(&database_url).await.map_err(|e| {
         tracing::error!("Failed to initialize database: {}", e);
         e
     })?;

@@ -1,5 +1,3 @@
-// Create a new file src/endpoint_store/user_preferences.rs
-
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{EndpointStore, StoreError, UserPreferences};
 
@@ -8,45 +6,35 @@ pub async fn get_user_preferences(
     store: &EndpointStore,
     email: &str,
 ) -> Result<UserPreferences, StoreError> {
-    let conn = store.get_conn().await?;
+    let client = store.get_conn().await?;
 
-    // Check if user has preferences
-    let exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM user_preferences WHERE email = ?)",
-            [email],
-            |row| row.get(0),
+    let row = client
+        .query_opt(
+            "SELECT hidden_defaults FROM user_preferences WHERE email = $1",
+            &[&email],
         )
+        .await
         .to_store_error()?;
 
-    if !exists {
-        // Return empty preferences if none exist
-        return Ok(UserPreferences {
+    match row {
+        Some(r) => {
+            let hidden_defaults_str: String = r.get(0);
+            let hidden_defaults = if hidden_defaults_str.is_empty() {
+                Vec::new()
+            } else {
+                hidden_defaults_str.split(',').map(String::from).collect()
+            };
+
+            Ok(UserPreferences {
+                email: email.to_string(),
+                hidden_defaults,
+            })
+        }
+        None => Ok(UserPreferences {
             email: email.to_string(),
             hidden_defaults: Vec::new(),
-        });
+        }),
     }
-
-    // Get the hidden defaults
-    let hidden_defaults_str: String = conn
-        .query_row(
-            "SELECT hidden_defaults FROM user_preferences WHERE email = ?",
-            [email],
-            |row| row.get(0),
-        )
-        .to_store_error()?;
-
-    // Parse comma-separated string into Vec<String>
-    let hidden_defaults = if hidden_defaults_str.is_empty() {
-        Vec::new()
-    } else {
-        hidden_defaults_str.split(',').map(String::from).collect()
-    };
-
-    Ok(UserPreferences {
-        email: email.to_string(),
-        hidden_defaults,
-    })
 }
 
 /// Update user preferences
@@ -56,27 +44,20 @@ pub async fn update_user_preferences(
     action: &str,
     endpoint_id: &str,
 ) -> Result<bool, StoreError> {
-    let mut conn = store.get_conn().await?;
-    let tx = conn.transaction().to_store_error()?;
+    let mut client = store.get_conn().await?;
+    let tx = client.transaction().await.to_store_error()?;
 
-    // Get current preferences
-    let exists: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM user_preferences WHERE email = ?)",
-            [email],
-            |row| row.get(0),
+    let row = tx
+        .query_opt(
+            "SELECT hidden_defaults FROM user_preferences WHERE email = $1",
+            &[&email],
         )
+        .await
         .to_store_error()?;
 
-    let hidden_defaults = if exists {
-        let hidden_defaults_str: String = tx
-            .query_row(
-                "SELECT hidden_defaults FROM user_preferences WHERE email = ?",
-                [email],
-                |row| row.get(0),
-            )
-            .to_store_error()?;
-
+    let exists = row.is_some();
+    let hidden_defaults = if let Some(r) = row {
+        let hidden_defaults_str: String = r.get(0);
         if hidden_defaults_str.is_empty() {
             Vec::new()
         } else {
@@ -89,7 +70,6 @@ pub async fn update_user_preferences(
         Vec::new()
     };
 
-    // Update the list based on action
     let mut updated_hidden_defaults = hidden_defaults.clone();
 
     match action {
@@ -106,25 +86,25 @@ pub async fn update_user_preferences(
         }
     }
 
-    // Convert back to comma-separated string
     let updated_hidden_defaults_str = updated_hidden_defaults.join(",");
 
-    // Insert or update preferences
     if exists {
         tx.execute(
-            "UPDATE user_preferences SET hidden_defaults = ? WHERE email = ?",
-            &[&updated_hidden_defaults_str, email],
+            "UPDATE user_preferences SET hidden_defaults = $1 WHERE email = $2",
+            &[&updated_hidden_defaults_str, &email],
         )
+        .await
         .to_store_error()?;
     } else {
         tx.execute(
-            "INSERT INTO user_preferences (email, hidden_defaults) VALUES (?, ?)",
-            &[email, &updated_hidden_defaults_str],
+            "INSERT INTO user_preferences (email, hidden_defaults) VALUES ($1, $2)",
+            &[&email, &updated_hidden_defaults_str],
         )
+        .await
         .to_store_error()?;
     }
 
-    tx.commit().to_store_error()?;
+    tx.commit().await.to_store_error()?;
     Ok(true)
 }
 
@@ -133,10 +113,13 @@ pub async fn reset_user_preferences(
     store: &EndpointStore,
     email: &str,
 ) -> Result<bool, StoreError> {
-    let conn = store.get_conn().await?;
+    let client = store.get_conn().await?;
 
-    conn.execute("DELETE FROM user_preferences WHERE email = ?", [email])
+    client
+        .execute("DELETE FROM user_preferences WHERE email = $1", &[&email])
+        .await
         .to_store_error()?;
 
     Ok(true)
 }
+

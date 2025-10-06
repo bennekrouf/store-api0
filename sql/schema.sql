@@ -1,34 +1,11 @@
--- Updated schema without is_default concept
-PRAGMA foreign_keys = ON;
+-- PostgreSQL Schema
 
 -- Keep user_preferences table for preferences and credit
 CREATE TABLE IF NOT EXISTS user_preferences (
     email VARCHAR NOT NULL,
     hidden_defaults TEXT NOT NULL DEFAULT '',
-    credit_balance INTEGER NOT NULL DEFAULT 0,
+    credit_balance BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (email)
-);
-
--- API usage logs table for detailed tracking
-CREATE TABLE IF NOT EXISTS api_usage_logs (
-    id VARCHAR NOT NULL,
-    key_id VARCHAR NOT NULL,
-    email VARCHAR NOT NULL,
-    endpoint_path VARCHAR NOT NULL,
-    method VARCHAR NOT NULL,
-    timestamp VARCHAR NOT NULL,
-    response_status INTEGER,
-    response_time_ms INTEGER,
-    request_size INTEGER,
-    response_size INTEGER,
-    ip_address VARCHAR,
-    user_agent VARCHAR,
-    usage_estimated BOOLEAN,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    total_tokens INTEGER,
-    model_used VARCHAR,
-    PRIMARY KEY (id),
 );
 
 -- API keys table
@@ -38,15 +15,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key_hash VARCHAR NOT NULL,
     key_prefix VARCHAR NOT NULL,
     key_name VARCHAR NOT NULL,
-    generated_at VARCHAR NOT NULL,
-    last_used VARCHAR,
-    usage_count INTEGER NOT NULL DEFAULT 0,
-    is_active VARCHAR NOT NULL DEFAULT true,
+    generated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    last_used TIMESTAMP WITH TIME ZONE,
+    usage_count BIGINT NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT true,
     PRIMARY KEY (id),
     FOREIGN KEY (email) REFERENCES user_preferences(email)
 );
 
--- API Groups table (no is_default column)
+-- API Groups table
 CREATE TABLE IF NOT EXISTS api_groups (
     id VARCHAR PRIMARY KEY,
     name VARCHAR NOT NULL,
@@ -54,7 +31,7 @@ CREATE TABLE IF NOT EXISTS api_groups (
     base VARCHAR NOT NULL DEFAULT ''
 );
 
--- Endpoints table with group reference (no is_default column)
+-- Endpoints table with group reference
 CREATE TABLE IF NOT EXISTS endpoints (
     id VARCHAR PRIMARY KEY,
     text VARCHAR NOT NULL,
@@ -87,7 +64,7 @@ CREATE TABLE IF NOT EXISTS parameters (
     endpoint_id VARCHAR,
     name VARCHAR NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
-    required VARCHAR NOT NULL DEFAULT false,
+    required BOOLEAN NOT NULL DEFAULT false,
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 
@@ -99,14 +76,14 @@ CREATE TABLE IF NOT EXISTS parameter_alternatives (
     FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
 );
 
-
+-- Domains table
 CREATE TABLE IF NOT EXISTS domains (
     id VARCHAR NOT NULL,
     email VARCHAR NOT NULL,
     domain VARCHAR NOT NULL,
     verified BOOLEAN NOT NULL DEFAULT false,
-    added_at VARCHAR NOT NULL,
-    last_used VARCHAR,
+    added_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    last_used TIMESTAMP WITH TIME ZONE,
     verification_token VARCHAR,
     PRIMARY KEY (id),
     UNIQUE(email, domain)
@@ -119,31 +96,28 @@ CREATE TABLE IF NOT EXISTS api_usage_logs (
     email VARCHAR NOT NULL,
     endpoint_path VARCHAR NOT NULL,
     method VARCHAR NOT NULL,
-    timestamp VARCHAR NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
     response_status INTEGER,
-    response_time_ms INTEGER,
-    request_size INTEGER,
-    response_size INTEGER,
+    response_time_ms BIGINT,
+    request_size BIGINT,
+    response_size BIGINT,
     ip_address VARCHAR,
     user_agent VARCHAR,
     usage_estimated BOOLEAN,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    total_tokens INTEGER,
+    input_tokens BIGINT,
+    output_tokens BIGINT,
+    total_tokens BIGINT,
     model_used VARCHAR,
-    metadata TEXT,
+    metadata JSONB,
     PRIMARY KEY (id),
     FOREIGN KEY (key_id) REFERENCES api_keys(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_domains_email ON domains(email);
-CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);
-
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
--- CREATE INDEX IF NOT EXISTS idx_usage_logs_key_id ON api_usage_logs(key_id);
--- CREATE INDEX IF NOT EXISTS idx_usage_logs_email ON api_usage_logs(email);
--- CREATE INDEX IF NOT EXISTS idx_usage_logs_timestamp ON api_usage_logs(timestamp);
-
-
+CREATE INDEX IF NOT EXISTS idx_domains_email ON domains(email);
+CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_timestamp ON api_usage_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_key_id ON api_usage_logs(key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_email ON api_usage_logs(email);
