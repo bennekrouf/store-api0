@@ -52,6 +52,17 @@ pub mod endpoint {
     tonic::include_proto!("endpoint");
 }
 
+fn ensure_database_url() {
+    if let Err(_) = dotenvy::dotenv() {
+        // .env file not found, that's okay
+    }
+
+    if std::env::var("DATABASE_URL").is_err() {
+        eprintln!("FATAL: DATABASE_URL environment variable is required");
+        std::process::exit(1);
+    }
+}
+
 fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
     // Try environment variable first
     if let Ok(config_path) = env::var("CONFIG_PATH") {
@@ -158,6 +169,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("INFO")))
         .init();
+
+    ensure_database_url();
 
     tracing::info!("Starting API Store service");
     tracing::info!("Executable path: {:?}", env::current_exe());
