@@ -56,10 +56,23 @@ impl EndpointStore {
 
         let client = store.get_conn().await?;
 
-        client
+        if let Err(e) = client
             .batch_execute(include_str!("../../sql/schema.sql"))
             .await
-            .map_err(|e| StoreError::Database(format!("Schema execution failed: {}", e)))?;
+        {
+            let error_str = e.to_string();
+            // Don't fail on notices about existing relations
+            if error_str.contains("already exists") || error_str.contains("NOTICE") {
+                tracing::info!("Schema execution completed with notices: {}", e);
+            } else {
+                return Err(StoreError::Database(format!(
+                    "Schema execution failed: {}",
+                    e
+                )));
+            }
+        } else {
+            tracing::info!("Schema executed successfully");
+        }
 
         store.initialize_system_domains().await?;
         Ok(store)
