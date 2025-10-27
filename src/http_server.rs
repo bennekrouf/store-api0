@@ -21,6 +21,8 @@ use crate::update_credit_balance_handler::update_credit_balance_handler;
 use crate::update_user_preferences::update_user_preferences;
 use crate::upload_api_config::upload_api_config;
 use crate::validate_api_key::validate_api_key;
+
+use crate::delete_endpoint::delete_endpoint;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpServer};
@@ -111,6 +113,10 @@ pub async fn start_http_server(
                             )
                             // Key validation and usage
                             .route("/key/validate", web::post().to(validate_api_key))
+                            .route(
+                                "/endpoints/{email}/{endpoint_id}",
+                                web::delete().to(delete_endpoint),
+                            )
                             .route(
                                 "/key/usage/{email}/{key_id}",
                                 web::get().to(get_api_key_usage),

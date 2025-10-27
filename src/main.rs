@@ -3,6 +3,7 @@ mod add_api_group;
 mod config;
 mod db_pool;
 mod delete_api_group;
+mod delete_endpoint;
 mod endpoint_store;
 mod formatter;
 mod generate_api_key;

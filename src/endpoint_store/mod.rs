@@ -9,6 +9,7 @@ mod get_api_groups_by_email;
 mod get_create_user_api_groups;
 mod manage_single_endpoint;
 use crate::endpoint_store::db_helpers::ResultExt;
+mod delete_user_endpoint;
 pub mod models;
 mod replace_user_api_groups;
 mod user_preferences;
@@ -139,6 +140,14 @@ impl EndpointStore {
         group_id: &str,
     ) -> Result<bool, StoreError> {
         delete_user_api_group::delete_user_api_group(self, email, group_id).await
+    }
+
+    pub async fn delete_user_endpoint(
+        &self,
+        email: &str,
+        endpoint_id: &str,
+    ) -> Result<bool, StoreError> {
+        delete_user_endpoint::delete_user_endpoint(self, email, endpoint_id).await
     }
 
     pub(crate) async fn force_clean_user_data(&self, email: &str) -> Result<(), StoreError> {
