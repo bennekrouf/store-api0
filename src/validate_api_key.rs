@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::sync::Arc;
 
 use crate::{
@@ -9,28 +9,46 @@ use crate::{
 // Handler for validating an API key
 pub async fn validate_api_key(
     store: web::Data<Arc<EndpointStore>>,
-    key_data: web::Json<ValidateKeyRequest>,
+    req: web::Json<ValidateKeyRequest>,
+    http_req: HttpRequest,
 ) -> impl Responder {
-    let api_key = &key_data.api_key;
-
-    tracing::info!("Received HTTP validate API key request");
-
-    match store.validate_api_key(api_key).await {
-        Ok(Some((key_id, email))) => {
-            // Record usage for this key
-            if let Err(e) = store.record_api_key_usage(&key_id).await {
-                tracing::warn!(
-                    error = %e,
-                    key_id = %key_id,
-                    "Failed to record API key usage but proceeding with validation"
-                );
+    // Try to get API key from request body first, then from Authorization header
+    let api_key = if !req.api_key.is_empty() {
+        req.api_key.clone()
+    } else if let Some(auth_header) = http_req.headers().get("authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str.starts_with("Bearer ") {
+                auth_str.strip_prefix("Bearer ").unwrap_or("").to_string()
+            } else {
+                auth_str.to_string()
             }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
 
+    if api_key.is_empty() {
+        tracing::warn!("No API key provided in request body or Authorization header");
+        return HttpResponse::BadRequest().json(ValidateKeyResponse {
+            valid: false,
+            email: None,
+            key_id: None,
+            message: "No API key provided".to_string(),
+        });
+    }
+
+    tracing::info!(api_key = %api_key, "Validating API key");
+
+    match store.validate_api_key(&api_key).await {
+        Ok(Some((email, key_id))) => {
             tracing::info!(
                 email = %email,
                 key_id = %key_id,
-                "Successfully validated API key"
+                "API key validation successful"
             );
+
             HttpResponse::Ok().json(ValidateKeyResponse {
                 valid: true,
                 email: Some(email),
@@ -39,24 +57,30 @@ pub async fn validate_api_key(
             })
         }
         Ok(None) => {
-            tracing::warn!("Invalid API key provided");
+            tracing::warn!(
+                api_key = %api_key,
+                "Invalid API key provided"
+            );
+
             HttpResponse::Ok().json(ValidateKeyResponse {
                 valid: false,
                 email: None,
                 key_id: None,
-                message: "API key is invalid".to_string(),
+                message: "Invalid API key".to_string(),
             })
         }
         Err(e) => {
             tracing::error!(
                 error = %e,
-                "Failed to validate API key"
+                api_key = %api_key,
+                "Database error during API key validation"
             );
+
             HttpResponse::InternalServerError().json(ValidateKeyResponse {
                 valid: false,
                 email: None,
                 key_id: None,
-                message: format!("Error validating API key: {}", e),
+                message: "Validation error".to_string(),
             })
         }
     }
