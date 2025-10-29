@@ -226,7 +226,7 @@ pub async fn validate_api_key(
         .await
         .to_store_error()?;
 
-    Ok(row.map(|r| (r.get(0), r.get(1))))
+    Ok(row.map(|r| (r.get(1), r.get(0))))
 }
 
 /// Get usage statistics for a specific API key
@@ -359,4 +359,3 @@ pub async fn generate_api_key(
 
     Ok((new_key, key_prefix, key_id))
 }
-
