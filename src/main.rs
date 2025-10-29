@@ -167,7 +167,7 @@ fn resolve_endpoints_config_path() -> Option<PathBuf> {
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging first
     Registry::default()
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().json())
         .with(EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("INFO")))
         .init();
 
