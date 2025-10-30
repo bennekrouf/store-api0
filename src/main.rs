@@ -61,121 +61,6 @@ macro_rules! app_log {
     };
 }
 
-fn ensure_database_url() {
-    if let Err(_) = dotenvy::dotenv() {
-        // .env file not found, that's okay
-    }
-
-    if std::env::var("DATABASE_URL").is_err() {
-        eprintln!("FATAL: DATABASE_URL environment variable is required");
-        std::process::exit(1);
-    }
-}
-
-fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
-    // Try environment variable first
-    if let Ok(config_path) = env::var("CONFIG_PATH") {
-        let path = PathBuf::from(&config_path);
-        if path.exists() {
-            app_log!(info, "Found config at CONFIG_PATH: {}", config_path);
-            return Ok(path);
-        } else {
-            return Err(
-                format!("CONFIG_PATH specified but file not found: {}", config_path).into(),
-            );
-        }
-    }
-
-    // Get the directory where the executable is located
-    let exe_path =
-        env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
-
-    let exe_dir = exe_path
-        .parent()
-        .ok_or("Failed to get executable directory")?;
-
-    // Try different possible locations relative to exe
-    let possible_paths = vec![
-        exe_dir.join("config.yaml"), // Same dir as exe
-        exe_dir.parent().unwrap_or(exe_dir).join("config.yaml"), // Parent dir
-        exe_dir.join("..").join("config.yaml"), // Explicit parent
-        PathBuf::from("/opt/api0/store/config.yaml"), // Absolute fallback
-        PathBuf::from("./config.yaml"), // Current working dir
-    ];
-
-    for path in possible_paths {
-        let canonical_path = path.canonicalize().unwrap_or(path.clone());
-        app_log!(debug, "Checking config path: {:?}", canonical_path);
-        if canonical_path.exists() {
-            app_log!(info, "Found config at: {:?}", canonical_path);
-            return Ok(canonical_path);
-        }
-    }
-
-    Err("config.yaml not found in any expected location. Please set CONFIG_PATH environment variable or place config.yaml in the executable directory.".into())
-}
-
-fn get_database_url() -> Result<String, Box<dyn Error + Send + Sync>> {
-    // Try environment variable first
-    if let Ok(db_url) = env::var("DATABASE_URL") {
-        app_log!(info, "Using DATABASE_URL from environment: {}", db_url);
-        return Ok(db_url);
-    }
-
-    // Fallback to default if DATABASE_URL not set
-    let default_url =
-        "postgresql://api_store_dev_user:strong_password_1@localhost:5433/api-store-dev";
-    app_log!(warn, "DATABASE_URL not set, using default: {}", default_url);
-    Ok(default_url.to_string())
-}
-
-fn resolve_endpoints_config_path() -> Option<PathBuf> {
-    // Try environment variable first
-    if let Ok(config_path) = env::var("ENDPOINTS_CONFIG_PATH") {
-        let path = PathBuf::from(&config_path);
-        if path.exists() {
-            app_log!(
-                info,
-                "Found endpoints config at ENDPOINTS_CONFIG_PATH: {}",
-                config_path
-            );
-            return Some(path);
-        } else {
-            app_log!(
-                warn,
-                "ENDPOINTS_CONFIG_PATH specified but file not found: {}",
-                config_path
-            );
-            return None;
-        }
-    }
-
-    // Get the directory where the executable is located
-    let exe_path = env::current_exe().ok()?;
-    let exe_dir = exe_path.parent()?;
-
-    // Try different possible locations
-    let possible_paths = vec![
-        exe_dir.join("endpoints.yaml"),
-        exe_dir.parent()?.join("endpoints.yaml"),
-        PathBuf::from("/opt/api0/endpoints.yaml"),
-        PathBuf::from("./endpoints.yaml"),
-    ];
-
-    for path in possible_paths {
-        if path.exists() {
-            app_log!(info, "Found endpoints config at: {:?}", path);
-            return Some(path);
-        }
-    }
-
-    app_log!(
-        info,
-        "No endpoints.yaml found, will use empty default configuration"
-    );
-    None
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging first
@@ -438,4 +323,122 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "Application shutting down");
     Ok(())
+}
+
+fn ensure_database_url() {
+    if let Err(_) = dotenvy::dotenv() {
+        // .env file not found, that's okay
+    }
+
+    if std::env::var("DATABASE_URL").is_err() {
+        app_log!(
+            error,
+            "FATAL: DATABASE_URL environment variable is required"
+        );
+        std::process::exit(1);
+    }
+}
+
+fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
+    // Try environment variable first
+    if let Ok(config_path) = env::var("CONFIG_PATH") {
+        let path = PathBuf::from(&config_path);
+        if path.exists() {
+            app_log!(info, "Found config at CONFIG_PATH: {}", config_path);
+            return Ok(path);
+        } else {
+            return Err(
+                format!("CONFIG_PATH specified but file not found: {}", config_path).into(),
+            );
+        }
+    }
+
+    // Get the directory where the executable is located
+    let exe_path =
+        env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("Failed to get executable directory")?;
+
+    // Try different possible locations relative to exe
+    let possible_paths = vec![
+        exe_dir.join("config.yaml"), // Same dir as exe
+        exe_dir.parent().unwrap_or(exe_dir).join("config.yaml"), // Parent dir
+        exe_dir.join("..").join("config.yaml"), // Explicit parent
+        PathBuf::from("/opt/api0/store/config.yaml"), // Absolute fallback
+        PathBuf::from("./config.yaml"), // Current working dir
+    ];
+
+    for path in possible_paths {
+        let canonical_path = path.canonicalize().unwrap_or(path.clone());
+        app_log!(debug, "Checking config path: {:?}", canonical_path);
+        if canonical_path.exists() {
+            app_log!(info, "Found config at: {:?}", canonical_path);
+            return Ok(canonical_path);
+        }
+    }
+
+    Err("config.yaml not found in any expected location. Please set CONFIG_PATH environment variable or place config.yaml in the executable directory.".into())
+}
+
+fn get_database_url() -> Result<String, Box<dyn Error + Send + Sync>> {
+    // Try environment variable first
+    if let Ok(db_url) = env::var("DATABASE_URL") {
+        app_log!(info, "Using DATABASE_URL from environment: {}", db_url);
+        return Ok(db_url);
+    }
+
+    // Fallback to default if DATABASE_URL not set
+    let default_url =
+        "postgresql://api_store_dev_user:strong_password_1@localhost:5433/api-store-dev";
+    app_log!(warn, "DATABASE_URL not set, using default: {}", default_url);
+    Ok(default_url.to_string())
+}
+
+fn resolve_endpoints_config_path() -> Option<PathBuf> {
+    // Try environment variable first
+    if let Ok(config_path) = env::var("ENDPOINTS_CONFIG_PATH") {
+        let path = PathBuf::from(&config_path);
+        if path.exists() {
+            app_log!(
+                info,
+                "Found endpoints config at ENDPOINTS_CONFIG_PATH: {}",
+                config_path
+            );
+            return Some(path);
+        } else {
+            app_log!(
+                warn,
+                "ENDPOINTS_CONFIG_PATH specified but file not found: {}",
+                config_path
+            );
+            return None;
+        }
+    }
+
+    // Get the directory where the executable is located
+    let exe_path = env::current_exe().ok()?;
+    let exe_dir = exe_path.parent()?;
+
+    // Try different possible locations
+    let possible_paths = vec![
+        exe_dir.join("endpoints.yaml"),
+        exe_dir.parent()?.join("endpoints.yaml"),
+        PathBuf::from("/opt/api0/endpoints.yaml"),
+        PathBuf::from("./endpoints.yaml"),
+    ];
+
+    for path in possible_paths {
+        if path.exists() {
+            app_log!(info, "Found endpoints config at: {:?}", path);
+            return Some(path);
+        }
+    }
+
+    app_log!(
+        info,
+        "No endpoints.yaml found, will use empty default configuration"
+    );
+    None
 }
