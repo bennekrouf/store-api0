@@ -1,10 +1,10 @@
+use crate::app_log;
 use crate::endpoint_store::{generate_id_from_text, ApiGroupWithEndpoints, ApiStorage};
 use crate::models::UploadRequest;
 use crate::{endpoint_store::EndpointStore, formatter::YamlFormatter, models::UploadResponse};
 use actix_web::{web, HttpResponse, Responder};
 use base64::{engine::general_purpose, Engine};
 use std::sync::Arc;
-
 /// Detect if content is base64 encoded or plain text
 fn is_base64_content(content: &str) -> bool {
     // Check if content looks like base64
@@ -87,7 +87,7 @@ pub async fn upload_api_config(
 ) -> impl Responder {
     let is_base64 = is_base64_content(&upload_data.file_content);
 
-    tracing::info!(
+    app_log!(info,
         email = %upload_data.email,
         filename = %upload_data.file_name,
         original_content_length = upload_data.file_content.len(),
@@ -98,7 +98,8 @@ pub async fn upload_api_config(
     // Decode content (base64 or plain text)
     let file_bytes = match decode_content(&upload_data.file_content) {
         Ok(bytes) => {
-            tracing::info!(
+            app_log!(
+                info,
                 decoded_size = bytes.len(),
                 format_detected = if is_base64 { "base64" } else { "plain_text" },
                 "Successfully processed file content"
@@ -106,7 +107,7 @@ pub async fn upload_api_config(
             bytes
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 content_sample = %upload_data.file_content.chars().take(100).collect::<String>(),
                 "Failed to process file content"
@@ -124,7 +125,7 @@ pub async fn upload_api_config(
     let file_content = match String::from_utf8(file_bytes.clone()) {
         Ok(content) => content,
         Err(e) => {
-            tracing::warn!(
+            app_log!(warn,
                 error = %e,
                 "File content is not valid UTF-8, attempting lossy conversion"
             );
@@ -139,7 +140,7 @@ pub async fn upload_api_config(
                 });
             }
 
-            tracing::info!("Using lossy UTF-8 conversion");
+            app_log!(info, "Using lossy UTF-8 conversion");
             lossy_content.to_string()
         }
     };
@@ -153,16 +154,16 @@ pub async fn upload_api_config(
             {
                 Ok(formatted) => match String::from_utf8(formatted) {
                     Ok(content) => {
-                        tracing::info!("Successfully formatted YAML content");
+                        app_log!(info, "Successfully formatted YAML content");
                         content
                     }
                     Err(_) => {
-                        tracing::warn!("Formatted content is not valid UTF-8, using original");
+                        app_log!(warn, "Formatted content is not valid UTF-8, using original");
                         file_content
                     }
                 },
                 Err(e) => {
-                    tracing::warn!(
+                    app_log!(warn,
                         error = %e,
                         "Failed to format YAML, proceeding with original content"
                     );
@@ -185,7 +186,7 @@ pub async fn upload_api_config(
             match serde_yaml::from_str::<ApiStorage>(&processed_content) {
                 Ok(storage) => storage,
                 Err(e) => {
-                    tracing::error!(
+                    app_log!(error,
                         error = %e,
                         content_preview = %processed_content.chars().take(200).collect::<String>(),
                         "Failed to parse YAML content"
@@ -202,7 +203,7 @@ pub async fn upload_api_config(
             match serde_json::from_str::<ApiStorage>(&processed_content) {
                 Ok(storage) => storage,
                 Err(e) => {
-                    tracing::error!(
+                    app_log!(error,
                         error = %e,
                         content_preview = %processed_content.chars().take(200).collect::<String>(),
                         "Failed to parse JSON content"
@@ -302,7 +303,7 @@ pub async fn upload_api_config(
         .await
     {
         Ok(endpoint_count) => {
-            tracing::info!(
+            app_log!(info,
                 email = %upload_data.email,
                 endpoint_count = endpoint_count,
                 group_count = group_count,
@@ -316,7 +317,7 @@ pub async fn upload_api_config(
             })
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %upload_data.email,
                 "Failed to import API groups"

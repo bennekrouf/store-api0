@@ -1,7 +1,7 @@
+use crate::app_log;
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
-use crate::endpoint_store::EndpointStore;
 // use actix_web::{web, HttpResponse, Responder};
 
 // Handler for revoking an API key
@@ -10,12 +10,12 @@ pub async fn revoke_api_key_handler(
     path_params: web::Path<(String, String)>,
 ) -> impl Responder {
     let (email, key_id) = path_params.into_inner();
-    tracing::info!(email = %email, "Received HTTP revoke API key request");
+    app_log!(info, email = %email, "Received HTTP revoke API key request");
 
     match store.revoke_api_key(&email, &key_id).await {
         Ok(revoked) => {
             if revoked {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     "Successfully revoked API key"
                 );
@@ -24,7 +24,7 @@ pub async fn revoke_api_key_handler(
                     "message": "API key revoked successfully",
                 }))
             } else {
-                tracing::warn!(
+                app_log!(warn,
                     email = %email,
                     "No API key found to revoke"
                 );
@@ -35,7 +35,7 @@ pub async fn revoke_api_key_handler(
             }
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to revoke API key"

@@ -1,9 +1,9 @@
 use crate::endpoint_store::EndpointStore;
 use crate::endpoint_store::GenerateKeyRequest;
 
+use crate::app_log;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
 // Handler for generating a new API key
 pub async fn generate_api_key(
     store: web::Data<Arc<EndpointStore>>,
@@ -12,7 +12,7 @@ pub async fn generate_api_key(
     let email = &request.email;
     let key_name = &request.key_name;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         key_name = %key_name,
         "Received HTTP generate API key request"
@@ -20,7 +20,7 @@ pub async fn generate_api_key(
 
     match store.generate_api_key(email, key_name).await {
         Ok((key, key_prefix, _)) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 key_prefix = %key_prefix,
                 "Successfully generated API key"
@@ -33,7 +33,7 @@ pub async fn generate_api_key(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to generate API key"

@@ -14,7 +14,7 @@ pub mod models;
 mod replace_user_api_groups;
 mod user_preferences;
 mod utils;
-
+use crate::app_log;
 pub use errors::*;
 pub use models::*;
 pub use utils::*;
@@ -47,7 +47,7 @@ impl EndpointStore {
     }
 
     pub async fn new(database_url: &str) -> Result<Self, StoreError> {
-        tracing::info!("Initializing EndpointStore with PostgreSQL");
+        app_log!(info, "Initializing EndpointStore with PostgreSQL");
 
         let pool = create_pg_pool(database_url)
             .map_err(|e| StoreError::Pool(format!("Failed to create connection pool: {:?}", e)))?;
@@ -63,7 +63,7 @@ impl EndpointStore {
             let error_str = e.to_string();
             // Don't fail on notices about existing relations
             if error_str.contains("already exists") || error_str.contains("NOTICE") {
-                tracing::info!("Schema execution completed with notices: {}", e);
+                app_log!(info, "Schema execution completed with notices: {}", e);
             } else {
                 return Err(StoreError::Database(format!(
                     "Schema execution failed: {}",
@@ -71,7 +71,7 @@ impl EndpointStore {
                 )));
             }
         } else {
-            tracing::info!("Schema executed successfully");
+            app_log!(info, "Schema executed successfully");
         }
 
         store.initialize_system_domains().await?;
@@ -198,9 +198,9 @@ impl EndpointStore {
         api_key_management::validate_api_key(self, key).await
     }
 
-    pub async fn record_api_key_usage(&self, key_id: &str) -> Result<(), StoreError> {
-        api_key_management::record_api_key_usage(self, key_id).await
-    }
+    // pub async fn record_api_key_usage(&self, key_id: &str) -> Result<(), StoreError> {
+    //     api_key_management::record_api_key_usage(self, key_id).await
+    // }
 
     pub async fn get_api_key_usage(&self, key_id: &str) -> Result<Option<ApiKeyInfo>, StoreError> {
         api_key_management::get_api_key_usage(self, key_id).await

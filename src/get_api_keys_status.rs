@@ -1,7 +1,7 @@
+use crate::app_log;
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
-use crate::endpoint_store::EndpointStore;
 
 // Handler for getting API key status
 pub async fn get_api_keys_status(
@@ -9,11 +9,11 @@ pub async fn get_api_keys_status(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get API keys status request");
+    app_log!(info, email = %email, "Received HTTP get API keys status request");
 
     match store.get_api_keys_status(&email).await {
         Ok(key_preference) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 has_keys = key_preference.has_keys,
                 key_count = key_preference.active_key_count,
@@ -25,7 +25,7 @@ pub async fn get_api_keys_status(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to retrieve API keys status"

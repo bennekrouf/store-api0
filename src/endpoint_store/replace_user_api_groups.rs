@@ -1,32 +1,32 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroupWithEndpoints, EndpointStore, StoreError,
 };
-
 /// Replaces all API groups and endpoints for a user
 pub async fn replace_user_api_groups(
     store: &EndpointStore,
     email: &str,
     api_groups: Vec<ApiGroupWithEndpoints>,
 ) -> Result<usize, StoreError> {
-    tracing::info!(email = %email, "Starting complete API group replacement");
+    app_log!(info, email = %email, "Starting complete API group replacement");
 
     // Clean up existing user data
     match store.force_clean_user_data(email).await {
         Ok(_) => {
-            tracing::info!(email = %email, "Successfully cleaned up user data");
+            app_log!(info, email = %email, "Successfully cleaned up user data");
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to clean up user data, will try fallback approach"
             );
 
             match store.fallback_clean_user_data(email).await {
-                Ok(_) => tracing::info!(email = %email, "Fallback cleanup successful"),
+                Ok(_) => app_log!(info, email = %email, "Fallback cleanup successful"),
                 Err(e) => {
-                    tracing::error!(
+                    app_log!(error,
                         error = %e,
                         email = %email,
                         "Fallback cleanup also failed, proceeding with import anyway"
@@ -58,7 +58,7 @@ pub async fn replace_user_api_groups(
             .to_store_error()?;
 
         if group_exists_row.is_none() {
-            tracing::debug!(group_id = %group_id, "Creating new API group");
+            app_log!(debug, group_id = %group_id, "Creating new API group");
             tx.execute(
                 "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
                 &[&group_id, &group.name, &group.description, &group.base],
@@ -66,7 +66,7 @@ pub async fn replace_user_api_groups(
             .await
             .to_store_error()?;
         } else {
-            tracing::debug!(group_id = %group_id, "Updating existing API group");
+            app_log!(debug, group_id = %group_id, "Updating existing API group");
             tx.execute(
                 "UPDATE api_groups SET name = $1, description = $2, base = $3 WHERE id = $4",
                 &[&group.name, &group.description, &group.base, &group_id],
@@ -97,7 +97,7 @@ pub async fn replace_user_api_groups(
                 .to_store_error()?;
 
             if endpoint_exists_row.is_none() {
-                tracing::debug!(endpoint_id = %endpoint_id, "Creating new endpoint");
+                app_log!(debug, endpoint_id = %endpoint_id, "Creating new endpoint");
                 tx.execute(
                     "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -114,7 +114,7 @@ pub async fn replace_user_api_groups(
                 .await
                 .to_store_error()?;
             } else {
-                tracing::debug!(endpoint_id = %endpoint_id, "Updating existing endpoint");
+                app_log!(debug, endpoint_id = %endpoint_id, "Updating existing endpoint");
                 tx.execute(
                     "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6 WHERE id = $7",
                     &[
@@ -181,7 +181,7 @@ pub async fn replace_user_api_groups(
         }
     }
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_count = api_groups.len(),
         endpoint_count = imported_count,
@@ -191,4 +191,3 @@ pub async fn replace_user_api_groups(
     tx.commit().await.to_store_error()?;
     Ok(imported_count)
 }
-

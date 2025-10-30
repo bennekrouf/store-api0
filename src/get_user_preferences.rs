@@ -1,5 +1,5 @@
+use crate::app_log;
 use crate::endpoint_store::EndpointStore;
-
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
@@ -9,11 +9,11 @@ pub async fn get_user_preferences(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get user preferences request");
+    app_log!(info, email = %email, "Received HTTP get user preferences request");
 
     match store.get_user_preferences(&email).await {
         Ok(preferences) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 hidden_count = preferences.hidden_defaults.len(),
                 "Successfully retrieved user preferences"
@@ -24,7 +24,7 @@ pub async fn get_user_preferences(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to retrieve user preferences"

@@ -1,8 +1,8 @@
 // src/get_api_usage_logs.rs
+use crate::app_log;
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
-use crate::endpoint_store::EndpointStore;
 
 /// Handler for getting detailed API usage logs with token information
 pub async fn get_api_usage_logs(
@@ -15,7 +15,7 @@ pub async fn get_api_usage_logs(
     // Extract limit from query parameters if provided
     let limit = query.get("limit").and_then(|l| l.parse::<i64>().ok());
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         key_id = %key_id,
         limit = limit,
@@ -24,7 +24,7 @@ pub async fn get_api_usage_logs(
 
     match store.get_api_usage_logs(&key_id, limit).await {
         Ok(logs) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 key_id = %key_id,
                 log_count = logs.len(),
@@ -37,7 +37,7 @@ pub async fn get_api_usage_logs(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 key_id = %key_id,

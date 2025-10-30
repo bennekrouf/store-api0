@@ -1,7 +1,7 @@
+use crate::app_log;
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
-use crate::endpoint_store::EndpointStore;
 // use actix_web::{web, HttpResponse, Responder};
 
 pub async fn get_api_key_usage(
@@ -9,11 +9,11 @@ pub async fn get_api_key_usage(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get API key usage request");
+    app_log!(info, email = %email, "Received HTTP get API key usage request");
 
     match store.get_api_key_usage(&email).await {
         Ok(usage) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 "Successfully retrieved API key usage"
             );
@@ -23,7 +23,7 @@ pub async fn get_api_key_usage(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to retrieve API key usage"

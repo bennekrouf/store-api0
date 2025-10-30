@@ -1,8 +1,8 @@
+use crate::app_log;
 use crate::{
     endpoint_store::{generate_id_from_text, EndpointStore},
     models::AddApiGroupRequest,
 };
-
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ pub async fn add_api_group(
     let email = &add_data.email;
     let mut api_group = add_data.api_group.clone();
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_name = %api_group.group.name,
         "Received HTTP add API group request"
@@ -59,7 +59,7 @@ pub async fn add_api_group(
     // Add the API group (don't replace existing ones)
     match store.add_user_api_group(email, &api_group).await {
         Ok(endpoint_count) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 group_id = %api_group.group.id,
                 endpoint_count = endpoint_count,
@@ -73,7 +73,7 @@ pub async fn add_api_group(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 group_id = %api_group.group.id,

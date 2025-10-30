@@ -1,10 +1,10 @@
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use std::sync::Arc;
-
+use crate::app_log;
 use crate::{
     endpoint_store::EndpointStore,
     models::{ValidateKeyRequest, ValidateKeyResponse},
 };
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use std::sync::Arc;
 
 // Handler for validating an API key
 pub async fn validate_api_key(
@@ -30,7 +30,10 @@ pub async fn validate_api_key(
     };
 
     if api_key.is_empty() {
-        tracing::warn!("No API key provided in request body or Authorization header");
+        app_log!(
+            warn,
+            "No API key provided in request body or Authorization header"
+        );
         return HttpResponse::BadRequest().json(ValidateKeyResponse {
             valid: false,
             email: None,
@@ -39,11 +42,11 @@ pub async fn validate_api_key(
         });
     }
 
-    tracing::info!(api_key = %api_key, "Validating API key");
+    app_log!(info, api_key = %api_key, "Validating API key");
 
     match store.validate_api_key(&api_key).await {
         Ok(Some((email, key_id))) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 key_id = %key_id,
                 "API key validation successful"
@@ -57,7 +60,7 @@ pub async fn validate_api_key(
             })
         }
         Ok(None) => {
-            tracing::warn!(
+            app_log!(warn,
                 api_key = %api_key,
                 "Invalid API key provided"
             );
@@ -70,7 +73,7 @@ pub async fn validate_api_key(
             })
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 api_key = %api_key,
                 "Database error during API key validation"

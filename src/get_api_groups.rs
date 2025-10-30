@@ -1,8 +1,8 @@
 use crate::endpoint_store::EndpointStore;
 
+use crate::app_log;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
 #[derive(serde::Serialize)]
 pub struct EnhancedApiGroupsResponse {
     pub success: bool,
@@ -18,12 +18,12 @@ pub async fn get_api_groups(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get API groups request");
+    app_log!(info, email = %email, "Received HTTP get API groups request");
 
     // Check if this is a new user by looking for existing API keys
     let (is_new_user, current_balance) = match store.get_api_keys_status(&email).await {
         Ok(status) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 has_keys = status.has_keys,
                 active_key_count = status.active_key_count,
@@ -33,7 +33,7 @@ pub async fn get_api_groups(
             (!status.has_keys, status.balance)
         }
         Err(e) => {
-            tracing::warn!(
+            app_log!(warn,
                 error = %e,
                 email = %email,
                 "Failed to check API key status, assuming new user"
@@ -42,7 +42,7 @@ pub async fn get_api_groups(
         }
     };
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         is_new_user = is_new_user,
         current_balance = current_balance,
@@ -59,11 +59,11 @@ pub async fn get_api_groups(
 
     // Add default credit for new users (without creating an API key)
     if is_new_user && current_balance == 0 {
-        tracing::info!(email = %email, "New user detected, adding $5 default credit");
+        app_log!(info, email = %email, "New user detected, adding $5 default credit");
 
         match store.update_credit_balance(&email, 500).await {
             Ok(new_balance) => {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     new_balance = new_balance,
                     "Added $5 default credit for new user"
@@ -72,7 +72,7 @@ pub async fn get_api_groups(
                 response.message = "Welcome! $5 credit has been added to your account. Create an API key to start using the service.".to_string();
             }
             Err(e) => {
-                tracing::error!(
+                app_log!(error,
                     error = %e,
                     email = %email,
                     "Failed to add default credit for new user"
@@ -86,7 +86,7 @@ pub async fn get_api_groups(
     // Get API groups with preferences applied
     match store.get_api_groups_with_preferences(&email).await {
         Ok(api_groups) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 group_count = api_groups.len(),
                 is_new_user = is_new_user,
@@ -98,7 +98,7 @@ pub async fn get_api_groups(
             HttpResponse::Ok().json(response)
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to retrieve API groups"

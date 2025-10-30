@@ -1,19 +1,19 @@
 use crate::endpoint_store::ApiGroupWithEndpoints;
 use serde::{Deserialize, Serialize};
 
-use crate::endpoint_store::Endpoint;
+// use crate::endpoint_store::Endpoint;
 // Request and Response models for API key validation
 #[derive(Debug, Deserialize)]
 pub struct ValidateKeyRequest {
     pub api_key: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ManageEndpointRequest {
-    pub email: String,
-    pub group_id: String,
-    pub endpoint: Endpoint,
-}
+// #[derive(Debug, Clone, Deserialize)]
+// pub struct ManageEndpointRequest {
+//     pub email: String,
+//     pub group_id: String,
+//     pub endpoint: Endpoint,
+// }
 
 #[derive(Debug, Serialize)]
 pub struct ValidateKeyResponse {
@@ -24,11 +24,11 @@ pub struct ValidateKeyResponse {
 }
 
 // Response model for API key usage
-#[derive(Debug, Serialize)]
-pub struct RecordUsageResponse {
-    pub success: bool,
-    pub message: String,
-}
+// #[derive(Debug, Serialize)]
+// pub struct RecordUsageResponse {
+//     pub success: bool,
+//     pub message: String,
+// }
 
 // Request and Response models
 #[derive(Debug, Clone, Deserialize)]
@@ -60,7 +60,7 @@ pub struct UpdateApiGroupRequest {
 }
 
 // Handler for recording API key usage
-#[derive(Debug, Deserialize)]
-pub struct RecordUsageRequest {
-    pub key_id: String,
-}
+// #[derive(Debug, Deserialize)]
+// pub struct RecordUsageRequest {
+//     pub key_id: String,
+// }

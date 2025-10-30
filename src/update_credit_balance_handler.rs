@@ -1,7 +1,7 @@
+use crate::app_log;
 use crate::endpoint_store::{EndpointStore, UpdateCreditRequest};
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
 pub async fn update_credit_balance_handler(
     store: web::Data<Arc<EndpointStore>>,
     request: web::Json<UpdateCreditRequest>,
@@ -9,7 +9,7 @@ pub async fn update_credit_balance_handler(
     let email = &request.email;
     let amount = request.amount;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         amount = amount,
         "Received HTTP update credit balance request"
@@ -17,7 +17,7 @@ pub async fn update_credit_balance_handler(
 
     match store.update_credit_balance(email, amount).await {
         Ok(new_balance) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 amount = amount,
                 new_balance = new_balance,
@@ -30,7 +30,7 @@ pub async fn update_credit_balance_handler(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 amount = amount,

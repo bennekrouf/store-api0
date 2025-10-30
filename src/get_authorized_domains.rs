@@ -1,7 +1,7 @@
+use crate::app_log;
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
-use crate::endpoint_store::EndpointStore;
 
 #[derive(serde::Serialize)]
 pub struct AuthorizedDomainsResponse {
@@ -11,11 +11,12 @@ pub struct AuthorizedDomainsResponse {
 
 /// Handler for getting all authorized domains (used by gateway for CORS)
 pub async fn get_authorized_domains(store: web::Data<Arc<EndpointStore>>) -> impl Responder {
-    tracing::info!("Received HTTP get authorized domains request");
+    app_log!(info, "Received HTTP get authorized domains request");
 
     match store.get_all_authorized_domains().await {
         Ok(domains) => {
-            tracing::info!(
+            app_log!(
+                info,
                 domain_count = domains.len(),
                 "Successfully retrieved authorized domains"
             );
@@ -25,7 +26,7 @@ pub async fn get_authorized_domains(store: web::Data<Arc<EndpointStore>>) -> imp
             })
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 "Failed to retrieve authorized domains"
             );

@@ -1,6 +1,6 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{ApiGroupWithEndpoints, EndpointStore, StoreError};
-
 /// Adds a single API group for a user
 pub async fn add_user_api_group(
     store: &EndpointStore,
@@ -13,7 +13,7 @@ pub async fn add_user_api_group(
     let group = &api_group.group;
     let group_id = &group.id;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         "Adding API group"
@@ -138,7 +138,7 @@ pub async fn add_user_api_group(
         endpoint_count += 1;
     }
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         endpoint_count = endpoint_count,
@@ -148,4 +148,3 @@ pub async fn add_user_api_group(
     tx.commit().await.to_store_error()?;
     Ok(endpoint_count)
 }
-

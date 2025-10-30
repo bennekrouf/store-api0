@@ -1,7 +1,7 @@
+use crate::app_log;
+use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
-use crate::endpoint_store::EndpointStore;
 
 // Handler for resetting user preferences
 pub async fn reset_user_preferences(
@@ -9,11 +9,11 @@ pub async fn reset_user_preferences(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP reset user preferences request");
+    app_log!(info, email = %email, "Received HTTP reset user preferences request");
 
     match store.reset_user_preferences(&email).await {
         Ok(_) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 "Successfully reset user preferences"
             );
@@ -23,7 +23,7 @@ pub async fn reset_user_preferences(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to reset user preferences"

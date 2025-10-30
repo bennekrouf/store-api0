@@ -1,7 +1,7 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::generate_id_from_text;
 use crate::endpoint_store::{ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, StoreError};
-
 /// Gets or creates API groups for a user
 pub async fn get_or_create_user_api_groups(
     store: &EndpointStore,
@@ -10,7 +10,7 @@ pub async fn get_or_create_user_api_groups(
     // Check if user already has API groups
     let existing_groups = store.get_api_groups_by_email(email).await?;
     if !existing_groups.is_empty() {
-        tracing::info!(
+        app_log!(info,
             email = %email,
             group_count = existing_groups.len(),
             "User already has API groups"
@@ -22,7 +22,7 @@ pub async fn get_or_create_user_api_groups(
     let mut client = store.get_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
-    tracing::info!(email = %email, "User has no API groups, creating a default one");
+    app_log!(info, email = %email, "User has no API groups, creating a default one");
 
     // Create a basic default group
     let default_group_id = generate_id_from_text("Default API");
@@ -98,11 +98,10 @@ pub async fn get_or_create_user_api_groups(
         endpoints: vec![sample_endpoint],
     };
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         "Created default API group for new user"
     );
 
     Ok(vec![default_api_group])
 }
-

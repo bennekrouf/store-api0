@@ -1,7 +1,7 @@
+use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
 /// Handler for deleting a single endpoint
 pub async fn delete_endpoint(
     store: web::Data<Arc<EndpointStore>>,
@@ -9,7 +9,7 @@ pub async fn delete_endpoint(
 ) -> impl Responder {
     let (email, endpoint_id) = path_params.into_inner();
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         endpoint_id = %endpoint_id,
         "Received HTTP delete endpoint request"
@@ -18,7 +18,7 @@ pub async fn delete_endpoint(
     match store.delete_user_endpoint(&email, &endpoint_id).await {
         Ok(deleted) => {
             if deleted {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     endpoint_id = %endpoint_id,
                     "Successfully deleted endpoint"
@@ -28,7 +28,7 @@ pub async fn delete_endpoint(
                     "message": "Endpoint successfully deleted"
                 }))
             } else {
-                tracing::warn!(
+                app_log!(warn,
                     email = %email,
                     endpoint_id = %endpoint_id,
                     "Endpoint not found or not deletable"
@@ -40,7 +40,7 @@ pub async fn delete_endpoint(
             }
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 endpoint_id = %endpoint_id,

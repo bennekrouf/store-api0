@@ -1,6 +1,6 @@
+use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use crate::endpoint_store::UpdatePreferenceRequest;
-
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ pub async fn update_user_preferences(
     let action = &update_data.action;
     let endpoint_id = &update_data.endpoint_id;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         action = %action,
         endpoint_id = %endpoint_id,
@@ -25,7 +25,7 @@ pub async fn update_user_preferences(
         .await
     {
         Ok(_) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 action = %action,
                 endpoint_id = %endpoint_id,
@@ -37,7 +37,7 @@ pub async fn update_user_preferences(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to update user preferences"

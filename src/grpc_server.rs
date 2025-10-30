@@ -1,5 +1,5 @@
+use crate::app_log;
 use crate::endpoint::endpoint_service_server::EndpointService;
-
 use crate::endpoint::{
     ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
     GetApiGroupsResponse, GetUserPreferencesRequest, GetUserPreferencesResponse,
@@ -42,7 +42,7 @@ impl EndpointService for EndpointServiceImpl {
         request: Request<GetApiGroupsRequest>,
     ) -> Result<Response<Self::GetApiGroupsStream>, Status> {
         let email = request.into_inner().email;
-        tracing::info!(email = %email, "Received get_api_groups request");
+        app_log!(info, email = %email, "Received get_api_groups request");
 
         // Clone necessary data for the stream
         let store = self.store.clone();
@@ -53,7 +53,7 @@ impl EndpointService for EndpointServiceImpl {
             let api_groups = match store.get_or_create_user_api_groups(&email).await {
                 Ok(groups) => groups,
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to get API groups from store");
+                    app_log!(error, error = %e, "Failed to get API groups from store");
                     // Yield an empty response instead of returning an error
                     yield GetApiGroupsResponse { api_groups: vec![] };
                     return;
@@ -63,13 +63,13 @@ impl EndpointService for EndpointServiceImpl {
             const BATCH_SIZE: usize = 5; // Process 5 groups at a time
             let mut current_batch = Vec::with_capacity(BATCH_SIZE);
 
-            tracing::info!("Starting API group transformation and streaming");
+            app_log!(info, "Starting API group transformation and streaming");
 
             for api_group_with_endpoints in api_groups {
                 let group = api_group_with_endpoints.group;
                 let endpoints = api_group_with_endpoints.endpoints;
 
-                tracing::debug!(
+                app_log!(debug,
                     group_id = %group.id,
                     group_name = %group.name,
                     endpoint_count = endpoints.len(),
@@ -112,7 +112,7 @@ impl EndpointService for EndpointServiceImpl {
 
                 // When batch is full, yield it
                 if current_batch.len() >= BATCH_SIZE {
-                    tracing::info!(
+                    app_log!(info,
                         batch_size = current_batch.len(),
                         "Sending batch of API groups"
                     );
@@ -125,7 +125,7 @@ impl EndpointService for EndpointServiceImpl {
 
             // Send any remaining API groups
             if !current_batch.is_empty() {
-                tracing::info!(
+                app_log!(info,
                     batch_size = current_batch.len(),
                     "Sending final batch of API groups"
                 );
@@ -135,7 +135,7 @@ impl EndpointService for EndpointServiceImpl {
                 };
             }
 
-            tracing::info!("Finished streaming all API groups");
+            app_log!(info, "Finished streaming all API groups");
         };
 
         Ok(Response::new(Box::pin(stream)))
@@ -150,7 +150,7 @@ impl EndpointService for EndpointServiceImpl {
         let file_content = req.file_content.clone();
         let file_name = req.file_name.clone();
 
-        tracing::info!(
+        app_log!(info,
             email = %email,
             filename = %req.file_name,
             "Processing API group upload request"
@@ -161,7 +161,7 @@ impl EndpointService for EndpointServiceImpl {
             match self.formatter.format_yaml(&file_content, &file_name).await {
                 Ok(formatted) => formatted,
                 Err(e) => {
-                    tracing::warn!(
+                    app_log!(warn,
                         error = %e,
                         email = %email,
                         "Failed to format YAML, proceeding with original content"
@@ -177,7 +177,7 @@ impl EndpointService for EndpointServiceImpl {
         let file_content = match String::from_utf8(file_content) {
             Ok(content) => content,
             Err(e) => {
-                tracing::error!(error = %e, "Invalid file content: not UTF-8");
+                app_log!(error, error = %e, "Invalid file content: not UTF-8");
                 return Err(Status::invalid_argument(format!(
                     "Invalid file content: {}",
                     e
@@ -192,7 +192,7 @@ impl EndpointService for EndpointServiceImpl {
             match serde_yaml::from_str::<ApiStorage>(&file_content) {
                 Ok(storage) => storage,
                 Err(e) => {
-                    tracing::error!(
+                    app_log!(error,
                         error = %e,
                         email = %email,
                         "Failed to parse YAML content"
@@ -208,7 +208,7 @@ impl EndpointService for EndpointServiceImpl {
             match serde_json::from_str::<ApiStorage>(&file_content) {
                 Ok(storage) => storage,
                 Err(e) => {
-                    tracing::error!(
+                    app_log!(error,
                         error = %e,
                         email = %email,
                         "Failed to parse JSON content"
@@ -220,7 +220,7 @@ impl EndpointService for EndpointServiceImpl {
                 }
             }
         } else {
-            tracing::error!(
+            app_log!(error,
                 email = %email,
                 filename = %req.file_name,
                 "Unsupported file format"
@@ -232,7 +232,7 @@ impl EndpointService for EndpointServiceImpl {
 
         // Validate API groups
         if api_storage.api_groups.is_empty() {
-            tracing::warn!(
+            app_log!(warn,
                 email = %email,
                 "No API groups found in uploaded file"
             );
@@ -291,7 +291,7 @@ impl EndpointService for EndpointServiceImpl {
             Ok(endpoint_count) => {
                 //let group_count = api_storage.api_groups.len();
 
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     group_count = group_count,
                     endpoint_count = endpoint_count,
@@ -306,7 +306,7 @@ impl EndpointService for EndpointServiceImpl {
                 }))
             }
             Err(e) => {
-                tracing::error!(
+                app_log!(error,
                     error = %e,
                     email = %email,
                     "Failed to import API groups"
@@ -326,11 +326,11 @@ impl EndpointService for EndpointServiceImpl {
         request: Request<GetUserPreferencesRequest>,
     ) -> Result<Response<GetUserPreferencesResponse>, Status> {
         let email = request.into_inner().email;
-        tracing::info!(email = %email, "Received get_user_preferences gRPC request");
+        app_log!(info, email = %email, "Received get_user_preferences gRPC request");
 
         match self.store.get_user_preferences(&email).await {
             Ok(prefs) => {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     hidden_count = prefs.hidden_defaults.len(),
                     "Successfully retrieved user preferences"
@@ -349,7 +349,7 @@ impl EndpointService for EndpointServiceImpl {
                 }))
             }
             Err(e) => {
-                tracing::error!(
+                app_log!(error,
                     error = %e,
                     email = %email,
                     "Failed to retrieve user preferences"
@@ -373,7 +373,7 @@ impl EndpointService for EndpointServiceImpl {
         let action = req.action;
         let endpoint_id = req.endpoint_id;
 
-        tracing::info!(
+        app_log!(info,
             email = %email,
             action = %action,
             endpoint_id = %endpoint_id,
@@ -386,7 +386,7 @@ impl EndpointService for EndpointServiceImpl {
             .await
         {
             Ok(_) => {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     action = %action,
                     endpoint_id = %endpoint_id,
@@ -399,7 +399,7 @@ impl EndpointService for EndpointServiceImpl {
                 }))
             }
             Err(e) => {
-                tracing::error!(
+                app_log!(error,
                     error = %e,
                     email = %email,
                     "Failed to update user preferences"
@@ -419,14 +419,14 @@ impl EndpointService for EndpointServiceImpl {
     ) -> Result<Response<ResetUserPreferencesResponse>, Status> {
         let email = request.into_inner().email;
 
-        tracing::info!(
+        app_log!(info,
             email = %email,
             "Received reset_user_preferences gRPC request"
         );
 
         match self.store.reset_user_preferences(&email).await {
             Ok(_) => {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     "Successfully reset user preferences"
                 );
@@ -437,7 +437,7 @@ impl EndpointService for EndpointServiceImpl {
                 }))
             }
             Err(e) => {
-                tracing::error!(
+                app_log!(error,
                     error = %e,
                     email = %email,
                     "Failed to reset user preferences"

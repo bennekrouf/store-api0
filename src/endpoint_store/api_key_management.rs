@@ -1,3 +1,4 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::models::{ApiKeyInfo, KeyPreference};
 use crate::endpoint_store::{EndpointStore, StoreError};
@@ -6,7 +7,6 @@ use chrono::Utc;
 use rand::{rng, Rng};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-
 /// Generate a secure API key with the prefix "sk_live_"
 pub fn generate_secure_key() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -55,7 +55,7 @@ pub async fn get_api_keys_status(
 ) -> Result<KeyPreference, StoreError> {
     let client = store.get_conn().await?;
 
-    tracing::debug!(email = %email, "Checking API keys status");
+    app_log!(debug, email = %email, "Checking API keys status");
 
     let user_exists_row = client
         .query_opt("SELECT 1 FROM user_preferences WHERE email = $1", &[&email])
@@ -64,10 +64,10 @@ pub async fn get_api_keys_status(
 
     let user_exists = user_exists_row.is_some();
 
-    tracing::debug!(email = %email, user_exists = user_exists, "User exists in preferences");
+    app_log!(debug, email = %email, user_exists = user_exists, "User exists in preferences");
 
     if !user_exists {
-        tracing::info!(email = %email, "Creating new user in preferences table");
+        app_log!(info, email = %email, "Creating new user in preferences table");
         client
             .execute(
                 "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES ($1, '', 0)",
@@ -86,7 +86,7 @@ pub async fn get_api_keys_status(
         .to_store_error()?;
     let balance: i64 = balance_row.get(0);
 
-    tracing::debug!(email = %email, balance = balance, "Retrieved credit balance");
+    app_log!(debug, email = %email, balance = balance, "Retrieved credit balance");
 
     let key_count_row = client
         .query_one(
@@ -97,10 +97,10 @@ pub async fn get_api_keys_status(
         .to_store_error()?;
     let key_count: i64 = key_count_row.get(0);
 
-    tracing::debug!(email = %email, active_key_count = key_count, "Found active API keys");
+    app_log!(debug, email = %email, active_key_count = key_count, "Found active API keys");
 
     if key_count == 0 {
-        tracing::info!(email = %email, "No active API keys found - user is considered new");
+        app_log!(info, email = %email, "No active API keys found - user is considered new");
         return Ok(KeyPreference {
             has_keys: false,
             active_key_count: 0,
@@ -109,7 +109,7 @@ pub async fn get_api_keys_status(
         });
     }
 
-    tracing::info!(email = %email, key_count = key_count, "User has active API keys");
+    app_log!(info, email = %email, key_count = key_count, "User has active API keys");
 
     let rows = client
         .query(
@@ -135,7 +135,7 @@ pub async fn get_api_keys_status(
         });
     }
 
-    tracing::debug!(email = %email, keys_found = keys.len(), "Retrieved API key details");
+    app_log!(debug, email = %email, keys_found = keys.len(), "Retrieved API key details");
 
     Ok(KeyPreference {
         has_keys: true,
@@ -192,23 +192,23 @@ pub async fn revoke_all_api_keys(store: &EndpointStore, email: &str) -> Result<u
 }
 
 /// Record API key usage
-pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result<(), StoreError> {
-    let client = store.get_conn().await?;
-    let now = Utc::now();
-
-    client
-        .execute(
-            "UPDATE api_keys SET 
-             last_used = $1, 
-             usage_count = usage_count + 1 
-             WHERE id = $2 AND is_active = true",
-            &[&now, &key_id],
-        )
-        .await
-        .to_store_error()?;
-
-    Ok(())
-}
+// pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result<(), StoreError> {
+//     let client = store.get_conn().await?;
+//     let now = Utc::now();
+//
+//     client
+//         .execute(
+//             "UPDATE api_keys SET
+//              last_used = $1,
+//              usage_count = usage_count + 1
+//              WHERE id = $2 AND is_active = true",
+//             &[&now, &key_id],
+//         )
+//         .await
+//         .to_store_error()?;
+//
+//     Ok(())
+// }
 
 /// Validate an API key and return the key_id and email if valid
 pub async fn validate_api_key(

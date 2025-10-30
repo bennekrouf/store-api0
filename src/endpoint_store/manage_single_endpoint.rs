@@ -1,6 +1,6 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{Endpoint, EndpointStore, StoreError};
-
 /// Manages (adds or updates) a single endpoint
 pub async fn manage_single_endpoint(
     store: &EndpointStore,
@@ -13,7 +13,7 @@ pub async fn manage_single_endpoint(
     let endpoint_id = &endpoint.id;
     let group_id = &endpoint.group_id;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         endpoint_id = %endpoint_id,
         group_id = %group_id,
@@ -134,7 +134,7 @@ pub async fn manage_single_endpoint(
 
     tx.commit().await.to_store_error()?;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         endpoint_id = %endpoint.id,
         operation = %operation_type,
@@ -143,4 +143,3 @@ pub async fn manage_single_endpoint(
 
     Ok(operation_type.to_string())
 }
-

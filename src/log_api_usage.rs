@@ -2,8 +2,8 @@
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
+use crate::app_log;
 use crate::endpoint_store::{EndpointStore, LogApiUsageRequest, LogApiUsageResponse};
-
 /// Handler for logging detailed API usage with token information
 pub async fn log_api_usage(
     store: web::Data<Arc<EndpointStore>>,
@@ -11,7 +11,7 @@ pub async fn log_api_usage(
 ) -> impl Responder {
     let log_request = request.into_inner();
 
-    tracing::info!(
+    app_log!(info,
         key_id = %log_request.key_id,
         email = %log_request.email,
         endpoint = %log_request.endpoint_path,
@@ -24,7 +24,7 @@ pub async fn log_api_usage(
 
     match store.log_api_usage(&log_request).await {
         Ok(log_id) => {
-            tracing::info!(
+            app_log!(info,
                 key_id = %log_request.key_id,
                 log_id = %log_id,
                 total_tokens = log_request.usage.as_ref().map(|u| u.total_tokens),
@@ -37,7 +37,7 @@ pub async fn log_api_usage(
             })
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 key_id = %log_request.key_id,
                 "Failed to log API usage"

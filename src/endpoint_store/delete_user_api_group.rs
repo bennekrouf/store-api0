@@ -1,6 +1,6 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{EndpointStore, StoreError};
-
 /// Deletes an API group and all its endpoints for a user
 pub async fn delete_user_api_group(
     store: &EndpointStore,
@@ -10,7 +10,7 @@ pub async fn delete_user_api_group(
     let mut client = store.get_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         "Deleting API group"
@@ -98,7 +98,7 @@ pub async fn delete_user_api_group(
             .to_store_error()?;
     }
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         endpoint_count = endpoint_ids.len(),

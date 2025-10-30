@@ -1,8 +1,8 @@
+use crate::app_log;
 use crate::endpoint_store::{generate_id_from_text, Endpoint, EndpointStore};
 use actix_web::{web, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManageEndpointRequest {
     pub email: String,
@@ -19,7 +19,7 @@ pub async fn manage_endpoint(
     let mut endpoint = request.endpoint.clone();
     let group_id = &request.group_id;
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         endpoint_text = %endpoint.text,
@@ -60,7 +60,7 @@ pub async fn manage_endpoint(
 
     match store.manage_single_endpoint(email, &endpoint).await {
         Ok(operation_type) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 endpoint_id = %endpoint.id,
                 operation = %operation_type,
@@ -74,7 +74,7 @@ pub async fn manage_endpoint(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 endpoint_id = %endpoint.id,

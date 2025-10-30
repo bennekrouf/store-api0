@@ -1,5 +1,7 @@
 use crate::add_api_group::add_api_group;
+use crate::app_log;
 use crate::delete_api_group::delete_api_group;
+use crate::delete_endpoint::delete_endpoint;
 use crate::endpoint_store::EndpointStore;
 use crate::formatter::YamlFormatter;
 use crate::generate_api_key::generate_api_key;
@@ -21,8 +23,6 @@ use crate::update_credit_balance_handler::update_credit_balance_handler;
 use crate::update_user_preferences::update_user_preferences;
 use crate::upload_api_config::upload_api_config;
 use crate::validate_api_key::validate_api_key;
-
-use crate::delete_endpoint::delete_endpoint;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpServer};
@@ -47,7 +47,7 @@ pub async fn start_http_server(
     let _ = task::spawn_blocking(move || {
         let sys = actix_web::rt::System::new();
         sys.block_on(async move {
-            tracing::info!("Starting HTTP server at {}", addr);
+            app_log!(info, "Starting HTTP server at {}", addr);
 
             HttpServer::new(move || {
                 // Configure CORS

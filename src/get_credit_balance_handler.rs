@@ -1,5 +1,5 @@
+use crate::app_log;
 use crate::endpoint_store::EndpointStore;
-
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
@@ -9,11 +9,11 @@ pub async fn get_credit_balance_handler(
     email: web::Path<String>,
 ) -> impl Responder {
     let email = email.into_inner();
-    tracing::info!(email = %email, "Received HTTP get credit balance request");
+    app_log!(info, email = %email, "Received HTTP get credit balance request");
 
     match store.get_credit_balance(&email).await {
         Ok(balance) => {
-            tracing::info!(
+            app_log!(info,
                 email = %email,
                 balance = balance,
                 "Successfully retrieved credit balance"
@@ -25,7 +25,7 @@ pub async fn get_credit_balance_handler(
             }))
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 "Failed to retrieve credit balance"

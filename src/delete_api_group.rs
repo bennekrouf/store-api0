@@ -1,7 +1,7 @@
+use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
 // Handler for deleting an API group
 pub async fn delete_api_group(
     store: web::Data<Arc<EndpointStore>>,
@@ -9,7 +9,7 @@ pub async fn delete_api_group(
 ) -> impl Responder {
     let (email, group_id) = path_params.into_inner();
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         "Received HTTP delete API group request"
@@ -18,7 +18,7 @@ pub async fn delete_api_group(
     match store.delete_user_api_group(&email, &group_id).await {
         Ok(deleted) => {
             if deleted {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     group_id = %group_id,
                     "Successfully deleted API group"
@@ -28,7 +28,7 @@ pub async fn delete_api_group(
                     "message": "API group and its endpoints successfully deleted"
                 }))
             } else {
-                tracing::warn!(
+                app_log!(warn,
                     email = %email,
                     group_id = %group_id,
                     "API group not found or not deletable"
@@ -40,7 +40,7 @@ pub async fn delete_api_group(
             }
         }
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 group_id = %group_id,

@@ -1,21 +1,21 @@
+use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     ApiGroup, ApiGroupWithEndpoints, Endpoint, EndpointStore, Parameter, StoreError,
 };
 use std::collections::HashMap;
-
 /// Gets all API groups and endpoints for a user
 pub async fn get_api_groups_by_email(
     store: &EndpointStore,
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-    tracing::info!(email = %email, "Starting to fetch API groups and endpoints");
+    app_log!(info, email = %email, "Starting to fetch API groups and endpoints");
     let client = store.get_conn().await?;
 
-    tracing::info!(email = %email, "Fetching custom groups and endpoints");
+    app_log!(info, email = %email, "Fetching custom groups and endpoints");
     let result = fetch_custom_groups_with_endpoints(&client, email).await?;
 
-    tracing::info!(
+    app_log!(info,
         group_count = result.len(),
         email = %email,
         "Successfully fetched API groups and endpoints"
@@ -29,7 +29,7 @@ async fn fetch_custom_groups_with_endpoints(
     client: &deadpool_postgres::Object,
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-    tracing::debug!(email = %email, "Fetching custom groups and endpoints");
+    app_log!(debug, email = %email, "Fetching custom groups and endpoints");
 
     let groups_query = r#"
         SELECT g.id, g.name, g.description, g.base
@@ -55,7 +55,7 @@ async fn fetch_custom_groups_with_endpoints(
 
         let endpoints = fetch_custom_endpoints(client, email, &group.id).await?;
 
-        tracing::debug!(
+        app_log!(debug,
             group_id = %group.id,
             endpoint_count = endpoints.len(),
             "Added endpoints to custom group"
@@ -88,7 +88,7 @@ async fn fetch_custom_endpoints(
             p.name, p.description, p.required
     "#;
 
-    tracing::debug!(
+    app_log!(debug,
         email = %email,
         group_id = %group_id,
         "Fetching custom endpoints"
@@ -114,7 +114,7 @@ async fn fetch_custom_endpoints(
         let alternatives_str: Option<String> = row.get(9);
 
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
-            tracing::debug!(
+            app_log!(debug,
                 endpoint_id = %id,
                 endpoint_text = %text,
                 "Creating custom endpoint object"
@@ -154,7 +154,7 @@ async fn fetch_custom_endpoints(
 
     let result: Vec<Endpoint> = endpoints_map.into_values().collect();
 
-    tracing::debug!(
+    app_log!(debug,
         group_id = %group_id,
         endpoint_count = result.len(),
         "Successfully retrieved custom endpoints for group"
@@ -162,4 +162,3 @@ async fn fetch_custom_endpoints(
 
     Ok(result)
 }
-

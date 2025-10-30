@@ -3,9 +3,9 @@ use crate::{
     models::UpdateApiGroupRequest,
 };
 
+use crate::app_log;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
-
 // Handler for updating an API group
 pub async fn update_api_group(
     store: web::Data<Arc<EndpointStore>>,
@@ -15,7 +15,7 @@ pub async fn update_api_group(
     let group_id = &update_data.group_id;
     let mut api_group = update_data.api_group.clone();
 
-    tracing::info!(
+    app_log!(info,
         email = %email,
         group_id = %group_id,
         "Received HTTP update API group request"
@@ -49,7 +49,7 @@ pub async fn update_api_group(
     match store.delete_user_api_group(email, group_id).await {
         Ok(_) => match store.add_user_api_group(email, &api_group).await {
             Ok(endpoint_count) => {
-                tracing::info!(
+                app_log!(info,
                     email = %email,
                     group_id = %group_id,
                     endpoint_count = endpoint_count,
@@ -63,7 +63,7 @@ pub async fn update_api_group(
                 }))
             }
             Err(e) => {
-                tracing::error!(
+                app_log!(error,
                     error = %e,
                     email = %email,
                     group_id = %group_id,
@@ -76,7 +76,7 @@ pub async fn update_api_group(
             }
         },
         Err(e) => {
-            tracing::error!(
+            app_log!(error,
                 error = %e,
                 email = %email,
                 group_id = %group_id,

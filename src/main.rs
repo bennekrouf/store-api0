@@ -47,10 +47,18 @@ use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry};
+use tracing_subscriber::{fmt, EnvFilter};
 
+use std::fs::OpenOptions;
 pub mod endpoint {
     tonic::include_proto!("endpoint");
+}
+
+#[macro_export]
+macro_rules! app_log {
+    ($level:ident, $($arg:tt)*) => {
+        tracing::$level!(service = "api0", component = "store", $($arg)*)
+    };
 }
 
 fn ensure_database_url() {
@@ -69,7 +77,7 @@ fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
     if let Ok(config_path) = env::var("CONFIG_PATH") {
         let path = PathBuf::from(&config_path);
         if path.exists() {
-            tracing::info!("Found config at CONFIG_PATH: {}", config_path);
+            app_log!(info, "Found config at CONFIG_PATH: {}", config_path);
             return Ok(path);
         } else {
             return Err(
@@ -97,9 +105,9 @@ fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
 
     for path in possible_paths {
         let canonical_path = path.canonicalize().unwrap_or(path.clone());
-        tracing::debug!("Checking config path: {:?}", canonical_path);
+        app_log!(debug, "Checking config path: {:?}", canonical_path);
         if canonical_path.exists() {
-            tracing::info!("Found config at: {:?}", canonical_path);
+            app_log!(info, "Found config at: {:?}", canonical_path);
             return Ok(canonical_path);
         }
     }
@@ -110,14 +118,14 @@ fn resolve_config_path() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
 fn get_database_url() -> Result<String, Box<dyn Error + Send + Sync>> {
     // Try environment variable first
     if let Ok(db_url) = env::var("DATABASE_URL") {
-        tracing::info!("Using DATABASE_URL from environment: {}", db_url);
+        app_log!(info, "Using DATABASE_URL from environment: {}", db_url);
         return Ok(db_url);
     }
 
     // Fallback to default if DATABASE_URL not set
     let default_url =
         "postgresql://api_store_dev_user:strong_password_1@localhost:5433/api-store-dev";
-    tracing::warn!("DATABASE_URL not set, using default: {}", default_url);
+    app_log!(warn, "DATABASE_URL not set, using default: {}", default_url);
     Ok(default_url.to_string())
 }
 
@@ -126,13 +134,15 @@ fn resolve_endpoints_config_path() -> Option<PathBuf> {
     if let Ok(config_path) = env::var("ENDPOINTS_CONFIG_PATH") {
         let path = PathBuf::from(&config_path);
         if path.exists() {
-            tracing::info!(
+            app_log!(
+                info,
                 "Found endpoints config at ENDPOINTS_CONFIG_PATH: {}",
                 config_path
             );
             return Some(path);
         } else {
-            tracing::warn!(
+            app_log!(
+                warn,
                 "ENDPOINTS_CONFIG_PATH specified but file not found: {}",
                 config_path
             );
@@ -154,59 +164,79 @@ fn resolve_endpoints_config_path() -> Option<PathBuf> {
 
     for path in possible_paths {
         if path.exists() {
-            tracing::info!("Found endpoints config at: {:?}", path);
+            app_log!(info, "Found endpoints config at: {:?}", path);
             return Some(path);
         }
     }
 
-    tracing::info!("No endpoints.yaml found, will use empty default configuration");
+    app_log!(
+        info,
+        "No endpoints.yaml found, will use empty default configuration"
+    );
     None
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging first
-    Registry::default()
-        .with(tracing_subscriber::fmt::layer().json())
-        .with(EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("INFO")))
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true) // Clear file on startup
+        .open("/tmp/api0.log")
+        .expect("Failed to open log file");
+
+    tracing_subscriber::registry()
+        .with(
+            fmt::layer()
+                .json()
+                .with_writer(file)
+                .with_current_span(false)
+                .with_span_list(false),
+        )
+        .with(
+            EnvFilter::from_default_env()
+                .add_directive("trace".parse().expect("Invalid log directive")),
+        )
         .init();
 
     ensure_database_url();
 
-    tracing::info!("Starting API Store service");
-    tracing::info!("Executable path: {:?}", env::current_exe());
-    tracing::info!("Working directory: {:?}", env::current_dir());
+    app_log!(info, "Starting API Store service");
+    app_log!(info, "Executable path: {:?}", env::current_exe());
+    app_log!(info, "Working directory: {:?}", env::current_dir());
 
     // Resolve and load configuration - FAIL if not found
     let config_path = resolve_config_path().map_err(|e| {
-        tracing::error!("Configuration error: {}", e);
+        app_log!(error, "Configuration error: {}", e);
         e
     })?;
 
-    tracing::info!("Loading configuration from: {:?}", config_path);
+    app_log!(info, "Loading configuration from: {:?}", config_path);
 
     let config = Config::from_file(&config_path).map_err(|e| {
-        tracing::error!("Failed to parse configuration file: {}", e);
+        app_log!(error, "Failed to parse configuration file: {}", e);
         format!("Configuration parse error: {}", e)
     })?;
 
-    tracing::info!("Successfully loaded configuration");
+    app_log!(info, "Successfully loaded configuration");
 
     let formatter_url = config.formatter_url();
-    tracing::info!("Using YAML formatter at: {}", formatter_url);
+    app_log!(info, "Using YAML formatter at: {}", formatter_url);
 
     let formatter = Arc::new(YamlFormatter::new(&formatter_url));
 
     // Resolve database path
     let database_url = get_database_url()?;
     let store = EndpointStore::new(&database_url).await.map_err(|e| {
-        tracing::error!("Failed to initialize database: {}", e);
+        app_log!(error, "Failed to initialize database: {}", e);
         e
     })?;
 
     // Load default API groups from YAML if available
     if let Some(endpoints_config_path) = resolve_endpoints_config_path() {
-        tracing::info!(
+        app_log!(
+            info,
             "Loading endpoints configuration from: {:?}",
             endpoints_config_path
         );
@@ -214,7 +244,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let config_content = match std::fs::read_to_string(&endpoints_config_path) {
             Ok(content) => content,
             Err(e) => {
-                tracing::warn!(
+                app_log!(
+                    warn,
                     "Failed to load endpoints config: {}. Continuing without default endpoints.",
                     e
                 );
@@ -229,7 +260,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 Ok(storage) => storage,
                 Err(e) => {
                     // If parsing as new format fails, try to convert from old format
-                    tracing::warn!(
+                    app_log!(
+                        warn,
                         "Failed to parse config as new format: {}. Trying legacy format...",
                         e
                     );
@@ -321,10 +353,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             };
 
-            tracing::info!("Successfully processed endpoints configuration");
+            app_log!(info, "Successfully processed endpoints configuration");
         }
     } else {
-        tracing::info!("No endpoints configuration file found, starting with empty configuration");
+        app_log!(
+            info,
+            "No endpoints configuration file found, starting with empty configuration"
+        );
     }
 
     // Wrap the store in an Arc for sharing between servers
@@ -340,12 +375,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Start the HTTP server as a separate task
     let http_handle = tokio::spawn(async move {
-        tracing::info!("Starting HTTP server on {}:{}", http_host, http_port);
+        app_log!(info, "Starting HTTP server on {}:{}", http_host, http_port);
 
         if let Err(e) =
             http_server::start_http_server(http_store, http_formatter, &http_host, http_port).await
         {
-            tracing::error!("HTTP server error: {}", e);
+            app_log!(error, "HTTP server error: {}", e);
         }
     });
 
@@ -366,7 +401,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .expose_headers(Any);
 
     // Start the gRPC server as a separate task
-    tracing::info!("Starting gRPC server on {}", grpc_addr);
+    app_log!(info, "Starting gRPC server on {}", grpc_addr);
     let grpc_handle = tokio::spawn(async move {
         if let Err(e) = Server::builder()
             .accept_http1(true)
@@ -380,7 +415,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .serve(grpc_addr)
             .await
         {
-            tracing::error!("gRPC server error: {}", e);
+            app_log!(error, "gRPC server error: {}", e);
         }
     });
 
@@ -389,18 +424,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         tokio::signal::ctrl_c()
             .await
             .expect("Failed to listen for CTRL+C");
-        tracing::info!("Received CTRL+C, shutting down all servers");
+        app_log!(info, "Received CTRL+C, shutting down all servers");
     };
 
-    tracing::info!("All services started successfully");
+    app_log!(info, "All services started successfully");
 
     // Wait for either server to finish or for the shutdown signal
     tokio::select! {
-        _ = http_handle => tracing::info!("HTTP server has shut down"),
-        _ = grpc_handle => tracing::info!("gRPC server has shut down"),
-        _ = shutdown => tracing::info!("Shutdown signal received"),
+        _ = http_handle => app_log!(info, "HTTP server has shut down"),
+        _ = grpc_handle => app_log!(info, "gRPC server has shut down"),
+        _ = shutdown => app_log!(info, "Shutdown signal received"),
     }
 
-    tracing::info!("Application shutting down");
+    app_log!(info, "Application shutting down");
     Ok(())
 }
