@@ -27,6 +27,19 @@ pub struct EndpointStore {
 }
 
 impl EndpointStore {
+    /// Health check for database connectivity
+    pub async fn health_check(&self) -> Result<bool, StoreError> {
+        let client = self.get_conn().await?;
+
+        // Simple query to test database connectivity
+        let _row = client
+            .query_one("SELECT 1 as health_check", &[])
+            .await
+            .to_store_error()?;
+
+        Ok(true)
+    }
+
     pub async fn get_all_authorized_domains(&self) -> Result<Vec<String>, StoreError> {
         authorized_domains::get_all_authorized_domains(self).await
     }

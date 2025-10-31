@@ -21,3 +21,4 @@ pub fn create_pg_pool(database_url: &str) -> Result<PgPool, Box<dyn Error + Send
 
     Ok(pool)
 }
+

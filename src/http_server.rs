@@ -12,7 +12,7 @@ use crate::get_api_usage_logs::get_api_usage_logs;
 use crate::get_authorized_domains::get_authorized_domains;
 use crate::get_credit_balance_handler::get_credit_balance_handler;
 use crate::get_user_preferences::get_user_preferences;
-use crate::health_check::health_check;
+use crate::health_check;
 use crate::log_api_usage::log_api_usage;
 use crate::manage_endpoint::manage_endpoint;
 use crate::reset_user_preferences::reset_user_preferences;
@@ -121,7 +121,7 @@ pub async fn start_http_server(
                                 "/key/usage/{email}/{key_id}",
                                 web::get().to(get_api_key_usage),
                             )
-                            .route("/health", web::get().to(health_check)),
+                            .route("/health", web::get().to(health_check::health_check)),
                     )
                 // Credit balance endpoints
             })

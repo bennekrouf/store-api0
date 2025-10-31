@@ -258,6 +258,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_formatter = Arc::clone(&formatter);
     let http_store = Arc::clone(&store_arc);
 
+    // Validate database connection before starting servers
+    if let Err(e) = http_store.health_check().await {
+        app_log!(error, error = %e, "Database connection validation failed");
+        std::process::exit(1);
+    }
+
+    app_log!(info, "Database connection validated successfully");
+
     // Start the HTTP server as a separate task
     let http_handle = tokio::spawn(async move {
         app_log!(info, "Starting HTTP server on {}:{}", http_host, http_port);
