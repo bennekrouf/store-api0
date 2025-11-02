@@ -30,6 +30,8 @@ mod upload_api_config;
 mod validate_api_key;
 use config::Config;
 use formatter::YamlFormatter;
+use graflog::app_log;
+use graflog::init_logging;
 
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore,
@@ -45,46 +47,14 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter};
 
-use std::fs::OpenOptions;
 pub mod endpoint {
     tonic::include_proto!("endpoint");
 }
 
-#[macro_export]
-macro_rules! app_log {
-    ($level:ident, $($arg:tt)*) => {
-        tracing::$level!(service = "api0", component = "store", $($arg)*)
-    };
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Initialize logging first
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true) // Clear file on startup
-        .open("/tmp/api0.log")
-        .expect("Failed to open log file");
-
-    tracing_subscriber::registry()
-        .with(
-            fmt::layer()
-                .json()
-                .with_writer(file)
-                .with_current_span(false)
-                .with_span_list(false),
-        )
-        .with(
-            EnvFilter::from_default_env()
-                .add_directive("trace".parse().expect("Invalid log directive")),
-        )
-        .init();
-
+    init_logging!("/var/log/api0.log", "api0", "gateway");
     ensure_database_url();
 
     app_log!(info, "Starting API Store service");
