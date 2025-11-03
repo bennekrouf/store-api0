@@ -38,12 +38,3 @@ security:
       - Authorization
       - Content-Type
     max_age_secs: 86400
-
-# Tracing configuration
-tracing:
-  level: info
-  file_path: /var/log/sensei/store.log
-  rotation:
-    size_mb: 100
-    age_days: 7
-    files_kept: 10

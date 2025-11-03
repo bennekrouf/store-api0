@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         std::process::exit(1);
     }
 
-    let log_path = env::var("LOG_PATH_API0").unwrap_or_else(|_| "/var/log/api0.log".to_string());
+    let log_path = env::var("LOG_PATH_API0").unwrap_or_else(|_| "/var/logs/api0.log".to_string());
     init_logging!(&log_path, "api0", "store");
 
     ensure_database_url();
