@@ -1,3 +1,5 @@
+use graflog::app_span;
+
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
@@ -137,7 +139,8 @@ async fn fetch_custom_endpoints(
                 .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
                 .unwrap_or_default();
 
-            tracing::trace!(
+            app_span!(
+                "fetch_custom_endpoints",
                 endpoint_id = %endpoint.id,
                 param_name = %name,
                 "Adding parameter to custom endpoint"

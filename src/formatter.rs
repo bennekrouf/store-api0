@@ -1,8 +1,8 @@
+use graflog::{app_log, app_span};
 use reqwest::multipart::{Form, Part};
 use std::error::Error;
 use std::io::Write;
 use tempfile::NamedTempFile;
-use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct YamlFormatter {
@@ -29,7 +29,8 @@ impl YamlFormatter {
         content: &[u8],
         filename: &str,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        info!(
+        app_span!(
+            "format_yaml_file",
             filename = %filename,
             "Formatting YAML file through formatter service"
         );
@@ -58,14 +59,14 @@ impl YamlFormatter {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error from formatter service".to_string());
-            error!(error = %error_message, "Formatter service returned an error");
+            app_span!("format_yaml_file", error = %error_message, "Formatter service returned an error");
             return Err(format!("Failed to format YAML: {}", error_message).into());
         }
 
         // Get the formatted content
         let formatted_content = response.bytes().await?.to_vec();
 
-        info!("Successfully formatted YAML file");
+        app_log!(info, "Successfully formatted YAML file");
         Ok(formatted_content)
     }
 }
