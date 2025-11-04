@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     let log_path = env::var("LOG_PATH_API0").unwrap_or_else(|_| "/var/log/api0.log".to_string());
-    init_logging!(&log_path, "api0", "store");
+    init_logging!(&log_path, "api0", "store", "info");
 
     ensure_database_url();
 
