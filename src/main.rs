@@ -47,6 +47,7 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
+use graflog::LogOption;
 
 pub mod endpoint {
     tonic::include_proto!("endpoint");
@@ -60,8 +61,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     let log_path = env::var("LOG_PATH_API0").unwrap_or_else(|_| "/var/log/api0.log".to_string());
-    init_logging!(&log_path, "api0", "store", "debug,rocket::server=off");
-
+    init_logging!(&log_path, "api0", "store", &[
+        LogOption::Debug
+    ]);
     ensure_database_url();
 
     app_log!(info, "Starting API Store service");
