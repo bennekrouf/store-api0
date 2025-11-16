@@ -238,29 +238,6 @@ pub async fn upload_api_config(
         });
     }
 
-    // After parsing, before processing groups
-    // for group in &api_storage.api_groups {
-    //     if group.group.base.trim().is_empty() {
-    //         return HttpResponse::BadRequest().json(UploadResponse {
-    //             success: false,
-    //             message: format!("API group '{}' must have a base URL", group.group.name),
-    //             imported_count: 0,
-    //             group_count: 0,
-    //         });
-    //     }
-    //
-    //     for endpoint in &group.endpoints {
-    //         if endpoint.base.trim().is_empty() {
-    //             return HttpResponse::BadRequest().json(UploadResponse {
-    //                 success: false,
-    //                 message: format!("Endpoint '{}' must have a base URL", endpoint.text),
-    //                 imported_count: 0,
-    //                 group_count: 0,
-    //             });
-    //         }
-    //     }
-    // }
-
     // Process groups and endpoints
     let mut processed_groups = Vec::new();
     for mut group in api_storage.api_groups {

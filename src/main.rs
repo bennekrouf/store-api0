@@ -38,6 +38,7 @@ use crate::endpoint_store::{
 };
 use crate::grpc_server::EndpointServiceImpl;
 use endpoint::endpoint_service_server::EndpointServiceServer;
+use graflog::LogOption;
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
@@ -47,7 +48,6 @@ use tonic::transport::Server;
 use tonic_reflection::server::Builder;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{Any, CorsLayer};
-use graflog::LogOption;
 
 pub mod endpoint {
     tonic::include_proto!("endpoint");
@@ -61,9 +61,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     let log_path = env::var("LOG_PATH_API0").unwrap_or_else(|_| "/var/log/api0.log".to_string());
-    init_logging!(&log_path, "api0", "store", &[
-        LogOption::Debug
-    ]);
+    init_logging!(
+        &log_path,
+        "api0",
+        "store",
+        &[
+            LogOption::Debug,
+            LogOption::Custom("h2=info,store=trace".to_string())
+        ]
+    );
     ensure_database_url();
 
     app_log!(info, "Starting API Store service");
