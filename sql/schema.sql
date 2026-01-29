@@ -121,3 +121,15 @@ CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_timestamp ON api_usage_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_key_id ON api_usage_logs(key_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_email ON api_usage_logs(email);
+
+-- Reference Data table
+CREATE TABLE IF NOT EXISTS reference_data (
+    id VARCHAR PRIMARY KEY,
+    email VARCHAR NOT NULL,
+    name VARCHAR NOT NULL,
+    data JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    FOREIGN KEY (email) REFERENCES user_preferences(email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reference_data_email ON reference_data(email);

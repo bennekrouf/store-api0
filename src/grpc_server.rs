@@ -450,4 +450,45 @@ impl EndpointService for EndpointServiceImpl {
             }
         }
     }
+
+    async fn get_reference_data(
+        &self,
+        request: Request<crate::endpoint::GetReferenceDataRequest>,
+    ) -> Result<Response<crate::endpoint::GetReferenceDataResponse>, Status> {
+        let email = request.into_inner().email;
+        app_log!(info, email = %email, "Received get_reference_data gRPC request");
+
+        match self.store.get_reference_data(&email).await {
+            Ok(data) => {
+                app_log!(info,
+                    email = %email,
+                    count = data.len(),
+                    "Successfully retrieved reference data"
+                );
+
+                let proto_data = data
+                    .into_iter()
+                    .map(|d| crate::endpoint::ReferenceData {
+                        id: d.id,
+                        email: d.email,
+                        name: d.name,
+                        data: d.data.to_string(),
+                        created_at: d.created_at.to_rfc3339(),
+                    })
+                    .collect();
+
+                Ok(Response::new(crate::endpoint::GetReferenceDataResponse {
+                    reference_data: proto_data,
+                }))
+            }
+            Err(e) => {
+                app_log!(error,
+                    error = %e,
+                    email = %email,
+                    "Failed to retrieve reference data"
+                );
+                Err(Status::internal(format!("Failed to retrieve reference data: {}", e)))
+            }
+        }
+    }
 }

@@ -64,3 +64,26 @@ pub struct UpdateApiGroupRequest {
 // pub struct RecordUsageRequest {
 //     pub key_id: String,
 // }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceData {
+    pub id: String,
+    pub email: String,
+    pub name: String,
+    pub data: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UploadReferenceDataRequest {
+    pub email: String,
+    pub file_name: String,
+    pub file_content: String, // Base64 encoded
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadReferenceDataResponse {
+    pub success: bool,
+    pub message: String,
+    pub data: Option<ReferenceData>,
+}

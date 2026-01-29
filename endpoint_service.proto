@@ -9,6 +9,7 @@ service EndpointService {
     rpc GetUserPreferences (GetUserPreferencesRequest) returns (GetUserPreferencesResponse);
     rpc UpdateUserPreferences (UpdateUserPreferencesRequest) returns (UpdateUserPreferencesResponse);
     rpc ResetUserPreferences (ResetUserPreferencesRequest) returns (ResetUserPreferencesResponse);
+    rpc GetReferenceData (GetReferenceDataRequest) returns (GetReferenceDataResponse);
 }
 
 message GetApiGroupsRequest {
@@ -91,4 +92,20 @@ message ResetUserPreferencesRequest {
 message ResetUserPreferencesResponse {
     bool success = 1;
     string message = 2;
+}
+
+message ReferenceData {
+    string id = 1;
+    string email = 2;
+    string name = 3;
+    string data = 4; // JSON string
+    string created_at = 5;
+}
+
+message GetReferenceDataRequest {
+    string email = 1;
+}
+
+message GetReferenceDataResponse {
+    repeated ReferenceData reference_data = 1;
 }

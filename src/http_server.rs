@@ -21,7 +21,9 @@ use crate::revoke_api_key_handler::revoke_api_key_handler;
 use crate::update_api_group::update_api_group;
 use crate::update_credit_balance_handler::update_credit_balance_handler;
 use crate::update_user_preferences::update_user_preferences;
+
 use crate::upload_api_config::upload_api_config;
+use crate::upload_reference_data;
 use crate::validate_api_key::validate_api_key;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
@@ -67,6 +69,10 @@ pub async fn start_http_server(
                         web::scope("/api")
                             // API groups endpoints
                             .route("/upload", web::post().to(upload_api_config))
+                            .route(
+                                "/reference-data/upload",
+                                web::post().to(upload_reference_data::upload_reference_data),
+                            )
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
                             .route("/group", web::put().to(update_api_group))

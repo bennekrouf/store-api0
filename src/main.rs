@@ -27,6 +27,7 @@ mod update_api_group;
 mod update_credit_balance_handler;
 mod update_user_preferences;
 mod upload_api_config;
+mod upload_reference_data;
 mod validate_api_key;
 use config::Config;
 use formatter::YamlFormatter;

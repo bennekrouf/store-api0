@@ -11,6 +11,7 @@ mod manage_single_endpoint;
 use crate::endpoint_store::db_helpers::ResultExt;
 mod delete_user_endpoint;
 pub mod models;
+pub mod reference_data;
 mod replace_user_api_groups;
 mod user_preferences;
 mod utils;

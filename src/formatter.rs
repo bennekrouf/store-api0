@@ -69,4 +69,45 @@ impl YamlFormatter {
         app_log!(info, "Successfully formatted YAML file");
         Ok(formatted_content)
     }
+
+    pub async fn format_reference_data(
+        &self,
+        content: &[u8],
+        filename: &str,
+    ) -> Result<Vec<u8>, Box<dyn Error>> {
+        app_span!(
+            "format_reference_data",
+            filename = %filename,
+            "Formatting reference data through formatter service"
+        );
+
+        let part = Part::bytes(content.to_vec()).file_name(filename.to_string());
+        let form = Form::new().part("file", part);
+        
+        // Construct the URL for reference data formatting
+        // Assuming the formatter_url is something like "http://localhost:6666/format-yaml"
+        // We need to change the endpoint to "/format-reference-data"
+        let base_url = self.formatter_url.replace("/format-yaml", "");
+        let url = format!("{}/format-reference-data", base_url);
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error from formatter service".to_string());
+            app_span!("format_reference_data", error = %error_message, "Formatter service returned an error");
+            return Err(format!("Failed to format reference data: {}", error_message).into());
+        }
+
+        let formatted_content = response.bytes().await?.to_vec();
+        app_log!(info, "Successfully formatted reference data");
+        Ok(formatted_content)
+    }
 }
