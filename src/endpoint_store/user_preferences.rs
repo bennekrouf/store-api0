@@ -10,7 +10,7 @@ pub async fn get_user_preferences(
 
     let row = client
         .query_opt(
-            "SELECT hidden_defaults FROM user_preferences WHERE email = $1",
+            "SELECT hidden_defaults, default_tenant_id FROM user_preferences WHERE email = $1",
             &[&email],
         )
         .await
@@ -28,11 +28,13 @@ pub async fn get_user_preferences(
             Ok(UserPreferences {
                 email: email.to_string(),
                 hidden_defaults,
+                default_tenant_id: r.get(1),
             })
         }
         None => Ok(UserPreferences {
             email: email.to_string(),
             hidden_defaults: Vec::new(),
+            default_tenant_id: None,
         }),
     }
 }

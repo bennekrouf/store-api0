@@ -34,7 +34,7 @@ async fn fetch_custom_groups_with_endpoints(
     app_log!(debug, email = %email, "Fetching custom groups and endpoints");
 
     let groups_query = r#"
-        SELECT g.id, g.name, g.description, g.base
+        SELECT g.id, g.name, g.description, g.base, g.tenant_id
         FROM api_groups g
         INNER JOIN user_groups ug ON g.id = ug.group_id
         WHERE ug.email = $1
@@ -53,6 +53,7 @@ async fn fetch_custom_groups_with_endpoints(
             name: row.get(1),
             description: row.get(2),
             base: row.get(3),
+            tenant_id: row.get::<_, Option<String>>(4).unwrap_or_default(),
         };
 
         let endpoints = fetch_custom_endpoints(client, email, &group.id).await?;
@@ -77,7 +78,7 @@ async fn fetch_custom_endpoints(
 ) -> Result<Vec<Endpoint>, StoreError> {
     let endpoints_query = r#"
         SELECT 
-            e.id, e.text, e.description, e.verb, e.base, e.path, 
+            e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
             p.name, p.description, p.required, 
             string_agg(pa.alternative, ',') as alternatives
         FROM endpoints e
@@ -86,7 +87,7 @@ async fn fetch_custom_endpoints(
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE ue.email = $1 AND e.group_id = $2
         GROUP BY 
-            e.id, e.text, e.description, e.verb, e.base, e.path, 
+            e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
             p.name, p.description, p.required
     "#;
 
@@ -110,10 +111,11 @@ async fn fetch_custom_endpoints(
         let verb: String = row.get(3);
         let base: String = row.get(4);
         let path_value: String = row.get(5);
-        let param_name: Option<String> = row.get(6);
-        let param_desc: Option<String> = row.get(7);
-        let required: Option<bool> = row.get(8);
-        let alternatives_str: Option<String> = row.get(9);
+        let suggested_sentence: String = row.get(6);
+        let param_name: Option<String> = row.get(7);
+        let param_desc: Option<String> = row.get(8);
+        let required: Option<bool> = row.get(9);
+        let alternatives_str: Option<String> = row.get(10);
 
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
             app_log!(debug,
@@ -129,6 +131,7 @@ async fn fetch_custom_endpoints(
                 verb,
                 base,
                 path: path_value,
+                suggested_sentence,
                 parameters: Vec::new(),
                 group_id: group_id.to_string(),
             }

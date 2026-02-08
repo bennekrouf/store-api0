@@ -30,6 +30,30 @@ pub async fn log_api_usage(
                 total_tokens = log_request.usage.as_ref().map(|u| u.total_tokens),
                 "Successfully logged API usage with token data"
             );
+
+            // Deduct credits if usage is present
+            if let Some(usage) = &log_request.usage {
+                // Pricing model:
+                // 1 Cent = 100 Internal Credits (allows fractional cents)
+                // Cost: $0.002 per 1k tokens = 0.2 cents = 20 Credits
+                // Formula: (total_tokens * 20) / 1000 = total_tokens / 50
+                // Minimum 1 credit if tokens > 0
+                let total_tokens = usage.total_tokens;
+                let cost = if total_tokens > 0 {
+                    (total_tokens as i64 / 50).max(1)
+                } else {
+                    0
+                };
+
+                if cost > 0 {
+                    app_log!(info, email = %log_request.email, cost = cost, "Deducting credits for usage");
+                    // Pass negative amount to decrement
+                    if let Err(e) = store.update_credit_balance(&log_request.email, -cost).await {
+                         app_log!(error, error = %e, email = %log_request.email, "Failed to deduct credits");
+                    }
+                }
+            }
+
             HttpResponse::Ok().json(LogApiUsageResponse {
                 success: true,
                 message: "API usage logged successfully".to_string(),

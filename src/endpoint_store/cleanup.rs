@@ -104,7 +104,8 @@ pub async fn force_clean_user_data(store: &EndpointStore, email: &str) -> Result
         .await
         .to_store_error()?;
 
-    // Delete endpoints that are no longer referenced
+    // Delete endpoints
+    // ... existing endpoint deletion logic ...
     for id in &endpoint_ids {
         let still_referenced = tx
             .query_opt("SELECT 1 FROM user_endpoints WHERE endpoint_id = $1", &[id])
@@ -117,6 +118,41 @@ pub async fn force_clean_user_data(store: &EndpointStore, email: &str) -> Result
                 .to_store_error()?;
         }
     }
+
+    // NEW: Clean up tenant/key/preference data
+    
+    // 1. Delete API usage logs
+    tx.execute("DELETE FROM api_usage_logs WHERE email = $1", &[&email]).await.to_store_error()?;
+    
+    // 2. Delete API keys
+    tx.execute("DELETE FROM api_keys WHERE email = $1", &[&email]).await.to_store_error()?;
+    
+    // 3. Delete Tenant Users
+    tx.execute("DELETE FROM tenant_users WHERE email = $1", &[&email]).await.to_store_error()?;
+    
+    // 4. Delete Personal Tenant (if name == email)
+    // We first need to delete any remaining groups linked to this tenant? 
+    // Assuming personal tenant only has this user's stuff.
+    // If we delete tenant, we need to handle constraints.
+    // Let's identify the tenant first.
+    let tenant_rows = tx.query("SELECT id FROM tenants WHERE name = $1", &[&email]).await.to_store_error()?;
+    for row in tenant_rows {
+        let tenant_id: String = row.get(0);
+        // Delete logs for tenant (redundant if by email, but covers edge cases)
+        tx.execute("DELETE FROM api_usage_logs WHERE tenant_id = $1", &[&tenant_id]).await.to_store_error()?;
+        // Delete keys for tenant
+        tx.execute("DELETE FROM api_keys WHERE tenant_id = $1", &[&tenant_id]).await.to_store_error()?;
+        // Delete groups for tenant
+        tx.execute("DELETE FROM api_groups WHERE tenant_id = $1", &[&tenant_id]).await.to_store_error()?;
+        // Delete tenant_users again? (FK should cascade or we did it above)
+        tx.execute("DELETE FROM tenant_users WHERE tenant_id = $1", &[&tenant_id]).await.to_store_error()?;
+        
+        // Finally delete tenant
+        tx.execute("DELETE FROM tenants WHERE id = $1", &[&tenant_id]).await.to_store_error()?;
+    }
+
+    // 5. Delete User Preferences
+    tx.execute("DELETE FROM user_preferences WHERE email = $1", &[&email]).await.to_store_error()?;
 
     tx.commit().await.to_store_error()?;
     Ok(())

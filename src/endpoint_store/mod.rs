@@ -15,6 +15,7 @@ pub mod reference_data;
 mod replace_user_api_groups;
 mod user_preferences;
 mod utils;
+pub mod tenant_management;
 use crate::app_log;
 pub use errors::*;
 pub use models::*;
@@ -225,6 +226,24 @@ impl EndpointStore {
         let log_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
 
+        // Resolve tenant_id
+        // Try to get from api_keys first (most reliable for API usage)
+        let tenant_row = client.query_opt(
+            "SELECT tenant_id FROM api_keys WHERE id = $1", 
+            &[&request.key_id]
+        ).await.to_store_error()?;
+        
+        let mut tenant_id: Option<String> = tenant_row.map(|r| r.get(0));
+        
+        // If not found (maybe key deleted or invalid?), try from user email
+        if tenant_id.is_none() {
+             let user_tenant_row = client.query_opt(
+                "SELECT default_tenant_id FROM user_preferences WHERE email = $1", 
+                &[&request.email]
+            ).await.to_store_error()?;
+            tenant_id = user_tenant_row.map(|r| r.get(0));
+        }
+        
         // Convert metadata to JSON string for storage
         let metadata_json = request
             .metadata
@@ -237,8 +256,8 @@ impl EndpointStore {
             id, key_id, email, endpoint_path, method, timestamp,
             response_status, response_time_ms, request_size, response_size,
             ip_address, user_agent, usage_estimated, input_tokens,
-            output_tokens, total_tokens, model_used, metadata
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb)",
+            output_tokens, total_tokens, model_used, metadata, tenant_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19)",
             &[
                 &log_id,
                 &request.key_id,
@@ -258,6 +277,7 @@ impl EndpointStore {
                 &request.usage.as_ref().map(|u| u.total_tokens),
                 &request.usage.as_ref().map(|u| u.model.clone()),
                 &metadata_json, // Now a String, which can be cast to jsonb
+                &tenant_id
             ],
         )
         .await

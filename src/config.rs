@@ -38,6 +38,10 @@ impl Config {
         format!("{}:{}", self.server.grpc.host, self.server.grpc.port)
     }
 
+    pub fn stripe_secret_key(&self) -> String {
+        std::env::var("STRIPE_SECRET_KEY").unwrap_or_else(|_| "sk_test_placeholder".to_string())
+    }
+
     pub fn http_host(&self) -> &str {
         &self.server.http.host
     }

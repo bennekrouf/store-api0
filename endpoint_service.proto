@@ -10,6 +10,10 @@ service EndpointService {
     rpc UpdateUserPreferences (UpdateUserPreferencesRequest) returns (UpdateUserPreferencesResponse);
     rpc ResetUserPreferences (ResetUserPreferencesRequest) returns (ResetUserPreferencesResponse);
     rpc GetReferenceData (GetReferenceDataRequest) returns (GetReferenceDataResponse);
+    
+    // Payment methods
+    rpc CreatePaymentIntent (CreatePaymentIntentRequest) returns (CreatePaymentIntentResponse);
+    rpc ConfirmPayment (ConfirmPaymentRequest) returns (ConfirmPaymentResponse);
 }
 
 message GetApiGroupsRequest {
@@ -108,4 +112,30 @@ message GetReferenceDataRequest {
 
 message GetReferenceDataResponse {
     repeated ReferenceData reference_data = 1;
+}
+
+message CreatePaymentIntentRequest {
+    string email = 1;
+    int64 amount = 2; // In smallest currency unit (e.g., cents)
+    string currency = 3;
+}
+
+message CreatePaymentIntentResponse {
+    bool success = 1;
+    string client_secret = 2;
+    string payment_intent_id = 3;
+    string message = 4;
+}
+
+message ConfirmPaymentRequest {
+    string email = 1;
+    string payment_intent_id = 2;
+    int64 amount = 3;
+}
+
+message ConfirmPaymentResponse {
+    bool success = 1;
+    bool payment_verified = 2;
+    int64 new_credit_balance = 3;
+    string message = 4;
 }

@@ -7,41 +7,56 @@ pub async fn add_user_api_group(
     email: &str,
     api_group: &ApiGroupWithEndpoints,
 ) -> Result<usize, StoreError> {
+    use crate::endpoint_store::tenant_management;
+
+    // Resolve tenant
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let tenant_id = tenant.id.clone();
+
     let mut client = store.get_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
-    let group = &api_group.group;
-    let group_id = &group.id;
+    let group_id = &api_group.group.id;
 
-    app_log!(info,
-        email = %email,
-        group_id = %group_id,
-        "Adding API group"
-    );
-
-    // Check if group exists
-    let group_exists_row = tx
-        .query_opt("SELECT 1 FROM api_groups WHERE id = $1", &[group_id])
-        .await
-        .to_store_error()?;
-
-    if group_exists_row.is_none() {
-        tx.execute(
-            "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
-            &[group_id, &group.name, &group.description, &group.base],
-        )
-        .await
-        .to_store_error()?;
-    } else {
-        tx.execute(
-            "UPDATE api_groups SET name = $1, description = $2, base = $3 WHERE id = $4",
-            &[&group.name, &group.description, &group.base, group_id],
-        )
-        .await
-        .to_store_error()?;
+    // 1. Insert/Update API Group
+    // We update if exists to handle idempotent uploads usually
+    // BUT now we must ensure tenant_id is set.
+    
+    // Check existence
+    let existing_group = tx.query_opt("SELECT tenant_id FROM api_groups WHERE id = $1", &[group_id]).await.to_store_error()?;
+    
+    if let Some(row) = existing_group {
+        // Group exists. Verify ownership?
+        let existing_tenant_id: Option<String> = row.get(0);
+        if let Some(t_id) = existing_tenant_id {
+            if t_id != tenant_id {
+                 // Warn or handle mismatch
+                 app_log!(warn, email=%email, group=%group_id, "Group exists under different tenant");
+            }
+        }
     }
 
-    // Associate group with user
+    tx.execute(
+        "INSERT INTO api_groups (id, name, description, base, tenant_id) 
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO UPDATE SET 
+            name = EXCLUDED.name,
+            description = EXCLUDED.description,
+            base = EXCLUDED.base,
+            tenant_id = COALESCE(api_groups.tenant_id, EXCLUDED.tenant_id)", 
+        &[
+            group_id,
+            &api_group.group.name,
+            &api_group.group.description,
+            &api_group.group.base,
+            &tenant_id
+        ],
+    )
+    .await
+    .to_store_error()?;
+
+    // 2. Insert User-Group Association (Legacy/Redundant but good for quick lookup if we keep user_groups table)
+    // The schema has `user_groups`.
     tx.execute(
         "INSERT INTO user_groups (email, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
         &[&email, group_id],
@@ -59,8 +74,8 @@ pub async fn add_user_api_group(
 
         if endpoint_exists_row.is_none() {
             tx.execute(
-                "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) 
-                VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, suggested_sentence) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                 &[
                     &endpoint.id,
                     &endpoint.text,
@@ -69,13 +84,14 @@ pub async fn add_user_api_group(
                     &endpoint.base,
                     &endpoint.path,
                     group_id,
+                    &endpoint.suggested_sentence,
                 ],
             )
             .await
             .to_store_error()?;
         } else {
             tx.execute(
-                "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6 WHERE id = $7",
+                "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6, suggested_sentence = $7 WHERE id = $8",
                 &[
                     &endpoint.text,
                     &endpoint.description,
@@ -83,6 +99,7 @@ pub async fn add_user_api_group(
                     &endpoint.base,
                     &endpoint.path,
                     group_id,
+                    &endpoint.suggested_sentence,
                     &endpoint.id,
                 ],
             )

@@ -10,6 +10,22 @@ fn default_verb() -> String {
 pub struct UserPreferences {
     pub email: String,
     pub hidden_defaults: Vec<String>, // List of hidden default endpoint IDs
+    pub default_tenant_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Tenant {
+    pub id: String,
+    pub name: String,
+    pub credit_balance: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TenantUser {
+    pub tenant_id: String,
+    pub email: String,
+    pub role: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,6 +95,8 @@ pub struct Endpoint {
     pub base: String,
     #[serde(default = "String::new")]
     pub path: String,
+    #[serde(default = "String::new")]
+    pub suggested_sentence: String,
     #[serde(default = "String::new")] // Allow empty, will be set by parent group
     pub group_id: String,
 }
@@ -96,6 +114,8 @@ pub struct ApiGroup {
     pub description: String,
     #[serde(default = "String::new")]
     pub base: String,
+    #[serde(default = "String::new")]
+    pub tenant_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

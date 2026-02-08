@@ -8,6 +8,34 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     PRIMARY KEY (email)
 );
 
+-- Tenants table
+CREATE TABLE IF NOT EXISTS tenants (
+    id VARCHAR PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    credit_balance BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- Tenant Users table (User-Tenant relationship)
+CREATE TABLE IF NOT EXISTS tenant_users (
+    tenant_id VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    role VARCHAR NOT NULL DEFAULT 'member', -- owner, member
+    PRIMARY KEY (tenant_id, email),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (email) REFERENCES user_preferences(email)
+);
+
+-- Add default_tenant_id to user_preferences
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_preferences' AND column_name = 'default_tenant_id') THEN
+        ALTER TABLE user_preferences ADD COLUMN default_tenant_id VARCHAR;
+        -- We cannot easily FK to tenants here if we want to circular reference safely, but optional
+        -- ALTER TABLE user_preferences ADD CONSTRAINT fk_default_tenant FOREIGN KEY (default_tenant_id) REFERENCES tenants(id);
+    END IF;
+END $$;
+
 -- API keys table
 CREATE TABLE IF NOT EXISTS api_keys (
     id VARCHAR NOT NULL,
@@ -39,6 +67,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     verb VARCHAR NOT NULL DEFAULT 'GET',
     base VARCHAR NOT NULL DEFAULT '',
     path VARCHAR NOT NULL DEFAULT '',
+    suggested_sentence VARCHAR NOT NULL DEFAULT '',
     group_id VARCHAR,
     FOREIGN KEY (group_id) REFERENCES api_groups(id)
 );
@@ -112,6 +141,28 @@ CREATE TABLE IF NOT EXISTS api_usage_logs (
     PRIMARY KEY (id),
     FOREIGN KEY (key_id) REFERENCES api_keys(id)
 );
+
+-- Add tenant_id to appropriate tables
+DO $$
+BEGIN
+    -- api_keys
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'api_keys' AND column_name = 'tenant_id') THEN
+        ALTER TABLE api_keys ADD COLUMN tenant_id VARCHAR;
+        CREATE INDEX idx_api_keys_tenant_id ON api_keys(tenant_id);
+    END IF;
+
+    -- api_groups
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'api_groups' AND column_name = 'tenant_id') THEN
+        ALTER TABLE api_groups ADD COLUMN tenant_id VARCHAR;
+        CREATE INDEX idx_api_groups_tenant_id ON api_groups(tenant_id);
+    END IF;
+
+    -- api_usage_logs
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'api_usage_logs' AND column_name = 'tenant_id') THEN
+        ALTER TABLE api_usage_logs ADD COLUMN tenant_id VARCHAR;
+        CREATE INDEX idx_usage_logs_tenant_id ON api_usage_logs(tenant_id);
+    END IF;
+END $$;
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);

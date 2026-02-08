@@ -257,43 +257,32 @@ pub async fn get_api_key_usage(
     }))
 }
 
-/// Update credit balance for a user
 pub async fn update_credit_balance(
     store: &EndpointStore,
     email: &str,
     amount: i64,
 ) -> Result<i64, StoreError> {
+    use crate::endpoint_store::tenant_management;
+
+    // Resolve tenant (this migrates legacy credits if needed)
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let tenant_id = tenant.id;
+
     let client = store.get_conn().await?;
 
-    let user_exists_row = client
-        .query_opt("SELECT 1 FROM user_preferences WHERE email = $1", &[&email])
-        .await
-        .to_store_error()?;
-
-    if user_exists_row.is_none() {
-        client
-            .execute(
-                "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES ($1, '', $2)",
-                &[&email, &amount],
-            )
-            .await
-            .to_store_error()?;
-
-        return Ok(amount);
-    }
-
+    // Update Tenant Balance
     client
         .execute(
-            "UPDATE user_preferences SET credit_balance = credit_balance + $1 WHERE email = $2",
-            &[&amount, &email],
+            "UPDATE tenants SET credit_balance = credit_balance + $1 WHERE id = $2",
+            &[&amount, &tenant_id],
         )
         .await
         .to_store_error()?;
 
     let balance_row = client
         .query_one(
-            "SELECT credit_balance FROM user_preferences WHERE email = $1",
-            &[&email],
+            "SELECT credit_balance FROM tenants WHERE id = $1",
+            &[&tenant_id],
         )
         .await
         .to_store_error()?;
@@ -301,27 +290,32 @@ pub async fn update_credit_balance(
     Ok(balance_row.get(0))
 }
 
-/// Get credit balance for a user
+/// Get credit balance for a user (via their default tenant)
 pub async fn get_credit_balance(store: &EndpointStore, email: &str) -> Result<i64, StoreError> {
-    let client = store.get_conn().await?;
-
-    let row = client
-        .query_opt(
-            "SELECT credit_balance FROM user_preferences WHERE email = $1",
-            &[&email],
-        )
-        .await
-        .to_store_error()?;
-
-    Ok(row.map(|r| r.get(0)).unwrap_or(0))
+    use crate::endpoint_store::tenant_management;
+    
+    // Resolve tenant (this migrates legacy credits if needed)
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    
+    // We can rely on the returned tenant object having the balance, 
+    // BUT since we might want the *latest* balance if `get_default_tenant` returned a cached object (it doesn't, but still),
+    // Querying fresh is safer, or just use the returned value since `get_default_tenant` fetches it.
+    // The `get_default_tenant` implementation fetches fresh data.
+    Ok(tenant.credit_balance)
 }
 
-/// Generate a new API key for a user
+/// Generate a new API key for a user (associated with their default tenant)
 pub async fn generate_api_key(
     store: &EndpointStore,
     email: &str,
     key_name: &str,
 ) -> Result<(String, String, String), StoreError> {
+    use crate::endpoint_store::tenant_management;
+
+    // Ensure tenant exists (this handles user_preferences creation too)
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let tenant_id = tenant.id;
+
     let mut client = store.get_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
@@ -331,26 +325,12 @@ pub async fn generate_api_key(
     let now = Utc::now();
     let key_id = Uuid::new_v4().to_string();
 
-    let user_exists_row = tx
-        .query_opt("SELECT 1 FROM user_preferences WHERE email = $1", &[&email])
-        .await
-        .to_store_error()?;
-
-    if user_exists_row.is_none() {
-        tx.execute(
-            "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES ($1, '', 0)",
-            &[&email],
-        )
-        .await
-        .to_store_error()?;
-    }
-
     tx.execute(
         "INSERT INTO api_keys (
             id, email, key_hash, key_prefix, key_name, 
-            generated_at, usage_count, is_active
-        ) VALUES ($1, $2, $3, $4, $5, $6, 0, true)",
-        &[&key_id, &email, &key_hash, &key_prefix, &key_name, &now],
+            generated_at, usage_count, is_active, tenant_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7)",
+        &[&key_id, &email, &key_hash, &key_prefix, &key_name, &now, &tenant_id],
     )
     .await
     .to_store_error()?;

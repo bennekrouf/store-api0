@@ -1,13 +1,15 @@
 use crate::app_log;
 use crate::endpoint::endpoint_service_server::EndpointService;
 use crate::endpoint::{
-    ApiGroup as ProtoApiGroup, Endpoint as ProtoEndpoint, GetApiGroupsRequest,
-    GetApiGroupsResponse, GetUserPreferencesRequest, GetUserPreferencesResponse,
-    Parameter as ProtoParameter, ResetUserPreferencesRequest, ResetUserPreferencesResponse,
-    UpdateUserPreferencesRequest, UpdateUserPreferencesResponse, UploadApiGroupsRequest,
-    UploadApiGroupsResponse, UserPreferences as ProtoUserPreferences,
+    ApiGroup as ProtoApiGroup, ConfirmPaymentRequest, ConfirmPaymentResponse, CreatePaymentIntentRequest,
+    CreatePaymentIntentResponse, Endpoint as ProtoEndpoint, GetApiGroupsRequest, GetApiGroupsResponse,
+    GetUserPreferencesRequest, GetUserPreferencesResponse, Parameter as ProtoParameter,
+    ResetUserPreferencesRequest, ResetUserPreferencesResponse, UpdateUserPreferencesRequest,
+    UpdateUserPreferencesResponse, UploadApiGroupsRequest, UploadApiGroupsResponse,
+    UserPreferences as ProtoUserPreferences,
 };
 use crate::formatter::YamlFormatter;
+use crate::payment_service::PaymentService;
 
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore,
@@ -21,13 +23,19 @@ use tonic::{Request, Response, Status};
 pub struct EndpointServiceImpl {
     store: Arc<EndpointStore>,
     formatter: Arc<YamlFormatter>,
+    payment_service: Arc<PaymentService>,
 }
 
 impl EndpointServiceImpl {
-    pub fn new(store: Arc<EndpointStore>, formatter_url: &str) -> Self {
+    pub fn new(
+        store: Arc<EndpointStore>,
+        formatter_url: &str,
+        payment_service: Arc<PaymentService>,
+    ) -> Self {
         Self {
             store,
             formatter: Arc::new(YamlFormatter::new(formatter_url)),
+            payment_service,
         }
     }
 }
@@ -241,6 +249,18 @@ impl EndpointService for EndpointServiceImpl {
             ));
         }
 
+        // Resolve tenant_id for the user
+        use crate::endpoint_store::tenant_management;
+        // Logic to get tenant_id. We need "store" available.
+        // self.store is Arc<EndpointStore>.
+        let tenant_id = match tenant_management::get_default_tenant(&self.store, &email).await {
+             Ok(t) => t.id,
+             Err(e) => {
+                 app_log!(error, error=%e, "Failed to resolve tenant for upload_api_groups");
+                 return Err(Status::internal("Failed to resolve tenant organization"));
+             }
+        };
+
         // Process and enhance each group and endpoint
         let mut processed_groups = Vec::new();
 
@@ -273,6 +293,7 @@ impl EndpointService for EndpointServiceImpl {
                     name: group.group.name.clone(),
                     description: group.group.description.clone(),
                     base: group.group.base.clone(),
+                    tenant_id: tenant_id.clone(),
                 },
                 endpoints: processed_endpoints,
             };
@@ -488,6 +509,102 @@ impl EndpointService for EndpointServiceImpl {
                     "Failed to retrieve reference data"
                 );
                 Err(Status::internal(format!("Failed to retrieve reference data: {}", e)))
+            }
+        }
+    }
+
+    async fn create_payment_intent(
+        &self,
+        request: Request<CreatePaymentIntentRequest>,
+    ) -> Result<Response<CreatePaymentIntentResponse>, Status> {
+        let req = request.into_inner();
+        let email = req.email;
+        let amount = req.amount;
+        let currency = req.currency;
+
+        app_log!(info, email = %email, amount = amount, currency = %currency, "Received create_payment_intent request");
+
+        match self
+            .payment_service
+            .create_payment_intent(amount, &currency, &email)
+            .await
+        {
+            Ok(intent) => {
+                app_log!(info, email = %email, intent_id = %intent.id.as_str(), "Successfully created payment intent");
+                Ok(Response::new(CreatePaymentIntentResponse {
+                    success: true,
+                    client_secret: intent.client_secret.unwrap_or_default(),
+                    payment_intent_id: intent.id.to_string(),
+                    message: "Payment intent created successfully".to_string(),
+                }))
+            }
+            Err(e) => {
+                app_log!(error, error = %e, email = %email, "Failed to create payment intent");
+                Ok(Response::new(CreatePaymentIntentResponse {
+                    success: false,
+                    client_secret: "".to_string(),
+                    payment_intent_id: "".to_string(),
+                    message: format!("Failed to create payment intent: {}", e),
+                }))
+            }
+        }
+    }
+
+    async fn confirm_payment(
+        &self,
+        request: Request<ConfirmPaymentRequest>,
+    ) -> Result<Response<ConfirmPaymentResponse>, Status> {
+        let req = request.into_inner();
+        let email = req.email;
+        let payment_intent_id = req.payment_intent_id;
+        let amount = req.amount;
+
+        app_log!(info, email = %email, payment_intent_id = %payment_intent_id, "Received confirm_payment request");
+
+        let intent = match self.payment_service.confirm_payment(&payment_intent_id).await {
+            Ok(intent) => intent,
+            Err(e) => {
+                app_log!(error, error = %e, email = %email, "Failed to verify payment intent");
+                return Ok(Response::new(ConfirmPaymentResponse {
+                    success: false,
+                    payment_verified: false,
+                    new_credit_balance: 0,
+                    message: format!("Failed to verify payment: {}", e),
+                }));
+            }
+        };
+
+        if intent.status != stripe::PaymentIntentStatus::Succeeded {
+            app_log!(warn, email = %email, status = ?intent.status, "Payment intent not succeeded");
+            return Ok(Response::new(ConfirmPaymentResponse {
+                success: false,
+                payment_verified: false,
+                new_credit_balance: 0,
+                message: format!("Payment not succeeded. Status: {:?}", intent.status),
+            }));
+        }
+
+        // Add credits to user balance (1 cent = 100 credits)
+        let credits_to_add = amount * 100;
+
+        match self.store.update_credit_balance(&email, credits_to_add).await {
+            Ok(new_balance) => {
+                app_log!(info, email = %email, amount = amount, credits = credits_to_add, new_balance = new_balance, "Successfully added credits");
+                Ok(Response::new(ConfirmPaymentResponse {
+                    success: true,
+                    payment_verified: true,
+                    new_credit_balance: new_balance,
+                    message: "Payment confirmed and credits added".to_string(),
+                }))
+            }
+            Err(e) => {
+                app_log!(error, error = %e, email = %email, "Failed to update credit balance");
+                Ok(Response::new(ConfirmPaymentResponse {
+                    success: false,
+                    payment_verified: true,
+                    new_credit_balance: 0,
+                    message: format!("Payment verified but failed to update balance: {}", e),
+                }))
             }
         }
     }

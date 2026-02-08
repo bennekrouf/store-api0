@@ -24,6 +24,11 @@ pub async fn get_or_create_user_api_groups(
 
     app_log!(info, email = %email, "User has no API groups, creating a default one");
 
+    // Resolve tenant for the default group
+    use crate::endpoint_store::tenant_management;
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let tenant_id = tenant.id;
+
     // Create a basic default group
     let default_group_id = generate_id_from_text("Default API");
     let default_group = ApiGroup {
@@ -31,6 +36,7 @@ pub async fn get_or_create_user_api_groups(
         name: "Default API".to_string(),
         description: "Your default API group".to_string(),
         base: "https://api.example.com".to_string(),
+        tenant_id: tenant_id.clone(),
     };
 
     // Create a sample endpoint for the default group
@@ -41,18 +47,20 @@ pub async fn get_or_create_user_api_groups(
         verb: "GET".to_string(),
         base: "https://api.example.com".to_string(),
         path: "/sample".to_string(),
+        suggested_sentence: "Get the sample resource".to_string(),
         group_id: default_group_id.clone(),
         parameters: vec![],
     };
 
     // Insert the default group
     tx.execute(
-        "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO api_groups (id, name, description, base, tenant_id) VALUES ($1, $2, $3, $4, $5)",
         &[
             &default_group.id,
             &default_group.name,
             &default_group.description,
             &default_group.base,
+            &default_group.tenant_id,
         ],
     )
     .await
@@ -60,7 +68,7 @@ pub async fn get_or_create_user_api_groups(
 
     // Insert the sample endpoint
     tx.execute(
-        "INSERT INTO endpoints (id, text, description, verb, base, path, group_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, suggested_sentence) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         &[
             &sample_endpoint.id,
             &sample_endpoint.text,
@@ -69,6 +77,7 @@ pub async fn get_or_create_user_api_groups(
             &sample_endpoint.base,
             &sample_endpoint.path,
             &sample_endpoint.group_id,
+            &sample_endpoint.suggested_sentence,
         ],
     )
     .await

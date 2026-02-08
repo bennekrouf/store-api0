@@ -20,6 +20,9 @@ mod http_server;
 mod log_api_usage;
 mod manage_endpoint;
 mod models;
+mod payment_service;
+#[cfg(test)]
+mod tests_credit;
 mod reset_user_preferences;
 mod revoke_all_api_keys_handler;
 mod revoke_api_key_handler;
@@ -56,6 +59,8 @@ pub mod endpoint {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    dotenvy::dotenv().ok(); // Load .env file first
+
     if env::var("LOG_PATH_API0").is_err() {
         eprintln!("Error: LOG_PATH_API0 environment variable is required");
         std::process::exit(1);
@@ -212,6 +217,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             name,
                             description: format!("APIs for {}", domain),
                             base,
+                            tenant_id: "".to_string(),
                         };
 
                         api_groups.push(ApiGroupWithEndpoints {
@@ -264,7 +270,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
 
     // Configure gRPC server
-    let service = EndpointServiceImpl::new(store_arc, &formatter_url);
+    let stripe_key = config.stripe_secret_key();
+    let payment_service = Arc::new(payment_service::PaymentService::new(stripe_key));
+
+    let service = EndpointServiceImpl::new(store_arc, &formatter_url, payment_service);
     let grpc_addr = config.grpc_address().parse()?;
 
     // Load the file descriptor for reflection
