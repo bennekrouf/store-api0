@@ -183,6 +183,10 @@ pub struct LogApiUsageRequest {
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
     pub usage: Option<TokenUsage>,
+    /// Opaque end-consumer identifier forwarded by the tenant via X-Consumer-Id.
+    /// api0 stores it verbatim — no PII assumed, no validation performed.
+    /// Null when the tenant did not pass the header.
+    pub consumer_id: Option<String>,
     // Add metadata for matched endpoint info (optional)
     pub metadata: Option<serde_json::Value>,
 }
@@ -208,11 +212,13 @@ pub struct ApiUsageLog {
     pub response_size: Option<i64>,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
-    // Add token usage fields
+    // Token usage fields
     pub usage_estimated: Option<bool>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub model_used: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    /// Opaque end-consumer identifier — null when tenant did not supply X-Consumer-Id.
+    pub consumer_id: Option<String>,
 }

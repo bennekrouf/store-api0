@@ -157,10 +157,17 @@ BEGIN
         CREATE INDEX idx_api_groups_tenant_id ON api_groups(tenant_id);
     END IF;
 
-    -- api_usage_logs
+    -- api_usage_logs: tenant_id
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'api_usage_logs' AND column_name = 'tenant_id') THEN
         ALTER TABLE api_usage_logs ADD COLUMN tenant_id VARCHAR;
         CREATE INDEX idx_usage_logs_tenant_id ON api_usage_logs(tenant_id);
+    END IF;
+
+    -- api_usage_logs: consumer_id — opaque end-consumer identifier supplied by the tenant (e.g. Firebase UID).
+    -- Null when the tenant did not pass X-Consumer-Id. Never contains PII — tenant chooses the value.
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'api_usage_logs' AND column_name = 'consumer_id') THEN
+        ALTER TABLE api_usage_logs ADD COLUMN consumer_id VARCHAR;
+        CREATE INDEX idx_usage_logs_consumer_id ON api_usage_logs(consumer_id);
     END IF;
 END $$;
 

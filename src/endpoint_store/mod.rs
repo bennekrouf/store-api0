@@ -256,8 +256,8 @@ impl EndpointStore {
             id, key_id, email, endpoint_path, method, timestamp,
             response_status, response_time_ms, request_size, response_size,
             ip_address, user_agent, usage_estimated, input_tokens,
-            output_tokens, total_tokens, model_used, metadata, tenant_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19)",
+            output_tokens, total_tokens, model_used, metadata, tenant_id, consumer_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)",
             &[
                 &log_id,
                 &request.key_id,
@@ -276,8 +276,9 @@ impl EndpointStore {
                 &request.usage.as_ref().map(|u| u.output_tokens),
                 &request.usage.as_ref().map(|u| u.total_tokens),
                 &request.usage.as_ref().map(|u| u.model.clone()),
-                &metadata_json, // Now a String, which can be cast to jsonb
-                &tenant_id
+                &metadata_json,
+                &tenant_id,
+                &request.consumer_id,
             ],
         )
         .await
@@ -299,10 +300,10 @@ impl EndpointStore {
                 "SELECT id, key_id, email, endpoint_path, method, timestamp,
             response_status, response_time_ms, request_size, response_size,
             ip_address, user_agent, usage_estimated, input_tokens,
-            output_tokens, total_tokens, model_used, metadata
-            FROM api_usage_logs 
-            WHERE key_id = $1 
-            ORDER BY timestamp DESC 
+            output_tokens, total_tokens, model_used, metadata, consumer_id
+            FROM api_usage_logs
+            WHERE key_id = $1
+            ORDER BY timestamp DESC
             LIMIT $2",
                 &[&key_id, &limit],
             )
@@ -334,6 +335,7 @@ impl EndpointStore {
                 total_tokens: row.get(15),
                 model_used: row.get(16),
                 metadata,
+                consumer_id: row.get(18),
             });
         }
 
