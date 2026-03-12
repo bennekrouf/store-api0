@@ -1,0 +1,385 @@
+api_groups:
+
+  # ── Profile Management ──────────────────────────────────────────────────────
+  - name: "Profile Management"
+    description: "Create, delete, and rename CV profiles"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "create profile"
+        description: "Create a new CV profile with the given name"
+        verb: "POST"
+        path: "/api/create"
+        parameters:
+          - name: "profile"
+            description: "Name of the profile to create (e.g. john-doe)"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "person"
+              - "name"
+              - "collaborator"
+
+      - text: "delete profile"
+        description: "Delete an existing CV profile and all its files"
+        verb: "POST"
+        path: "/api/delete-profile"
+        parameters:
+          - name: "profile"
+            description: "Name of the profile to delete"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "person"
+              - "name"
+
+      - text: "rename profile"
+        description: "Rename an existing CV profile"
+        verb: "PUT"
+        path: "/api/profiles/{profile}/rename"
+        parameters:
+          - name: "profile"
+            description: "Current name of the profile to rename"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "old_name"
+              - "person"
+          - name: "new_name"
+            description: "New name for the profile"
+            required: "true"
+            alternatives:
+              - "name"
+              - "rename_to"
+              - "new_profile_name"
+
+  # ── CV Generation ────────────────────────────────────────────────────────────
+  - name: "CV Generation"
+    description: "Generate CV PDF documents from profiles"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "generate CV"
+        description: "Generate a PDF CV for a profile, optionally in a specific language or template"
+        verb: "POST"
+        path: "/api/generate"
+        parameters:
+          - name: "profile"
+            description: "Profile name to generate the CV for"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "person"
+              - "name"
+          - name: "lang"
+            description: "Language for the CV: 'en' (English) or 'fr' (French). Defaults to 'en'"
+            required: "false"
+            alternatives:
+              - "language"
+              - "locale"
+          - name: "template"
+            description: "CV template to use: 'default', 'keyteo', or 'keyteo_full'. Defaults to 'default'"
+            required: "false"
+            alternatives:
+              - "layout"
+              - "theme"
+              - "template_name"
+
+  # ── CV Optimization ───────────────────────────────────────────────────────────
+  - name: "CV Optimization"
+    description: "Optimize CVs for ATS and specific job postings"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "optimize CV for job"
+        description: "Optimize a CV for ATS and a specific job posting URL, returns optimized Typst content and keyword analysis"
+        verb: "POST"
+        path: "/api/optimize"
+        parameters:
+          - name: "profile"
+            description: "Profile name whose CV to optimize"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "person"
+              - "name"
+          - name: "job_url"
+            description: "URL of the job posting (LinkedIn, Indeed, company site, etc.)"
+            required: "true"
+            alternatives:
+              - "url"
+              - "job_link"
+              - "linkedin_url"
+              - "posting_url"
+          - name: "lang"
+            description: "Language for the output CV: 'en' or 'fr'. Defaults to 'en'"
+            required: "false"
+            alternatives:
+              - "language"
+              - "locale"
+
+      - text: "optimize and generate CV"
+        description: "Optimize a CV for a job posting AND generate the resulting PDF in one step"
+        verb: "POST"
+        path: "/api/optimize-and-generate"
+        parameters:
+          - name: "profile"
+            description: "Profile name whose CV to optimize and generate"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "person"
+              - "name"
+          - name: "job_url"
+            description: "URL of the job posting to optimize for"
+            required: "true"
+            alternatives:
+              - "url"
+              - "job_link"
+              - "linkedin_url"
+              - "posting_url"
+          - name: "lang"
+            description: "Language for the output CV: 'en' or 'fr'. Defaults to 'en'"
+            required: "false"
+            alternatives:
+              - "language"
+              - "locale"
+
+  # ── Job Fit Analysis ──────────────────────────────────────────────────────────
+  - name: "Job Fit Analysis"
+    description: "Analyze how well a CV profile matches a job posting"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "analyze job fit"
+        description: "Analyze how well a profile's CV matches a job posting and return a detailed fit report"
+        verb: "POST"
+        path: "/api/analyze-job-fit"
+        parameters:
+          - name: "profile_name"
+            description: "Name of the CV profile to evaluate"
+            required: "true"
+            alternatives:
+              - "profile"
+              - "person"
+              - "name"
+          - name: "job_url"
+            description: "URL of the job posting to compare against"
+            required: "true"
+            alternatives:
+              - "url"
+              - "job_link"
+              - "linkedin_url"
+              - "posting_url"
+
+  # ── CV Translation ────────────────────────────────────────────────────────────
+  - name: "CV Translation"
+    description: "Translate a CV profile to another language"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "translate CV"
+        description: "Translate a CV profile's content to a target language"
+        verb: "POST"
+        path: "/api/translate"
+        parameters:
+          - name: "profile_name"
+            description: "Name of the profile to translate"
+            required: "true"
+            alternatives:
+              - "profile"
+              - "person"
+              - "name"
+          - name: "target_lang"
+            description: "Target language code: 'fr' for French, 'en' for English, etc."
+            required: "true"
+            alternatives:
+              - "language"
+              - "lang"
+              - "locale"
+              - "target_language"
+
+  # ── CV Import ─────────────────────────────────────────────────────────────────
+  - name: "CV Import"
+    description: "Import and convert existing CV documents"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "upload CV file"
+        description: "Upload a PDF or DOCX CV file to extract and create a structured profile automatically"
+        verb: "POST"
+        path: "/api/cv/upload"
+        parameters:
+          - name: "cv_file"
+            description: "The CV file to upload (PDF or DOCX, max 10MB)"
+            required: "true"
+            alternatives:
+              - "file"
+              - "document"
+              - "cv_document"
+              - "resume"
+
+  # ── File Management ───────────────────────────────────────────────────────────
+  - name: "File Management"
+    description: "Browse and edit CV template and config files"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "list files"
+        description: "Get the full file tree of all profiles and their .typ and .toml files"
+        verb: "GET"
+        path: "/api/files/tree"
+        parameters: []
+
+      - text: "get file content"
+        description: "Read the content of a .typ or .toml file for a profile"
+        verb: "GET"
+        path: "/api/files/content"
+        parameters:
+          - name: "path"
+            description: "Relative file path, e.g. 'john-doe/cv_params.toml' or 'john-doe/experiences_en.typ'"
+            required: "true"
+            alternatives:
+              - "file_path"
+              - "file"
+              - "filepath"
+
+      - text: "save file"
+        description: "Save new content to a .typ or .toml file for a profile"
+        verb: "POST"
+        path: "/api/files/save"
+        parameters:
+          - name: "path"
+            description: "Relative file path to save, e.g. 'john-doe/cv_params.toml'"
+            required: "true"
+            alternatives:
+              - "file_path"
+              - "file"
+          - name: "content"
+            description: "The new file content to write"
+            required: "true"
+            alternatives:
+              - "text"
+              - "body"
+              - "data"
+
+      - text: "upload profile picture"
+        description: "Upload a profile photo (PNG or JPEG) for a CV profile"
+        verb: "POST"
+        path: "/api/upload-picture"
+        parameters:
+          - name: "profile"
+            description: "Profile name to attach the picture to"
+            required: "true"
+            alternatives:
+              - "profile_name"
+              - "person"
+              - "name"
+          - name: "file"
+            description: "Image file to upload (PNG or JPEG)"
+            required: "true"
+            alternatives:
+              - "image"
+              - "photo"
+              - "picture"
+
+  # ── CV Form Data ──────────────────────────────────────────────────────────────
+  - name: "CV Form Data"
+    description: "Read and update structured CV data through the form editor"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "get CV data"
+        description: "Get the structured CV data (personal info, work experience, education, skills, etc.) for a profile"
+        verb: "GET"
+        path: "/api/profiles/{profile_name}/cv-data"
+        parameters:
+          - name: "profile_name"
+            description: "Name of the profile to fetch CV data for"
+            required: "true"
+            alternatives:
+              - "profile"
+              - "person"
+              - "name"
+
+      - text: "update CV data"
+        description: "Update the structured CV data for a profile (regenerates cv_params.toml and experiences files)"
+        verb: "PUT"
+        path: "/api/profiles/{profile_name}/cv-data"
+        parameters:
+          - name: "profile_name"
+            description: "Name of the profile to update"
+            required: "true"
+            alternatives:
+              - "profile"
+              - "person"
+              - "name"
+
+  # ── Credits & Payment ─────────────────────────────────────────────────────────
+  - name: "Credits and Payment"
+    description: "Manage credits and Stripe payments"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "get credit balance"
+        description: "Get the current credit balance for the authenticated user"
+        verb: "GET"
+        path: "/api/payment/balance"
+        parameters: []
+
+      - text: "create payment"
+        description: "Create a Stripe payment intent to purchase credits (1 USD = 100 credits)"
+        verb: "POST"
+        path: "/api/payment/intent"
+        parameters:
+          - name: "amount_dollars"
+            description: "Amount to pay in whole dollars (minimum 1)"
+            required: "true"
+            alternatives:
+              - "amount"
+              - "dollars"
+              - "usd"
+              - "price"
+          - name: "currency"
+            description: "Currency code: 'usd', 'eur', 'gbp', 'chf', 'cad', 'aud'. Defaults to 'usd'"
+            required: "false"
+            alternatives:
+              - "currency_code"
+              - "payment_currency"
+
+      - text: "confirm payment"
+        description: "Confirm a Stripe payment and credit the user's account"
+        verb: "POST"
+        path: "/api/payment/confirm"
+        parameters:
+          - name: "payment_intent_id"
+            description: "Stripe PaymentIntent ID returned from the create payment step"
+            required: "true"
+            alternatives:
+              - "intent_id"
+              - "stripe_id"
+              - "payment_id"
+
+  # ── User & System ─────────────────────────────────────────────────────────────
+  - name: "User and System"
+    description: "User info and system endpoints"
+    base: "https://api.cvenom.com"
+    endpoints:
+
+      - text: "get my profile"
+        description: "Get the current authenticated user's information and tenant details"
+        verb: "GET"
+        path: "/api/me"
+        parameters: []
+
+      - text: "list templates"
+        description: "Get the list of available CV templates with their names and descriptions"
+        verb: "GET"
+        path: "/api/templates"
+        parameters: []
+
+      - text: "health check"
+        description: "Check if the cvenom API service is running"
+        verb: "GET"
+        path: "/api/health"
+        parameters: []
