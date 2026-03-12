@@ -145,9 +145,17 @@ pub async fn upload_api_config(
         }
     };
 
-    // Format the content if it's YAML and formatter is available
+    // Format the content if it's YAML and formatter is available.
+    // Skip AI formatting when the YAML is already in api0 format (starts with `api_groups:`),
+    // because the Cohere model has a limited output-token budget and will truncate large specs,
+    // leaving only a partial set of endpoints in the database.
+    let already_in_api0_format = file_content.trim_start().starts_with("api_groups:");
+
     let processed_content =
-        if upload_data.file_name.ends_with(".yaml") || upload_data.file_name.ends_with(".yml") {
+        if !already_in_api0_format
+            && (upload_data.file_name.ends_with(".yaml")
+                || upload_data.file_name.ends_with(".yml"))
+        {
             match formatter
                 .format_yaml(file_content.as_bytes(), &upload_data.file_name)
                 .await
@@ -170,6 +178,12 @@ pub async fn upload_api_config(
                     file_content
                 }
             }
+        } else if upload_data.file_name.ends_with(".yaml")
+            || upload_data.file_name.ends_with(".yml")
+        {
+            // Already in api0 format — use as-is, no AI reformatting needed
+            app_log!(info, "YAML already in api0 format (api_groups:), skipping AI formatter");
+            file_content
         } else if upload_data.file_name.ends_with(".json") {
             // Pretty print JSON if possible
             match serde_json::from_str::<serde_json::Value>(&file_content) {
