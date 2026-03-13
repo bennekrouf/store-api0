@@ -47,7 +47,7 @@ jobs:
         with:
           name: store-binary
           path: target/release/store
-          retention-days: 1
+          retention-days: 3
 
   # ── Deploy (master push only) ──────────────────────────────────────────────
   deploy:
@@ -85,19 +85,18 @@ jobs:
 
       - name: Sync config.yaml
         run: |
-          ssh -i ~/.ssh/deploy_key \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
-            "mkdir -p /opt/api0/store"
           scp -i ~/.ssh/deploy_key \
             config.yaml \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/api0/store/config.yaml
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:~/store-config.yaml
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "sudo mkdir -p /opt/api0/store && sudo mv ~/store-config.yaml /opt/api0/store/config.yaml"
 
       - name: Atomic swap & restart
         run: |
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "set -e
-             chmod +x /opt/api0/bin/store.new
-             mv /opt/api0/bin/store.new /opt/api0/bin/store
-             pm2 restart api0-store
-             pm2 list"
+             sudo mv /opt/api0/bin/store.new /opt/api0/bin/store
+             sudo pm2 restart api0-store
+             sudo pm2 list"
