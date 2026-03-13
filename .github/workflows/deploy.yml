@@ -75,9 +75,13 @@ jobs:
       - name: Upload binary
         run: |
           chmod +x dist/store
+          # /opt/api0/bin/ is owned by api0:api0; upload to home dir then sudo-move.
           scp -i ~/.ssh/deploy_key \
             dist/store \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/api0/bin/store.new
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:~/store.new
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "sudo mkdir -p /opt/api0/bin && sudo mv ~/store.new /opt/api0/bin/store.new && sudo chmod +x /opt/api0/bin/store.new"
 
       - name: Sync config.yaml
         run: |
