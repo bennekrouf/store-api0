@@ -191,3 +191,23 @@ CREATE TABLE IF NOT EXISTS reference_data (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reference_data_email ON reference_data(email);
+
+-- Credit transaction log: every balance change is recorded here
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'credit_transactions') THEN
+        CREATE TABLE credit_transactions (
+            id          BIGSERIAL PRIMARY KEY,
+            tenant_id   VARCHAR NOT NULL,
+            email       VARCHAR NOT NULL,
+            amount      BIGINT  NOT NULL,
+            balance_after BIGINT NOT NULL,
+            action_type VARCHAR NOT NULL DEFAULT 'unknown',
+            description TEXT,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX idx_credit_tx_email      ON credit_transactions(email);
+        CREATE INDEX idx_credit_tx_tenant_id  ON credit_transactions(tenant_id);
+        CREATE INDEX idx_credit_tx_created_at ON credit_transactions(created_at);
+    END IF;
+END $$;

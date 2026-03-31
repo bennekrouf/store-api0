@@ -20,6 +20,7 @@ use crate::revoke_all_api_keys_handler::revoke_all_api_keys_handler;
 use crate::revoke_api_key_handler::revoke_api_key_handler;
 use crate::update_api_group::update_api_group;
 use crate::update_credit_balance_handler::update_credit_balance_handler;
+use crate::get_credit_transactions_handler::get_credit_transactions_handler;
 use crate::update_user_preferences::update_user_preferences;
 
 use crate::upload_api_config::upload_api_config;
@@ -116,6 +117,10 @@ pub async fn start_http_server(
                             .route(
                                 "/user/credits",
                                 web::post().to(update_credit_balance_handler),
+                            )
+                            .route(
+                                "/user/credit-transactions/{email}",
+                                web::get().to(get_credit_transactions_handler),
                             )
                             // Key validation and usage
                             .route("/key/validate", web::post().to(validate_api_key))

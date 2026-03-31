@@ -342,12 +342,16 @@ impl EndpointStore {
         Ok(logs)
     }
 
-    pub async fn update_credit_balance(&self, email: &str, amount: i64) -> Result<i64, StoreError> {
-        api_key_management::update_credit_balance(self, email, amount).await
+    pub async fn update_credit_balance(&self, email: &str, amount: i64, action_type: &str, description: Option<&str>) -> Result<i64, StoreError> {
+        api_key_management::update_credit_balance(self, email, amount, action_type, description).await
     }
 
     pub async fn get_credit_balance(&self, email: &str) -> Result<i64, StoreError> {
         api_key_management::get_credit_balance(self, email).await
+    }
+
+    pub async fn get_credit_transactions(&self, email: &str, limit: i64) -> Result<Vec<crate::endpoint_store::models::CreditTransaction>, StoreError> {
+        api_key_management::get_credit_transactions(self, email, limit).await
     }
 
     pub async fn manage_single_endpoint(

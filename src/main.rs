@@ -13,6 +13,7 @@ mod get_api_keys_status;
 mod get_api_usage_logs;
 mod get_authorized_domains;
 mod get_credit_balance_handler;
+mod get_credit_transactions_handler;
 mod get_user_preferences;
 mod grpc_server;
 mod health_check;

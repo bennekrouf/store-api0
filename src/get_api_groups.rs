@@ -61,7 +61,7 @@ pub async fn get_api_groups(
     if is_new_user && current_balance == 0 {
         app_log!(info, email = %email, "New user detected, adding $5 default credit");
 
-        match store.update_credit_balance(&email, 500).await {
+        match store.update_credit_balance(&email, 500, "welcome", None).await {
             Ok(new_balance) => {
                 app_log!(info,
                     email = %email,

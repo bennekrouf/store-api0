@@ -587,7 +587,7 @@ impl EndpointService for EndpointServiceImpl {
         // Add credits to user balance (1 cent = 100 credits)
         let credits_to_add = amount * 100;
 
-        match self.store.update_credit_balance(&email, credits_to_add).await {
+        match self.store.update_credit_balance(&email, credits_to_add, "topup", None).await {
             Ok(new_balance) => {
                 app_log!(info, email = %email, amount = amount, credits = credits_to_add, new_balance = new_balance, "Successfully added credits");
                 Ok(Response::new(ConfirmPaymentResponse {

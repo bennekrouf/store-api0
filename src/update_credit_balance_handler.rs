@@ -15,7 +15,7 @@ pub async fn update_credit_balance_handler(
         "Received HTTP update credit balance request"
     );
 
-    match store.update_credit_balance(email, amount).await {
+    match store.update_credit_balance(email, amount, &request.action_type, request.description.as_deref()).await {
         Ok(new_balance) => {
             app_log!(info,
                 email = %email,

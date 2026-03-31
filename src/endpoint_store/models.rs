@@ -158,6 +158,27 @@ pub struct GenerateKeyRequest {
 pub struct UpdateCreditRequest {
     pub email: String,
     pub amount: i64,
+    /// e.g. "cv_generation", "cover_letter", "optimize", "translate", "cv_import", "topup", "welcome"
+    #[serde(default = "default_action_type")]
+    pub action_type: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+fn default_action_type() -> String {
+    "unknown".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreditTransaction {
+    pub id: i64,
+    pub tenant_id: String,
+    pub email: String,
+    pub amount: i64,
+    pub balance_after: i64,
+    pub action_type: String,
+    pub description: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

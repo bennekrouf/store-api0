@@ -48,7 +48,7 @@ pub async fn log_api_usage(
                 if cost > 0 {
                     app_log!(info, email = %log_request.email, cost = cost, "Deducting credits for usage");
                     // Pass negative amount to decrement
-                    if let Err(e) = store.update_credit_balance(&log_request.email, -cost).await {
+                    if let Err(e) = store.update_credit_balance(&log_request.email, -cost, "api_usage", None).await {
                          app_log!(error, error = %e, email = %log_request.email, "Failed to deduct credits");
                     }
                 }

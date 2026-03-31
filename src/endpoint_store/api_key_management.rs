@@ -261,16 +261,16 @@ pub async fn update_credit_balance(
     store: &EndpointStore,
     email: &str,
     amount: i64,
+    action_type: &str,
+    description: Option<&str>,
 ) -> Result<i64, StoreError> {
     use crate::endpoint_store::tenant_management;
 
-    // Resolve tenant (this migrates legacy credits if needed)
     let tenant = tenant_management::get_default_tenant(store, email).await?;
     let tenant_id = tenant.id;
 
     let client = store.get_conn().await?;
 
-    // Update Tenant Balance
     client
         .execute(
             "UPDATE tenants SET credit_balance = credit_balance + $1 WHERE id = $2",
@@ -287,7 +287,54 @@ pub async fn update_credit_balance(
         .await
         .to_store_error()?;
 
-    Ok(balance_row.get(0))
+    let new_balance: i64 = balance_row.get(0);
+
+    let _ = client
+        .execute(
+            "INSERT INTO credit_transactions (tenant_id, email, amount, balance_after, action_type, description) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&tenant_id, &email, &amount, &new_balance, &action_type, &description],
+        )
+        .await;
+
+    Ok(new_balance)
+}
+
+pub async fn get_credit_transactions(
+    store: &EndpointStore,
+    email: &str,
+    limit: i64,
+) -> Result<Vec<crate::endpoint_store::models::CreditTransaction>, StoreError> {
+    use crate::endpoint_store::tenant_management;
+
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let tenant_id = tenant.id;
+    let client = store.get_conn().await?;
+
+    let rows = client
+        .query(
+            "SELECT id, tenant_id, email, amount, balance_after, action_type, description, created_at \
+             FROM credit_transactions \
+             WHERE tenant_id = $1 \
+             ORDER BY created_at DESC \
+             LIMIT $2",
+            &[&tenant_id, &limit],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(rows.iter().map(|row| {
+        crate::endpoint_store::models::CreditTransaction {
+            id: row.get::<_, i64>(0),
+            tenant_id: row.get::<_, String>(1),
+            email: row.get::<_, String>(2),
+            amount: row.get::<_, i64>(3),
+            balance_after: row.get::<_, i64>(4),
+            action_type: row.get::<_, String>(5),
+            description: row.get::<_, Option<String>>(6),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
+        }
+    }).collect())
 }
 
 /// Get credit balance for a user (via their default tenant)
