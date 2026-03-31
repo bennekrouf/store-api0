@@ -289,13 +289,23 @@ pub async fn update_credit_balance(
 
     let new_balance: i64 = balance_row.get(0);
 
-    let _ = client
+    let desc: Option<String> = description.map(|s| s.to_string());
+    if let Err(e) = client
         .execute(
-            "INSERT INTO credit_transactions (tenant_id, email, amount, balance_after, action_type, description) \
+            "INSERT INTO credit_transactions \
+             (tenant_id, email, amount, balance_after, action_type, description) \
              VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&tenant_id, &email, &amount, &new_balance, &action_type, &description],
+            &[&tenant_id, &email, &amount, &new_balance, &action_type, &desc],
         )
-        .await;
+        .await
+    {
+        app_log!(error,
+            email = %email,
+            action_type = %action_type,
+            amount = amount,
+            "Failed to record credit transaction: {}", e
+        );
+    }
 
     Ok(new_balance)
 }
