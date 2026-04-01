@@ -354,6 +354,44 @@ impl EndpointStore {
         api_key_management::get_credit_transactions(self, email, limit).await
     }
 
+    /// Returns Stripe top-up payments for a user (action_type = 'stripe_topup'),
+    /// shaped for the PaymentHistory frontend interface.
+    pub async fn get_payment_history(&self, email: &str) -> Result<Vec<serde_json::Value>, StoreError> {
+        use crate::endpoint_store::tenant_management;
+        let tenant = tenant_management::get_default_tenant(self, email).await?;
+        let tenant_id = tenant.id;
+        let client = self.get_conn().await?;
+
+        let rows = client
+            .query(
+                "SELECT id, amount, description, created_at \
+                 FROM credit_transactions \
+                 WHERE tenant_id = $1 AND action_type = 'stripe_topup' \
+                 ORDER BY created_at DESC \
+                 LIMIT 50",
+                &[&tenant_id],
+            )
+            .await
+            .to_store_error()?;
+
+        let payments: Vec<serde_json::Value> = rows.iter().map(|row| {
+            let id: i64 = row.get(0);
+            let amount: i64 = row.get(1);
+            let description: Option<String> = row.get(2);
+            let created_at: chrono::DateTime<chrono::Utc> = row.get(3);
+            serde_json::json!({
+                "id": id.to_string(),
+                "amount": amount,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": created_at.to_rfc3339(),
+                "description": description,
+            })
+        }).collect();
+
+        Ok(payments)
+    }
+
     pub async fn manage_single_endpoint(
         &self,
         email: &str,

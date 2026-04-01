@@ -21,6 +21,7 @@ mod http_server;
 mod log_api_usage;
 mod manage_endpoint;
 mod models;
+mod payment_handler;
 mod payment_service;
 #[cfg(test)]
 mod tests_credit;
@@ -259,21 +260,29 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "Database connection validated successfully");
 
+    // Initialise Stripe payment service (shared between HTTP and gRPC)
+    let stripe_key = config.stripe_secret_key();
+    let payment_service = Arc::new(payment_service::PaymentService::new(stripe_key));
+    let http_payment_service = Arc::clone(&payment_service);
+
     // Start the HTTP server as a separate task
     let http_handle = tokio::spawn(async move {
         app_log!(info, "Starting HTTP server on {}:{}", http_host, http_port);
 
-        if let Err(e) =
-            http_server::start_http_server(http_store, http_formatter, &http_host, http_port).await
+        if let Err(e) = http_server::start_http_server(
+            http_store,
+            http_formatter,
+            http_payment_service,
+            &http_host,
+            http_port,
+        )
+        .await
         {
             app_log!(error, "HTTP server error: {}", e);
         }
     });
 
     // Configure gRPC server
-    let stripe_key = config.stripe_secret_key();
-    let payment_service = Arc::new(payment_service::PaymentService::new(stripe_key));
-
     let service = EndpointServiceImpl::new(store_arc, &formatter_url, payment_service);
     let grpc_addr = config.grpc_address().parse()?;
 

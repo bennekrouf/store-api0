@@ -21,6 +21,10 @@ use crate::revoke_api_key_handler::revoke_api_key_handler;
 use crate::update_api_group::update_api_group;
 use crate::update_credit_balance_handler::update_credit_balance_handler;
 use crate::get_credit_transactions_handler::get_credit_transactions_handler;
+use crate::payment_handler::{
+    confirm_payment_handler, create_payment_intent_handler, get_payment_history_handler,
+};
+use crate::payment_service::PaymentService;
 use crate::update_user_preferences::update_user_preferences;
 
 use crate::upload_api_config::upload_api_config;
@@ -38,6 +42,7 @@ use tokio::task;
 pub async fn start_http_server(
     store: Arc<EndpointStore>,
     formatter: Arc<YamlFormatter>,
+    payment_service: Arc<PaymentService>,
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
@@ -45,6 +50,7 @@ pub async fn start_http_server(
     let addr = addr.parse::<SocketAddr>().unwrap();
     let store_clone = store.clone();
     let formatter_clone = formatter.clone();
+    let payment_service_clone = payment_service.clone();
 
     // Run Actix Web in a blocking task to avoid Send issues
     let _ = task::spawn_blocking(move || {
@@ -65,7 +71,8 @@ pub async fn start_http_server(
                     .wrap(cors)
                     // .wrap(ApiKeyAuth::new(store_clone.clone()))
                     .app_data(web::Data::new(store_clone.clone()))
-                    .app_data(web::Data::new(formatter_clone.clone())) // Add formatter to app data
+                    .app_data(web::Data::new(formatter_clone.clone()))
+                    .app_data(web::Data::new(payment_service_clone.clone()))
                     .service(
                         web::scope("/api")
                             // API groups endpoints
@@ -132,9 +139,12 @@ pub async fn start_http_server(
                                 "/key/usage/{email}/{key_id}",
                                 web::get().to(get_api_key_usage),
                             )
-                            .route("/health", web::get().to(health_check::health_check)),
+                            .route("/health", web::get().to(health_check::health_check))
+                            // Payment (Stripe) endpoints
+                            .route("/payments/intent", web::post().to(create_payment_intent_handler))
+                            .route("/payments/confirm", web::post().to(confirm_payment_handler))
+                            .route("/payments/history/{email}", web::get().to(get_payment_history_handler)),
                     )
-                // Credit balance endpoints
             })
             .bind(addr)?
             .workers(1)
