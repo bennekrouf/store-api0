@@ -53,40 +53,17 @@ pub async fn get_api_keys_status(
     store: &EndpointStore,
     email: &str,
 ) -> Result<KeyPreference, StoreError> {
-    let client = store.get_conn().await?;
+    use crate::endpoint_store::tenant_management;
 
     app_log!(debug, email = %email, "Checking API keys status");
 
-    let user_exists_row = client
-        .query_opt("SELECT 1 FROM user_preferences WHERE email = $1", &[&email])
-        .await
-        .to_store_error()?;
+    // Read balance from the tenant (same source as get_credit_balance / header widget)
+    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let balance = tenant.credit_balance;
 
-    let user_exists = user_exists_row.is_some();
+    app_log!(debug, email = %email, balance = balance, "Retrieved credit balance from tenant");
 
-    app_log!(debug, email = %email, user_exists = user_exists, "User exists in preferences");
-
-    if !user_exists {
-        app_log!(info, email = %email, "Creating new user in preferences table");
-        client
-            .execute(
-                "INSERT INTO user_preferences (email, hidden_defaults, credit_balance) VALUES ($1, '', 0)",
-                &[&email],
-            )
-            .await
-            .to_store_error()?;
-    }
-
-    let balance_row = client
-        .query_one(
-            "SELECT credit_balance FROM user_preferences WHERE email = $1",
-            &[&email],
-        )
-        .await
-        .to_store_error()?;
-    let balance: i64 = balance_row.get(0);
-
-    app_log!(debug, email = %email, balance = balance, "Retrieved credit balance");
+    let client = store.get_conn().await?;
 
     let key_count_row = client
         .query_one(
@@ -113,9 +90,9 @@ pub async fn get_api_keys_status(
 
     let rows = client
         .query(
-            "SELECT id, key_prefix, key_name, generated_at, last_used
-            FROM api_keys 
-            WHERE email = $1 AND is_active = true 
+            "SELECT id, key_prefix, key_name, generated_at, last_used, usage_count
+            FROM api_keys
+            WHERE email = $1 AND is_active = true
             ORDER BY generated_at DESC",
             &[&email],
         )
@@ -132,6 +109,7 @@ pub async fn get_api_keys_status(
             last_used: row
                 .get::<_, Option<chrono::DateTime<chrono::Utc>>>(4)
                 .map(|dt| dt.to_rfc3339()),
+            usage_count: row.get::<_, i64>(5),
         });
     }
 
@@ -238,8 +216,8 @@ pub async fn get_api_key_usage(
 
     let row = client
         .query_opt(
-            "SELECT id, key_prefix, key_name, generated_at, last_used
-             FROM api_keys 
+            "SELECT id, key_prefix, key_name, generated_at, last_used, usage_count
+             FROM api_keys
              WHERE id = $1 AND is_active = true",
             &[&key_id],
         )
@@ -254,6 +232,7 @@ pub async fn get_api_key_usage(
         last_used: r
             .get::<_, Option<chrono::DateTime<chrono::Utc>>>(4)
             .map(|dt| dt.to_rfc3339()),
+        usage_count: r.get::<_, i64>(5),
     }))
 }
 
