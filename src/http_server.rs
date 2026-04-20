@@ -1,4 +1,5 @@
 use crate::add_api_group::add_api_group;
+use crate::admin_credit_handler::admin_credit_handler;
 use crate::app_log;
 use crate::delete_api_group::delete_api_group;
 use crate::delete_endpoint::delete_endpoint;
@@ -11,20 +12,20 @@ use crate::get_api_keys_status::get_api_keys_status;
 use crate::get_api_usage_logs::get_api_usage_logs;
 use crate::get_authorized_domains::get_authorized_domains;
 use crate::get_credit_balance_handler::get_credit_balance_handler;
+use crate::get_credit_transactions_handler::get_credit_transactions_handler;
 use crate::get_user_preferences::get_user_preferences;
 use crate::health_check;
 use crate::log_api_usage::log_api_usage;
 use crate::manage_endpoint::manage_endpoint;
+use crate::payment_handler::{
+    confirm_payment_handler, create_payment_intent_handler, get_payment_history_handler,
+};
+use crate::payment_service::PaymentService;
 use crate::reset_user_preferences::reset_user_preferences;
 use crate::revoke_all_api_keys_handler::revoke_all_api_keys_handler;
 use crate::revoke_api_key_handler::revoke_api_key_handler;
 use crate::update_api_group::update_api_group;
 use crate::update_credit_balance_handler::update_credit_balance_handler;
-use crate::get_credit_transactions_handler::get_credit_transactions_handler;
-use crate::payment_handler::{
-    confirm_payment_handler, create_payment_intent_handler, get_payment_history_handler,
-};
-use crate::payment_service::PaymentService;
 use crate::update_user_preferences::update_user_preferences;
 
 use crate::upload_api_config::upload_api_config;
@@ -43,6 +44,7 @@ pub async fn start_http_server(
     store: Arc<EndpointStore>,
     formatter: Arc<YamlFormatter>,
     payment_service: Arc<PaymentService>,
+    firebase_project_id: String,
     host: &str,
     port: u16,
 ) -> std::io::Result<()> {
@@ -51,6 +53,7 @@ pub async fn start_http_server(
     let store_clone = store.clone();
     let formatter_clone = formatter.clone();
     let payment_service_clone = payment_service.clone();
+    let firebase_project_id_clone = firebase_project_id.clone();
 
     // Run Actix Web in a blocking task to avoid Send issues
     let _ = task::spawn_blocking(move || {
@@ -73,6 +76,8 @@ pub async fn start_http_server(
                     .app_data(web::Data::new(store_clone.clone()))
                     .app_data(web::Data::new(formatter_clone.clone()))
                     .app_data(web::Data::new(payment_service_clone.clone()))
+                    // Firebase project ID — used by AdminUser extractor
+                    .app_data(web::Data::new(firebase_project_id_clone.clone()))
                     .service(
                         web::scope("/api")
                             // API groups endpoints
@@ -143,7 +148,9 @@ pub async fn start_http_server(
                             // Payment (Stripe) endpoints
                             .route("/payments/intent", web::post().to(create_payment_intent_handler))
                             .route("/payments/confirm", web::post().to(confirm_payment_handler))
-                            .route("/payments/history/{email}", web::get().to(get_payment_history_handler)),
+                            .route("/payments/history/{email}", web::get().to(get_payment_history_handler))
+                            // Admin endpoints (Firebase JWT, admin email only)
+                            .route("/admin/credits", web::post().to(admin_credit_handler)),
                     )
             })
             .bind(addr)?

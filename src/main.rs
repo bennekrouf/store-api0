@@ -1,5 +1,7 @@
 // src/main.rs
 mod add_api_group;
+mod admin_auth;
+mod admin_credit_handler;
 mod config;
 mod db_pool;
 mod delete_api_group;
@@ -269,10 +271,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_handle = tokio::spawn(async move {
         app_log!(info, "Starting HTTP server on {}:{}", http_host, http_port);
 
+        let firebase_project_id = std::env::var("FIREBASE_PROJECT_ID")
+            .unwrap_or_else(|_| "semantic-27923".to_string());
+
         if let Err(e) = http_server::start_http_server(
             http_store,
             http_formatter,
             http_payment_service,
+            firebase_project_id,
             &http_host,
             http_port,
         )
