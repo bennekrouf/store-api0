@@ -1,6 +1,7 @@
 // src/main.rs
 mod add_api_group;
 mod admin_auth;
+mod downstream_auth_handler;
 mod admin_credit_handler;
 mod config;
 mod generate_consumer_key_handler;

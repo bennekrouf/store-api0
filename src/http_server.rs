@@ -1,4 +1,7 @@
 use crate::add_api_group::add_api_group;
+use crate::downstream_auth_handler::{
+    get_downstream_auth_handler, get_downstream_auth_by_id_handler, save_downstream_auth_handler,
+};
 use crate::admin_credit_handler::admin_credit_handler;
 use crate::generate_consumer_key_handler::generate_consumer_key_handler;
 use crate::mcp_tools_handler::{
@@ -162,7 +165,12 @@ pub async fn start_http_server(
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::get().to(get_mcp_tool_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::delete().to(delete_mcp_tool_handler))
                             // Consumer key generation (B2B2C)
-                            .route("/consumer-keys", web::post().to(generate_consumer_key_handler)),
+                            .route("/consumer-keys", web::post().to(generate_consumer_key_handler))
+                            // Downstream auth (tenant-level)
+                            .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
+                            .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
+                            // Internal: gateway uses tenant_id directly
+                            .route("/tenant/downstream-auth/{tenant_id}", web::get().to(get_downstream_auth_by_id_handler)),
                     )
             })
             .bind(addr)?

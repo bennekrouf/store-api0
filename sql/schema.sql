@@ -264,3 +264,20 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tools_lookup
     ON mcp_tools(tenant_id, tool_name, is_active);
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_tenant
     ON mcp_tools(tenant_id);
+
+-- ── Tenant downstream auth ────────────────────────────────────────────────────
+-- One row per tenant — defines how the MCP gateway authenticates against the
+-- tenant's backend on every proxied call.
+
+CREATE TABLE IF NOT EXISTS tenant_downstream_auth (
+    tenant_id            VARCHAR PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    auth_mode            VARCHAR NOT NULL DEFAULT 'none',
+    -- google_sa
+    service_account_json TEXT    DEFAULT NULL,
+    target_audience      VARCHAR DEFAULT NULL,
+    -- static_bearer
+    bearer_token         VARCHAR DEFAULT NULL,
+    -- header_injection  (JSON object: {"Header-Name": "value", ...})
+    custom_headers       JSONB   DEFAULT NULL,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -17,6 +17,7 @@ mod replace_user_api_groups;
 mod user_preferences;
 mod utils;
 pub mod tenant_management;
+pub mod downstream_auth_management;
 use crate::app_log;
 pub use errors::*;
 pub use models::*;
@@ -432,5 +433,22 @@ impl EndpointStore {
         tool_name: &str,
     ) -> Result<bool, StoreError> {
         mcp_tools_management::delete_mcp_tool(self, tenant_id, tool_name).await
+    }
+
+    // ── Downstream auth ───────────────────────────────────────────────────────
+
+    pub async fn get_downstream_auth(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Option<downstream_auth_management::TenantDownstreamAuth>, StoreError> {
+        downstream_auth_management::get_downstream_auth(self, tenant_id).await
+    }
+
+    pub async fn save_downstream_auth(
+        &self,
+        tenant_id: &str,
+        req: &downstream_auth_management::SaveDownstreamAuthRequest,
+    ) -> Result<downstream_auth_management::TenantDownstreamAuth, StoreError> {
+        downstream_auth_management::save_downstream_auth(self, tenant_id, req).await
     }
 }
