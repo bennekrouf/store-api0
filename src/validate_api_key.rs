@@ -38,6 +38,8 @@ pub async fn validate_api_key(
             valid: false,
             email: None,
             key_id: None,
+            tenant_id: None,
+            provider_tenant_id: None,
             message: "No API key provided".to_string(),
         });
     }
@@ -45,10 +47,12 @@ pub async fn validate_api_key(
     app_log!(info, api_key = %api_key, "Validating API key");
 
     match store.validate_api_key(&api_key).await {
-        Ok(Some((email, key_id))) => {
+        Ok(Some((email, key_id, tenant_id, provider_tenant_id))) => {
             app_log!(info,
                 email = %email,
                 key_id = %key_id,
+                tenant_id = %tenant_id,
+                provider_tenant_id = ?provider_tenant_id,
                 "API key validation successful"
             );
 
@@ -56,6 +60,8 @@ pub async fn validate_api_key(
                 valid: true,
                 email: Some(email),
                 key_id: Some(key_id),
+                tenant_id: Some(tenant_id),
+                provider_tenant_id,
                 message: "API key is valid".to_string(),
             })
         }
@@ -69,6 +75,8 @@ pub async fn validate_api_key(
                 valid: false,
                 email: None,
                 key_id: None,
+                tenant_id: None,
+                provider_tenant_id: None,
                 message: "Invalid API key".to_string(),
             })
         }
@@ -83,6 +91,8 @@ pub async fn validate_api_key(
                 valid: false,
                 email: None,
                 key_id: None,
+                tenant_id: None,
+                provider_tenant_id: None,
                 message: "Validation error".to_string(),
             })
         }

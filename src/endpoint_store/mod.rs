@@ -1,5 +1,6 @@
 mod add_user_api_group;
-mod api_key_management;
+pub mod api_key_management;
+pub mod mcp_tools_management;
 mod authorized_domains;
 mod cleanup;
 pub mod db_helpers;
@@ -209,7 +210,7 @@ impl EndpointStore {
     pub async fn validate_api_key(
         &self,
         key: &str,
-    ) -> Result<Option<(String, String)>, StoreError> {
+    ) -> Result<Option<(String, String, String, Option<String>)>, StoreError> {
         api_key_management::validate_api_key(self, key).await
     }
 
@@ -398,5 +399,38 @@ impl EndpointStore {
         endpoint: &Endpoint,
     ) -> Result<String, StoreError> {
         manage_single_endpoint::manage_single_endpoint(self, email, endpoint).await
+    }
+
+    // ── MCP tools ─────────────────────────────────────────────────────────────
+
+    pub async fn upsert_mcp_tool(
+        &self,
+        tenant_id: &str,
+        req: &mcp_tools_management::UpsertMcpToolRequest,
+    ) -> Result<mcp_tools_management::McpTool, StoreError> {
+        mcp_tools_management::upsert_mcp_tool(self, tenant_id, req).await
+    }
+
+    pub async fn list_mcp_tools(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<mcp_tools_management::McpTool>, StoreError> {
+        mcp_tools_management::list_mcp_tools(self, tenant_id).await
+    }
+
+    pub async fn get_mcp_tool(
+        &self,
+        tenant_id: &str,
+        tool_name: &str,
+    ) -> Result<Option<mcp_tools_management::McpTool>, StoreError> {
+        mcp_tools_management::get_mcp_tool(self, tenant_id, tool_name).await
+    }
+
+    pub async fn delete_mcp_tool(
+        &self,
+        tenant_id: &str,
+        tool_name: &str,
+    ) -> Result<bool, StoreError> {
+        mcp_tools_management::delete_mcp_tool(self, tenant_id, tool_name).await
     }
 }

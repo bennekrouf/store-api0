@@ -189,22 +189,31 @@ pub async fn revoke_all_api_keys(store: &EndpointStore, email: &str) -> Result<u
 // }
 
 /// Validate an API key and return the key_id and email if valid
+/// Returns (email, key_id, tenant_id, provider_tenant_id) for a valid key.
+/// provider_tenant_id is Some(...) for consumer keys, None for regular keys.
 pub async fn validate_api_key(
     store: &EndpointStore,
     key: &str,
-) -> Result<Option<(String, String)>, StoreError> {
+) -> Result<Option<(String, String, String, Option<String>)>, StoreError> {
     let client = store.get_conn().await?;
     let key_hash = hash_api_key(key);
 
     let row = client
         .query_opt(
-            "SELECT id, email FROM api_keys WHERE key_hash = $1 AND is_active = true",
+            "SELECT id, email, tenant_id, provider_tenant_id
+             FROM api_keys
+             WHERE key_hash = $1 AND is_active = true",
             &[&key_hash],
         )
         .await
         .to_store_error()?;
 
-    Ok(row.map(|r| (r.get(1), r.get(0))))
+    Ok(row.map(|r| (
+        r.get::<_, String>(1),                        // email
+        r.get::<_, String>(0),                        // key_id
+        r.get::<_, Option<String>>(2).unwrap_or_default(), // tenant_id
+        r.get::<_, Option<String>>(3),                // provider_tenant_id
+    )))
 }
 
 /// Get usage statistics for a specific API key

@@ -3,6 +3,8 @@ mod add_api_group;
 mod admin_auth;
 mod admin_credit_handler;
 mod config;
+mod generate_consumer_key_handler;
+mod mcp_tools_handler;
 mod db_pool;
 mod delete_api_group;
 mod delete_endpoint;

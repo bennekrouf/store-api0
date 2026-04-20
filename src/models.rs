@@ -20,6 +20,11 @@ pub struct ValidateKeyResponse {
     pub valid: bool,
     pub email: Option<String>,
     pub key_id: Option<String>,
+    /// The tenant that owns this API key (used for credit deduction).
+    pub tenant_id: Option<String>,
+    /// If set, this is a consumer key: tools come from this provider tenant,
+    /// but credits are deducted from the consumer's tenant (tenant_id above).
+    pub provider_tenant_id: Option<String>,
     pub message: String,
 }
 

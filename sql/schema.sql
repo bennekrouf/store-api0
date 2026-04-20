@@ -211,3 +211,41 @@ BEGIN
         CREATE INDEX idx_credit_tx_created_at ON credit_transactions(created_at);
     END IF;
 END $$;
+
+-- ── MCP Gateway additions ─────────────────────────────────────────────────────
+
+-- provider_tenant_id on api_keys:
+--   NULL  → regular key (tenant uses its own tools)
+--   set   → consumer key (key owner is end-user; tools come from the provider tenant)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'api_keys' AND column_name = 'provider_tenant_id'
+    ) THEN
+        ALTER TABLE api_keys ADD COLUMN provider_tenant_id VARCHAR REFERENCES tenants(id);
+        CREATE INDEX idx_api_keys_provider_tenant ON api_keys(provider_tenant_id);
+    END IF;
+END $$;
+
+-- Tool registry: each tenant registers (tool_name → backend_url) mappings.
+-- UNIQUE(tenant_id, tool_name) ensures no duplicate tool names within a tenant.
+CREATE TABLE IF NOT EXISTS mcp_tools (
+    id              VARCHAR         PRIMARY KEY DEFAULT gen_random_uuid()::VARCHAR,
+    tenant_id       VARCHAR         NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    tool_name       VARCHAR         NOT NULL,
+    backend_url     VARCHAR         NOT NULL,
+    description     TEXT            NOT NULL DEFAULT '',
+    input_schema    TEXT            NOT NULL DEFAULT '{"type":"object","properties":{}}',
+    cost_credits    BIGINT          NOT NULL DEFAULT 1,
+    timeout_ms      INTEGER         NOT NULL DEFAULT 30000,
+    is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, tool_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_tools_lookup
+    ON mcp_tools(tenant_id, tool_name, is_active);
+CREATE INDEX IF NOT EXISTS idx_mcp_tools_tenant
+    ON mcp_tools(tenant_id);

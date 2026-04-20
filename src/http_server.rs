@@ -1,5 +1,10 @@
 use crate::add_api_group::add_api_group;
 use crate::admin_credit_handler::admin_credit_handler;
+use crate::generate_consumer_key_handler::generate_consumer_key_handler;
+use crate::mcp_tools_handler::{
+    delete_mcp_tool_handler, get_mcp_tool_handler, list_mcp_tools_handler,
+    upsert_mcp_tool_handler,
+};
 use crate::app_log;
 use crate::delete_api_group::delete_api_group;
 use crate::delete_endpoint::delete_endpoint;
@@ -150,7 +155,14 @@ pub async fn start_http_server(
                             .route("/payments/confirm", web::post().to(confirm_payment_handler))
                             .route("/payments/history/{email}", web::get().to(get_payment_history_handler))
                             // Admin endpoints (Firebase JWT, admin email only)
-                            .route("/admin/credits", web::post().to(admin_credit_handler)),
+                            .route("/admin/credits", web::post().to(admin_credit_handler))
+                            // MCP tool registry
+                            .route("/mcp-tools", web::post().to(upsert_mcp_tool_handler))
+                            .route("/mcp-tools/{tenant_id}", web::get().to(list_mcp_tools_handler))
+                            .route("/mcp-tools/{tenant_id}/{tool_name}", web::get().to(get_mcp_tool_handler))
+                            .route("/mcp-tools/{tenant_id}/{tool_name}", web::delete().to(delete_mcp_tool_handler))
+                            // Consumer key generation (B2B2C)
+                            .route("/consumer-keys", web::post().to(generate_consumer_key_handler)),
                     )
             })
             .bind(addr)?
