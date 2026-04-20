@@ -5,9 +5,10 @@
 
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
-use crate::endpoint_store::{EndpointStore, StoreError};
+use crate::endpoint_store::{ApiGroupWithEndpoints, EndpointStore, StoreError};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use slug::slugify;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +21,9 @@ pub struct McpTool {
     pub input_schema: String, // JSON Schema as text
     pub cost_credits: i64,
     pub timeout_ms: i32,
+    /// When Some("GET"|"POST"|…) the gateway does REST passthrough.
+    /// When None the backend is expected to speak native MCP format.
+    pub http_verb: Option<String>,
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -33,6 +37,8 @@ pub struct UpsertMcpToolRequest {
     pub input_schema: Option<String>,
     pub cost_credits: Option<i64>,
     pub timeout_ms: Option<i32>,
+    /// REST verb for endpoint-imported tools. None = native MCP backend.
+    pub http_verb: Option<String>,
 }
 
 pub async fn upsert_mcp_tool(
@@ -53,26 +59,31 @@ pub async fn upsert_mcp_tool(
     let timeout_ms = req.timeout_ms.unwrap_or(30000);
 
     // INSERT ... ON CONFLICT(tenant_id, tool_name) DO UPDATE
+    let http_verb = req.http_verb.as_deref().map(|v| v.to_uppercase());
+
     let row = client
         .query_one(
             "INSERT INTO mcp_tools
                 (id, tenant_id, tool_name, backend_url, description,
-                 input_schema, cost_credits, timeout_ms, is_active, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $9)
+                 input_schema, cost_credits, timeout_ms, http_verb, is_active,
+                 created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
              ON CONFLICT (tenant_id, tool_name) DO UPDATE SET
                 backend_url  = EXCLUDED.backend_url,
                 description  = EXCLUDED.description,
                 input_schema = EXCLUDED.input_schema,
                 cost_credits = EXCLUDED.cost_credits,
                 timeout_ms   = EXCLUDED.timeout_ms,
+                http_verb    = EXCLUDED.http_verb,
                 is_active    = true,
                 updated_at   = EXCLUDED.updated_at
              RETURNING id, tenant_id, tool_name, backend_url, description,
-                       input_schema, cost_credits, timeout_ms, is_active,
-                       created_at, updated_at",
+                       input_schema, cost_credits, timeout_ms, http_verb,
+                       is_active, created_at, updated_at",
             &[
                 &id, &tenant_id, &req.tool_name, &req.backend_url,
-                &description, &input_schema, &cost_credits, &timeout_ms, &now,
+                &description, &input_schema, &cost_credits, &timeout_ms,
+                &http_verb, &now,
             ],
         )
         .await
@@ -97,8 +108,8 @@ pub async fn list_mcp_tools(
     let rows = client
         .query(
             "SELECT id, tenant_id, tool_name, backend_url, description,
-                    input_schema, cost_credits, timeout_ms, is_active,
-                    created_at, updated_at
+                    input_schema, cost_credits, timeout_ms, http_verb,
+                    is_active, created_at, updated_at
              FROM mcp_tools
              WHERE tenant_id = $1 AND is_active = true
              ORDER BY tool_name",
@@ -120,8 +131,8 @@ pub async fn get_mcp_tool(
     let row = client
         .query_opt(
             "SELECT id, tenant_id, tool_name, backend_url, description,
-                    input_schema, cost_credits, timeout_ms, is_active,
-                    created_at, updated_at
+                    input_schema, cost_credits, timeout_ms, http_verb,
+                    is_active, created_at, updated_at
              FROM mcp_tools
              WHERE tenant_id = $1 AND tool_name = $2 AND is_active = true",
             &[&tenant_id, &tool_name],
@@ -151,6 +162,148 @@ pub async fn delete_mcp_tool(
     Ok(n > 0)
 }
 
+// ── Sync: imported endpoints → mcp_tools ─────────────────────────────────────
+
+/// Called after every successful endpoint import.
+/// Each endpoint in every group is upserted into `mcp_tools` so it appears
+/// automatically in `tools/list` without any extra configuration.
+///
+/// Mapping:
+///   tool_name    = slug("{group_name} {endpoint_text}")
+///   backend_url  = endpoint.base + endpoint.path
+///   description  = endpoint.description || suggested_sentence || text
+///   input_schema = JSON Schema built from endpoint.parameters
+///   http_verb    = endpoint.verb  (GET/POST/… — gateway will do REST passthrough)
+///   cost_credits = 1 (default, can be changed via the management API later)
+pub async fn sync_endpoints_as_mcp_tools(
+    store: &EndpointStore,
+    tenant_id: &str,
+    groups: &[ApiGroupWithEndpoints],
+) -> Result<usize, StoreError> {
+    let mut count = 0usize;
+
+    for group in groups {
+        for endpoint in &group.endpoints {
+            // ── tool_name ─────────────────────────────────────────────────────
+            let raw_name = format!("{} {}", group.group.name, endpoint.text);
+            let tool_name = slugify(&raw_name);
+            if tool_name.is_empty() {
+                continue;
+            }
+
+            // ── backend_url ───────────────────────────────────────────────────
+            let base = if endpoint.base.is_empty() {
+                &group.group.base
+            } else {
+                &endpoint.base
+            };
+            let backend_url = format!("{}{}", base.trim_end_matches('/'), endpoint.path);
+            if backend_url.trim_matches('/').is_empty() {
+                continue;
+            }
+
+            // ── description ───────────────────────────────────────────────────
+            let description = [
+                endpoint.description.as_str(),
+                endpoint.suggested_sentence.as_str(),
+                endpoint.text.as_str(),
+            ]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string();
+
+            // ── input_schema (JSON Schema from parameters) ────────────────────
+            let input_schema = build_input_schema(&endpoint.parameters);
+
+            let req = UpsertMcpToolRequest {
+                tool_name,
+                backend_url,
+                description: Some(description),
+                input_schema: Some(input_schema),
+                cost_credits: Some(1),
+                timeout_ms: Some(30_000),
+                http_verb: Some(endpoint.verb.to_uppercase()),
+            };
+
+            match upsert_mcp_tool(store, tenant_id, &req).await {
+                Ok(_) => count += 1,
+                Err(e) => {
+                    // Non-fatal: log and continue with the remaining endpoints
+                    app_log!(
+                        warn,
+                        tenant_id = %tenant_id,
+                        tool_name = %req.tool_name,
+                        error = %e,
+                        "Failed to sync endpoint as MCP tool (skipping)"
+                    );
+                }
+            }
+        }
+    }
+
+    app_log!(
+        info,
+        tenant_id = %tenant_id,
+        synced = count,
+        "Synced imported endpoints to mcp_tools"
+    );
+    Ok(count)
+}
+
+/// Build a minimal JSON Schema from a list of endpoint parameters.
+fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> String {
+    if params.is_empty() {
+        return r#"{"type":"object","properties":{}}"#.to_string();
+    }
+
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<serde_json::Value> = Vec::new();
+
+    for p in params {
+        let mut prop = serde_json::Map::new();
+        prop.insert("type".into(), serde_json::Value::String("string".into()));
+        if !p.description.is_empty() {
+            prop.insert(
+                "description".into(),
+                serde_json::Value::String(p.description.clone()),
+            );
+        }
+        // Also list any known alternatives as an enum
+        if !p.alternatives.is_empty() {
+            prop.insert(
+                "enum".into(),
+                serde_json::Value::Array(
+                    p.alternatives
+                        .iter()
+                        .map(|a| serde_json::Value::String(a.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        properties.insert(p.name.clone(), serde_json::Value::Object(prop));
+
+        if p.required == "true" {
+            required.push(serde_json::Value::String(p.name.clone()));
+        }
+    }
+
+    let schema = if required.is_empty() {
+        serde_json::json!({
+            "type": "object",
+            "properties": properties
+        })
+    } else {
+        serde_json::json!({
+            "type": "object",
+            "properties": properties,
+            "required": required
+        })
+    };
+
+    serde_json::to_string(&schema).unwrap_or_else(|_| r#"{"type":"object","properties":{}}"#.to_string())
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
@@ -163,8 +316,9 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
         input_schema: row.get(5),
         cost_credits: row.get(6),
         timeout_ms:   row.get(7),
-        is_active:    row.get(8),
-        created_at:   row.get::<_, chrono::DateTime<Utc>>(9).to_rfc3339(),
-        updated_at:   row.get::<_, chrono::DateTime<Utc>>(10).to_rfc3339(),
+        http_verb:    row.get(8),
+        is_active:    row.get(9),
+        created_at:   row.get::<_, chrono::DateTime<Utc>>(10).to_rfc3339(),
+        updated_at:   row.get::<_, chrono::DateTime<Utc>>(11).to_rfc3339(),
     }
 }

@@ -239,11 +239,26 @@ CREATE TABLE IF NOT EXISTS mcp_tools (
     input_schema    TEXT            NOT NULL DEFAULT '{"type":"object","properties":{}}',
     cost_credits    BIGINT          NOT NULL DEFAULT 1,
     timeout_ms      INTEGER         NOT NULL DEFAULT 30000,
+    -- When set (GET, POST, PUT, DELETE, PATCH), the gateway forwards the call as a
+    -- plain REST request instead of the MCP { tool, arguments } envelope.
+    -- NULL means the backend speaks MCP format natively.
+    http_verb       VARCHAR         DEFAULT NULL,
     is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, tool_name)
 );
+
+-- Idempotent backfill: add http_verb if table already exists from a previous deploy
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'mcp_tools' AND column_name = 'http_verb'
+    ) THEN
+        ALTER TABLE mcp_tools ADD COLUMN http_verb VARCHAR DEFAULT NULL;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_lookup
     ON mcp_tools(tenant_id, tool_name, is_active);

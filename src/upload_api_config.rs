@@ -1,4 +1,6 @@
 use crate::app_log;
+use crate::endpoint_store::mcp_tools_management::sync_endpoints_as_mcp_tools;
+use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::{generate_id_from_text, ApiGroupWithEndpoints, ApiStorage};
 use crate::models::UploadRequest;
 use crate::{endpoint_store::EndpointStore, formatter::YamlFormatter, models::UploadResponse};
@@ -290,7 +292,7 @@ pub async fn upload_api_config(
 
     // Save to database
     match store
-        .replace_user_api_groups(&upload_data.email, processed_groups)
+        .replace_user_api_groups(&upload_data.email, processed_groups.clone())
         .await
     {
         Ok(endpoint_count) => {
@@ -300,9 +302,46 @@ pub async fn upload_api_config(
                 group_count = group_count,
                 "Successfully imported API groups and endpoints"
             );
+
+            // ── Sync to MCP tools ─────────────────────────────────────────────
+            // Resolve the tenant for this user so we have a tenant_id to attach
+            // the tools to. Non-fatal: import is already committed above.
+            let synced = match get_default_tenant(&store, &upload_data.email).await {
+                Ok(tenant) => {
+                    match sync_endpoints_as_mcp_tools(&store, &tenant.id, &processed_groups).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            app_log!(warn,
+                                error = %e,
+                                email = %upload_data.email,
+                                "MCP tool sync failed (non-fatal)"
+                            );
+                            0
+                        }
+                    }
+                }
+                Err(e) => {
+                    app_log!(warn,
+                        error = %e,
+                        email = %upload_data.email,
+                        "Could not resolve tenant for MCP sync (non-fatal)"
+                    );
+                    0
+                }
+            };
+
+            app_log!(info,
+                email = %upload_data.email,
+                mcp_tools_synced = synced,
+                "MCP tool sync complete"
+            );
+
             HttpResponse::Ok().json(UploadResponse {
                 success: true,
-                message: "API groups and endpoints successfully imported".to_string(),
+                message: format!(
+                    "API groups and endpoints successfully imported ({} MCP tools synced)",
+                    synced
+                ),
                 imported_count: endpoint_count as i32,
                 group_count: group_count as i32,
             })
