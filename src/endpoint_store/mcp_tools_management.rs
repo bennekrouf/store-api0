@@ -134,6 +134,8 @@ pub async fn list_mcp_tools(
         .await
         .to_store_error()?;
 
+    app_log!(debug, tenant_id = %tenant_id, endpoint_count = endpoint_rows.len(), "Fetched endpoints for MCP tool mapping");
+
     for row in endpoint_rows {
         let group_name: String = row.get(0);
         let endpoint_text: String = row.get(1);
