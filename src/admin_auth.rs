@@ -86,6 +86,7 @@ struct Claims {
 /// the admin. Inject it as a handler parameter; the request is rejected with
 /// 401 if auth fails or the email doesn't match.
 pub struct AdminUser {
+    #[allow(dead_code)]
     pub email: String,
 }
 

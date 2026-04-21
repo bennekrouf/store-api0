@@ -192,6 +192,7 @@ impl EndpointStore {
         api_key_management::get_api_keys_status(self, email).await
     }
 
+    #[allow(dead_code)]
     pub async fn generate_api_key(
         &self,
         email: &str,
@@ -200,6 +201,7 @@ impl EndpointStore {
         api_key_management::generate_api_key(self, email, key_name).await
     }
 
+    #[allow(dead_code)]
     pub async fn generate_api_key_with_provider(
         &self,
         email: &str,
@@ -446,6 +448,7 @@ impl EndpointStore {
 
     // ── Downstream auth ───────────────────────────────────────────────────────
 
+    #[allow(dead_code)]
     pub async fn get_downstream_auth(
         &self,
         tenant_id: &str,
@@ -453,6 +456,7 @@ impl EndpointStore {
         downstream_auth_management::get_downstream_auth(self, tenant_id).await
     }
 
+    #[allow(dead_code)]
     pub async fn save_downstream_auth(
         &self,
         tenant_id: &str,
@@ -463,6 +467,7 @@ impl EndpointStore {
 
     // ── MCP client ID (per-provider OAuth) ────────────────────────────────────
 
+    #[allow(dead_code)]
     pub async fn get_tenant_by_mcp_client_id(
         &self,
         mcp_client_id: &str,
@@ -470,6 +475,7 @@ impl EndpointStore {
         tenant_management::get_tenant_by_mcp_client_id(self, mcp_client_id).await
     }
 
+    #[allow(dead_code)]
     pub async fn set_mcp_client_id(
         &self,
         email: &str,
