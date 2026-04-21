@@ -426,16 +426,18 @@ impl EndpointStore {
     pub async fn list_mcp_tools(
         &self,
         tenant_id: &str,
+        user_email: Option<&str>,
     ) -> Result<Vec<mcp_tools_management::McpTool>, StoreError> {
-        mcp_tools_management::list_mcp_tools(self, tenant_id).await
+        mcp_tools_management::list_mcp_tools(self, tenant_id, user_email).await
     }
 
     pub async fn get_mcp_tool(
         &self,
         tenant_id: &str,
         tool_name: &str,
+        user_email: Option<&str>,
     ) -> Result<Option<mcp_tools_management::McpTool>, StoreError> {
-        mcp_tools_management::get_mcp_tool(self, tenant_id, tool_name).await
+        mcp_tools_management::get_mcp_tool(self, tenant_id, tool_name, user_email).await
     }
 
     pub async fn delete_mcp_tool(
