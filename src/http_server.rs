@@ -1,45 +1,45 @@
-use crate::add_api_group::add_api_group;
-use crate::downstream_auth_handler::{
+use crate::api::group_add::add_api_group;
+use crate::mcp::downstream_auth::{
     get_downstream_auth_handler, get_downstream_auth_by_id_handler, save_downstream_auth_handler,
 };
-use crate::mcp_client_id_handler::{get_by_client_id_handler, set_client_id_handler};
-use crate::admin_credit_handler::admin_credit_handler;
-use crate::generate_consumer_key_handler::generate_consumer_key_handler;
-use crate::mcp_tools_handler::{
+use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
+use crate::payment::admin::admin_credit_handler;
+use crate::api::key_consumer::generate_consumer_key_handler;
+use crate::mcp::tools::{
     delete_mcp_tool_handler, get_mcp_tool_handler, list_mcp_tools_handler,
     upsert_mcp_tool_handler,
 };
 use crate::app_log;
-use crate::delete_api_group::delete_api_group;
-use crate::delete_endpoint::delete_endpoint;
+use crate::api::group_delete::delete_api_group;
+use crate::api::endpoint_delete::delete_endpoint;
 use crate::endpoint_store::EndpointStore;
-use crate::formatter::YamlFormatter;
-use crate::generate_api_key::generate_api_key;
-use crate::get_api_groups::get_api_groups;
-use crate::get_api_key_usage::get_api_key_usage;
-use crate::get_api_keys_status::get_api_keys_status;
-use crate::get_api_usage_logs::get_api_usage_logs;
-use crate::get_authorized_domains::get_authorized_domains;
-use crate::get_credit_balance_handler::get_credit_balance_handler;
-use crate::get_credit_transactions_handler::get_credit_transactions_handler;
-use crate::get_user_preferences::get_user_preferences;
-use crate::health_check;
-use crate::log_api_usage::log_api_usage;
-use crate::manage_endpoint::manage_endpoint;
-use crate::payment_handler::{
+use crate::infra::formatter::YamlFormatter;
+use crate::api::key_generate::generate_api_key;
+use crate::api::group_get::get_api_groups;
+use crate::api::usage_key::get_api_key_usage;
+use crate::api::key_status::get_api_keys_status;
+use crate::api::usage_get_logs::get_api_usage_logs;
+use crate::api::domains::get_authorized_domains;
+use crate::payment::balance::get_credit_balance_handler;
+use crate::payment::transactions::get_credit_transactions_handler;
+use crate::user::get::get_user_preferences;
+use crate::infra::health;
+use crate::api::usage_log::log_api_usage;
+use crate::api::endpoint_manage::manage_endpoint;
+use crate::payment::payment::{
     confirm_payment_handler, create_payment_intent_handler, get_payment_history_handler,
 };
-use crate::payment_service::PaymentService;
-use crate::reset_user_preferences::reset_user_preferences;
-use crate::revoke_all_api_keys_handler::revoke_all_api_keys_handler;
-use crate::revoke_api_key_handler::revoke_api_key_handler;
-use crate::update_api_group::update_api_group;
-use crate::update_credit_balance_handler::update_credit_balance_handler;
-use crate::update_user_preferences::update_user_preferences;
+use crate::payment::service::PaymentService;
+use crate::user::reset::reset_user_preferences;
+use crate::api::key_revoke_all::revoke_all_api_keys_handler;
+use crate::api::key_revoke::revoke_api_key_handler;
+use crate::api::group_update::update_api_group;
+use crate::payment::update_balance::update_credit_balance_handler;
+use crate::user::update::update_user_preferences;
 
-use crate::upload_api_config::upload_api_config;
-use crate::upload_reference_data;
-use crate::validate_api_key::validate_api_key;
+use crate::api::config_upload::upload_api_config;
+use crate::api::reference_upload;
+use crate::api::key_validate::validate_api_key;
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpServer};

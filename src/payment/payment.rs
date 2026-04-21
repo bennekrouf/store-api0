@@ -1,6 +1,6 @@
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
-use crate::payment_service::PaymentService;
+use crate::payment::service::PaymentService;
 use actix_web::{web, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;

@@ -9,7 +9,7 @@
 //         amount can be negative to deduct credits.
 // Return: { success, email, amount, new_balance, description }
 
-use crate::admin_auth::AdminUser;
+use crate::infra::auth::AdminUser;
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};

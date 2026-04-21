@@ -1,6 +1,6 @@
 use crate::{
     endpoint_store::{generate_id_from_text, EndpointStore},
-    models::UpdateApiGroupRequest,
+    infra::models::UpdateApiGroupRequest,
 };
 
 use crate::app_log;

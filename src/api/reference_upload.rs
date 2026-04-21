@@ -1,7 +1,7 @@
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
-use crate::formatter::YamlFormatter;
-use crate::models::{UploadReferenceDataRequest, UploadReferenceDataResponse};
+use crate::infra::formatter::YamlFormatter;
+use crate::infra::models::{UploadReferenceDataRequest, UploadReferenceDataResponse};
 use actix_web::{web, HttpResponse, Responder};
 use base64::{engine::general_purpose, Engine};
 use std::sync::Arc;

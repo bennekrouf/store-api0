@@ -1,7 +1,7 @@
 use crate::app_log;
 use crate::{
     endpoint_store::EndpointStore,
-    models::{ValidateKeyRequest, ValidateKeyResponse},
+    infra::models::{ValidateKeyRequest, ValidateKeyResponse},
 };
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::sync::Arc;

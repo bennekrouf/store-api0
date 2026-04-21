@@ -8,8 +8,8 @@ use crate::endpoint::{
     UpdateUserPreferencesResponse, UploadApiGroupsRequest, UploadApiGroupsResponse,
     UserPreferences as ProtoUserPreferences,
 };
-use crate::formatter::YamlFormatter;
-use crate::payment_service::PaymentService;
+use crate::infra::formatter::YamlFormatter;
+use crate::payment::service::PaymentService;
 
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, EndpointStore,

@@ -1,7 +1,7 @@
 use crate::app_log;
 use crate::{
     endpoint_store::{generate_id_from_text, EndpointStore},
-    models::AddApiGroupRequest,
+    infra::models::AddApiGroupRequest,
 };
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
