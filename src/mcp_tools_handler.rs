@@ -65,15 +65,21 @@ pub async fn upsert_mcp_tool_handler(
     }
 }
 
+#[derive(Deserialize)]
+pub struct McpQuery {
+    pub email: Option<String>,
+}
+
 // ── GET /api/mcp-tools/{tenant_id} ───────────────────────────────────────────
 
 pub async fn list_mcp_tools_handler(
     store: web::Data<Arc<EndpointStore>>,
     path: web::Path<String>,
+    query: web::Query<McpQuery>,
 ) -> impl Responder {
     let tenant_id = path.into_inner();
 
-    match store.list_mcp_tools(&tenant_id).await {
+    match store.list_mcp_tools(&tenant_id, query.email.as_deref()).await {
         Ok(tools) => HttpResponse::Ok().json(serde_json::json!({ "tools": tools })),
         Err(e) => {
             app_log!(error, tenant_id = %tenant_id, error = %e, "Failed to list MCP tools");
@@ -88,10 +94,11 @@ pub async fn list_mcp_tools_handler(
 pub async fn get_mcp_tool_handler(
     store: web::Data<Arc<EndpointStore>>,
     path: web::Path<(String, String)>,
+    query: web::Query<McpQuery>,
 ) -> impl Responder {
     let (tenant_id, tool_name) = path.into_inner();
 
-    match store.get_mcp_tool(&tenant_id, &tool_name).await {
+    match store.get_mcp_tool(&tenant_id, &tool_name, query.email.as_deref()).await {
         Ok(Some(tool)) => HttpResponse::Ok().json(tool),
         Ok(None) => HttpResponse::NotFound()
             .json(serde_json::json!({"success":false,"error":"Tool not found"})),

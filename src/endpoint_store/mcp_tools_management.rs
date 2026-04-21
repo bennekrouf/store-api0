@@ -102,6 +102,7 @@ pub async fn upsert_mcp_tool(
 pub async fn list_mcp_tools(
     store: &EndpointStore,
     tenant_id: &str,
+    user_email: Option<&str>,
 ) -> Result<Vec<McpTool>, StoreError> {
     let client = store.get_conn().await?;
 
@@ -121,20 +122,27 @@ pub async fn list_mcp_tools(
 
     let mut all_tools: Vec<McpTool> = explicit_rows.into_iter().map(row_to_tool).collect();
 
-    // 2. Fetch all endpoints for this tenant to expose them as virtual tools
-    // We join api_groups (which now has tenant_id) to endpoints.
-    let endpoint_rows = client
-        .query(
+    // 2. Fetch all endpoints for this tenant OR for this email
+    let endpoint_rows = if let Some(email) = user_email {
+        client.query(
+            "SELECT DISTINCT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
+             FROM api_groups g
+             JOIN endpoints e ON g.id = e.group_id
+             LEFT JOIN user_groups ug ON g.id = ug.group_id
+             WHERE g.tenant_id = $1 OR ug.email = $2",
+            &[&tenant_id, &email],
+        ).await.to_store_error()?
+    } else {
+        client.query(
             "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
             &[&tenant_id],
-        )
-        .await
-        .to_store_error()?;
+        ).await.to_store_error()?
+    };
 
-    app_log!(debug, tenant_id = %tenant_id, endpoint_count = endpoint_rows.len(), "Fetched endpoints for MCP tool mapping");
+    app_log!(debug, tenant_id = %tenant_id, user_email = ?user_email, endpoint_count = endpoint_rows.len(), "Fetched endpoints for MCP tool mapping");
 
     for row in endpoint_rows {
         let group_name: String = row.get(0);
@@ -207,6 +215,7 @@ pub async fn get_mcp_tool(
     store: &EndpointStore,
     tenant_id: &str,
     tool_name: &str,
+    user_email: Option<&str>,
 ) -> Result<Option<McpTool>, StoreError> {
     let client = store.get_conn().await?;
 
@@ -228,19 +237,24 @@ pub async fn get_mcp_tool(
     }
 
     // 2. Check virtual tools (endpoints)
-    // We need to find an endpoint for this tenant whose slugified (Group + Name) matches tool_name.
-    // Optimization: we could store the slug in the DB, but for now we'll fetch all groups for the tenant
-    // and find the matching one. Since a tenant usually has < 100 endpoints, this is acceptable.
-    let endpoint_rows = client
-        .query(
+    let endpoint_rows = if let Some(email) = user_email {
+        client.query(
+            "SELECT DISTINCT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
+             FROM api_groups g
+             JOIN endpoints e ON g.id = e.group_id
+             LEFT JOIN user_groups ug ON g.id = ug.group_id
+             WHERE g.tenant_id = $1 OR ug.email = $2",
+            &[&tenant_id, &email],
+        ).await.to_store_error()?
+    } else {
+        client.query(
             "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
             &[&tenant_id],
-        )
-        .await
-        .to_store_error()?;
+        ).await.to_store_error()?
+    };
 
     for row in endpoint_rows {
         let group_name: String = row.get(0);
