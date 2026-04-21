@@ -16,3 +16,4 @@ pub mod usage_key;
 pub mod usage_log;
 pub mod usage_get_logs;
 pub mod domains;
+pub mod tenant_usage;

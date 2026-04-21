@@ -1,3 +1,4 @@
+use crate::api::tenant_usage::get_tenant_stats;
 use crate::api::group_add::add_api_group;
 use crate::mcp::downstream_auth::{
     get_downstream_auth_handler, get_downstream_auth_by_id_handler, save_downstream_auth_handler,
@@ -181,7 +182,9 @@ pub async fn start_http_server(
                             .route("/tenant/downstream-auth/{tenant_id}", web::get().to(get_downstream_auth_by_id_handler))
                             // Per-provider OAuth client ID resolution
                             .route("/tenant/by-client-id/{client_id}", web::get().to(get_by_client_id_handler))
-                            .route("/user/mcp-client-id", web::put().to(set_client_id_handler)),
+                            .route("/user/mcp-client-id", web::put().to(set_client_id_handler))
+                            // Governance / stats: all MCP requests for the tenant
+                            .route("/tenant/stats/{email}", web::get().to(get_tenant_stats)),
                     )
             })
             .bind(addr)?
