@@ -37,6 +37,9 @@ pub async fn replace_user_api_groups(
     }
 
     // Add new groups and endpoints
+    let tenant = crate::endpoint_store::tenant_management::get_default_tenant(store, email).await?;
+    let tenant_id = tenant.id;
+
     let mut imported_count = 0;
     let mut client = store.get_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
@@ -58,18 +61,18 @@ pub async fn replace_user_api_groups(
             .to_store_error()?;
 
         if group_exists_row.is_none() {
-            app_log!(debug, group_id = %group_id, "Creating new API group");
+            app_log!(debug, group_id = %group_id, tenant_id = %tenant_id, "Creating new API group");
             tx.execute(
-                "INSERT INTO api_groups (id, name, description, base) VALUES ($1, $2, $3, $4)",
-                &[&group_id, &group.name, &group.description, &group.base],
+                "INSERT INTO api_groups (id, name, description, base, tenant_id) VALUES ($1, $2, $3, $4, $5)",
+                &[&group_id, &group.name, &group.description, &group.base, &tenant_id],
             )
             .await
             .to_store_error()?;
         } else {
-            app_log!(debug, group_id = %group_id, "Updating existing API group");
+            app_log!(debug, group_id = %group_id, tenant_id = %tenant_id, "Updating existing API group");
             tx.execute(
-                "UPDATE api_groups SET name = $1, description = $2, base = $3 WHERE id = $4",
-                &[&group.name, &group.description, &group.base, &group_id],
+                "UPDATE api_groups SET name = $1, description = $2, base = $3, tenant_id = $4 WHERE id = $5",
+                &[&group.name, &group.description, &group.base, &tenant_id, &group_id],
             )
             .await
             .to_store_error()?;
