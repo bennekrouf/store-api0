@@ -60,6 +60,7 @@ pub async fn get_downstream_auth_handler(
         Ok(Some(auth)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "auth": auth,
+            "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
             "google_client_id": google_client_id
         })),
@@ -74,6 +75,7 @@ pub async fn get_downstream_auth_handler(
                 "custom_headers": null,
                 "updated_at": null
             },
+            "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
             "google_client_id": google_client_id
         })),
