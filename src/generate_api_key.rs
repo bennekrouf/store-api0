@@ -1,3 +1,4 @@
+use crate::endpoint_store::api_key_management::generate_api_key_with_provider;
 use crate::endpoint_store::EndpointStore;
 use crate::endpoint_store::GenerateKeyRequest;
 
@@ -11,14 +12,16 @@ pub async fn generate_api_key(
 ) -> impl Responder {
     let email = &request.email;
     let key_name = &request.key_name;
+    let provider_tenant_id = request.provider_tenant_id.as_deref();
 
     app_log!(info,
         email = %email,
         key_name = %key_name,
+        provider_tenant_id = ?provider_tenant_id,
         "Received HTTP generate API key request"
     );
 
-    match store.generate_api_key(email, key_name).await {
+    match generate_api_key_with_provider(&store, email, key_name, provider_tenant_id).await {
         Ok((key, key_prefix, _)) => {
             app_log!(info,
                 email = %email,

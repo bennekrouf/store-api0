@@ -2,6 +2,7 @@ use crate::add_api_group::add_api_group;
 use crate::downstream_auth_handler::{
     get_downstream_auth_handler, get_downstream_auth_by_id_handler, save_downstream_auth_handler,
 };
+use crate::mcp_client_id_handler::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin_credit_handler::admin_credit_handler;
 use crate::generate_consumer_key_handler::generate_consumer_key_handler;
 use crate::mcp_tools_handler::{
@@ -170,7 +171,10 @@ pub async fn start_http_server(
                             .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
                             .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
                             // Internal: gateway uses tenant_id directly
-                            .route("/tenant/downstream-auth/{tenant_id}", web::get().to(get_downstream_auth_by_id_handler)),
+                            .route("/tenant/downstream-auth/{tenant_id}", web::get().to(get_downstream_auth_by_id_handler))
+                            // Per-provider OAuth client ID resolution
+                            .route("/tenant/by-client-id/{client_id}", web::get().to(get_by_client_id_handler))
+                            .route("/user/mcp-client-id", web::put().to(set_client_id_handler)),
                     )
             })
             .bind(addr)?

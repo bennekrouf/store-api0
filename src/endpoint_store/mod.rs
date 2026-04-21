@@ -200,6 +200,15 @@ impl EndpointStore {
         api_key_management::generate_api_key(self, email, key_name).await
     }
 
+    pub async fn generate_api_key_with_provider(
+        &self,
+        email: &str,
+        key_name: &str,
+        provider_tenant_id: Option<&str>,
+    ) -> Result<(String, String, String), StoreError> {
+        api_key_management::generate_api_key_with_provider(self, email, key_name, provider_tenant_id).await
+    }
+
     pub async fn revoke_api_key(&self, email: &str, key_id: &str) -> Result<bool, StoreError> {
         api_key_management::revoke_api_key(self, email, key_id).await
     }
@@ -450,5 +459,22 @@ impl EndpointStore {
         req: &downstream_auth_management::SaveDownstreamAuthRequest,
     ) -> Result<downstream_auth_management::TenantDownstreamAuth, StoreError> {
         downstream_auth_management::save_downstream_auth(self, tenant_id, req).await
+    }
+
+    // ── MCP client ID (per-provider OAuth) ────────────────────────────────────
+
+    pub async fn get_tenant_by_mcp_client_id(
+        &self,
+        mcp_client_id: &str,
+    ) -> Result<Option<models::Tenant>, StoreError> {
+        tenant_management::get_tenant_by_mcp_client_id(self, mcp_client_id).await
+    }
+
+    pub async fn set_mcp_client_id(
+        &self,
+        email: &str,
+        mcp_client_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        tenant_management::set_mcp_client_id(self, email, mcp_client_id).await
     }
 }

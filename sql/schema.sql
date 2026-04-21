@@ -281,3 +281,16 @@ CREATE TABLE IF NOT EXISTS tenant_downstream_auth (
     custom_headers       JSONB   DEFAULT NULL,
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Per-provider OAuth client ID — allows each provider to have their own
+-- client_id (e.g. "cvenom-mcp") that resolves to their provider_tenant_id.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tenants' AND column_name = 'mcp_client_id'
+    ) THEN
+        ALTER TABLE tenants ADD COLUMN mcp_client_id VARCHAR UNIQUE;
+        CREATE INDEX idx_tenants_mcp_client_id ON tenants(mcp_client_id);
+    END IF;
+END $$;

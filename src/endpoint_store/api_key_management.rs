@@ -355,6 +355,16 @@ pub async fn generate_api_key(
     email: &str,
     key_name: &str,
 ) -> Result<(String, String, String), StoreError> {
+    generate_api_key_with_provider(store, email, key_name, None).await
+}
+
+/// Generate a new API key, optionally scoped to a provider tenant.
+pub async fn generate_api_key_with_provider(
+    store: &EndpointStore,
+    email: &str,
+    key_name: &str,
+    provider_tenant_id: Option<&str>,
+) -> Result<(String, String, String), StoreError> {
     use crate::endpoint_store::tenant_management;
 
     // Ensure tenant exists (this handles user_preferences creation too)
@@ -372,10 +382,10 @@ pub async fn generate_api_key(
 
     tx.execute(
         "INSERT INTO api_keys (
-            id, email, key_hash, key_prefix, key_name, 
-            generated_at, usage_count, is_active, tenant_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7)",
-        &[&key_id, &email, &key_hash, &key_prefix, &key_name, &now, &tenant_id],
+            id, email, key_hash, key_prefix, key_name,
+            generated_at, usage_count, is_active, tenant_id, provider_tenant_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7, $8)",
+        &[&key_id, &email, &key_hash, &key_prefix, &key_name, &now, &tenant_id, &provider_tenant_id],
     )
     .await
     .to_store_error()?;

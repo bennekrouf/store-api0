@@ -153,6 +153,9 @@ pub struct KeyPreference {
 pub struct GenerateKeyRequest {
     pub email: String,
     pub key_name: String,
+    /// When set, the generated key is a consumer key scoped to this provider tenant.
+    #[serde(default)]
+    pub provider_tenant_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -125,11 +125,56 @@ pub async fn get_default_tenant(
     // This function ensures a tenant exists.
     // If it exists, return it.
     // If NOT, create it (Personal Tenant).
-    
+
     // First ensure user exists in preferences (legacy requirement, but good for consistency)
-    // We can rely on `get_api_keys_status` logic usually doing this, 
+    // We can rely on `get_api_keys_status` logic usually doing this,
     // but here we should probably ensure it.
-    
+
     // Logic:
     get_or_create_personal_tenant(store, email).await
+}
+
+/// Look up a tenant by its OAuth client ID (e.g. "cvenom-mcp").
+/// Returns None if no tenant has registered that client_id.
+pub async fn get_tenant_by_mcp_client_id(
+    store: &EndpointStore,
+    mcp_client_id: &str,
+) -> Result<Option<Tenant>, StoreError> {
+    let client = store.get_conn().await?;
+    let row = client
+        .query_opt(
+            "SELECT id, name, credit_balance, created_at
+             FROM tenants WHERE mcp_client_id = $1",
+            &[&mcp_client_id],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(row.map(|r| Tenant {
+        id:             r.get(0),
+        name:           r.get(1),
+        credit_balance: r.get(2),
+        created_at:     r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+    }))
+}
+
+/// Set (or clear) the mcp_client_id for a tenant identified by owner email.
+pub async fn set_mcp_client_id(
+    store: &EndpointStore,
+    email: &str,
+    mcp_client_id: Option<&str>,
+) -> Result<(), StoreError> {
+    // Resolve the tenant for this email
+    let tenant = get_default_tenant(store, email).await?;
+    let client = store.get_conn().await?;
+
+    client
+        .execute(
+            "UPDATE tenants SET mcp_client_id = $1 WHERE id = $2",
+            &[&mcp_client_id, &tenant.id],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(())
 }
