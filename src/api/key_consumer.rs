@@ -140,14 +140,14 @@ pub async fn generate_consumer_key_handler(
                  generated_at, usage_count, is_active, tenant_id, provider_tenant_id)
              VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7, $8)",
             &[
-                &key_id,
-                &consumer_email,
-                &key_hash,
-                &key_prefix,
-                &key_name,
-                &now,
-                &consumer_tenant.id,
-                &provider_tenant.id,
+                &key_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &consumer_email as &(dyn tokio_postgres::types::ToSql + Sync),
+                &key_hash as &(dyn tokio_postgres::types::ToSql + Sync),
+                &key_prefix as &(dyn tokio_postgres::types::ToSql + Sync),
+                &key_name as &(dyn tokio_postgres::types::ToSql + Sync),
+                &now as &(dyn tokio_postgres::types::ToSql + Sync),
+                &consumer_tenant.id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &provider_tenant.id as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await;

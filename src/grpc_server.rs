@@ -481,6 +481,7 @@ impl EndpointService for EndpointServiceImpl {
 
         match self.store.get_reference_data(&email).await {
             Ok(data) => {
+                let data: Vec<crate::infra::models::ReferenceData> = data;
                 app_log!(info,
                     email = %email,
                     count = data.len(),

@@ -1,7 +1,7 @@
 use super::EndpointStore;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::StoreError;
-use crate::models::ReferenceData;
+use crate::infra::models::ReferenceData;
 use chrono::Utc;
 use graflog::app_log;
 use uuid::Uuid;
@@ -23,7 +23,13 @@ impl EndpointStore {
             .execute(
                 "INSERT INTO reference_data (id, email, name, data, created_at)
             VALUES ($1, $2, $3, $4, $5)",
-                &[&id, &email, &name, &data, &now],
+                &[
+                    &id as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &email as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &name as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &data as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &now as &(dyn tokio_postgres::types::ToSql + Sync),
+                ],
             )
             .await
             .to_store_error()?;

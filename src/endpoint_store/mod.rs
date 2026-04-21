@@ -23,7 +23,7 @@ pub use errors::*;
 pub use models::*;
 pub use utils::*;
 
-use crate::db_pool::{create_pg_pool, PgConnection, PgPool};
+use crate::infra::db::{create_pg_pool, PgConnection, PgPool};
 
 #[derive(Clone)]
 pub struct EndpointStore {
@@ -272,26 +272,26 @@ impl EndpointStore {
             output_tokens, total_tokens, model_used, metadata, tenant_id, consumer_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)",
             &[
-                &log_id,
-                &request.key_id,
-                &request.email,
-                &request.endpoint_path,
-                &request.method,
-                &now,
-                &request.status_code,
-                &request.response_time_ms,
-                &request.request_size_bytes,
-                &request.response_size_bytes,
-                &request.ip_address,
-                &request.user_agent,
-                &request.usage.as_ref().map(|u| u.estimated),
-                &request.usage.as_ref().map(|u| u.input_tokens),
-                &request.usage.as_ref().map(|u| u.output_tokens),
-                &request.usage.as_ref().map(|u| u.total_tokens),
-                &request.usage.as_ref().map(|u| u.model.clone()),
-                &metadata_json,
-                &tenant_id,
-                &request.consumer_id,
+                &log_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.key_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.email as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.endpoint_path as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.method as &(dyn tokio_postgres::types::ToSql + Sync),
+                &now as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.status_code as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.response_time_ms as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.request_size_bytes as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.response_size_bytes as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.ip_address as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.user_agent as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.usage.as_ref().map(|u| u.estimated) as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.usage.as_ref().map(|u| u.input_tokens) as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.usage.as_ref().map(|u| u.output_tokens) as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.usage.as_ref().map(|u| u.total_tokens) as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.usage.as_ref().map(|u| u.model.clone()) as &(dyn tokio_postgres::types::ToSql + Sync),
+                &metadata_json as &(dyn tokio_postgres::types::ToSql + Sync),
+                &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &request.consumer_id as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -318,7 +318,7 @@ impl EndpointStore {
             WHERE key_id = $1
             ORDER BY timestamp DESC
             LIMIT $2",
-                &[&key_id, &limit],
+                &[&key_id as &(dyn tokio_postgres::types::ToSql + Sync), &limit as &(dyn tokio_postgres::types::ToSql + Sync)],
             )
             .await
             .to_store_error()?;
@@ -327,7 +327,7 @@ impl EndpointStore {
         for row in rows {
             // Get metadata as string first, then parse to JSON
             let metadata_str: Option<String> = row.get(17);
-            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+            let metadata: Option<serde_json::Value> = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
 
             logs.push(ApiUsageLog {
                 id: row.get(0),

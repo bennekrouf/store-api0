@@ -81,9 +81,16 @@ pub async fn upsert_mcp_tool(
                        input_schema, cost_credits, timeout_ms, http_verb,
                        is_active, created_at, updated_at",
             &[
-                &id, &tenant_id, &req.tool_name, &req.backend_url,
-                &description, &input_schema, &cost_credits, &timeout_ms,
-                &http_verb, &now,
+                &id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.tool_name as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.backend_url as &(dyn tokio_postgres::types::ToSql + Sync),
+                &description as &(dyn tokio_postgres::types::ToSql + Sync),
+                &input_schema as &(dyn tokio_postgres::types::ToSql + Sync),
+                &cost_credits as &(dyn tokio_postgres::types::ToSql + Sync),
+                &timeout_ms as &(dyn tokio_postgres::types::ToSql + Sync),
+                &http_verb as &(dyn tokio_postgres::types::ToSql + Sync),
+                &now as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await

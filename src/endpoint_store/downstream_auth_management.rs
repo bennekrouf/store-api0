@@ -79,13 +79,13 @@ pub async fn save_downstream_auth(
              RETURNING tenant_id, auth_mode, service_account_json, target_audience,
                        bearer_token, custom_headers, updated_at",
             &[
-                &tenant_id,
-                &req.auth_mode,
-                &req.service_account_json,
-                &req.target_audience,
-                &req.bearer_token,
-                &req.custom_headers,
-                &now,
+                &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.auth_mode as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.service_account_json as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.target_audience as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.bearer_token as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.custom_headers as &(dyn tokio_postgres::types::ToSql + Sync),
+                &now as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await

@@ -238,7 +238,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Initialise Stripe payment service (shared between HTTP and gRPC)
     let stripe_key = config.stripe_secret_key();
-    let payment_service = Arc::new(payment_service::PaymentService::new(stripe_key));
+    let payment_service = Arc::new(crate::payment::service::PaymentService::new(stripe_key));
     let http_payment_service = Arc::clone(&payment_service);
 
     // Start the HTTP server as a separate task

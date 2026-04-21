@@ -40,9 +40,10 @@ use crate::user::update::update_user_preferences;
 use crate::api::config_upload::upload_api_config;
 use crate::api::reference_upload;
 use crate::api::key_validate::validate_api_key;
+use crate::middleware::error_handler::handle_internal_server_error;
 use actix_cors::Cors;
-use actix_web::middleware::Logger;
-use actix_web::{web, App, HttpServer};
+use actix_web::middleware::{ErrorHandlers, Logger};
+use actix_web::{http::StatusCode, web, App, HttpServer};
 use std::sync::Arc;
 // use actix_web::{web, HttpResponse, Responder};
 use std::net::SocketAddr;
@@ -80,6 +81,10 @@ pub async fn start_http_server(
 
                 App::new()
                     .wrap(Logger::default())
+                    .wrap(
+                        ErrorHandlers::new()
+                            .handler(StatusCode::INTERNAL_SERVER_ERROR, handle_internal_server_error)
+                    )
                     .wrap(cors)
                     // .wrap(ApiKeyAuth::new(store_clone.clone()))
                     .app_data(web::Data::new(store_clone.clone()))
@@ -93,7 +98,7 @@ pub async fn start_http_server(
                             .route("/upload", web::post().to(upload_api_config))
                             .route(
                                 "/reference-data/upload",
-                                web::post().to(upload_reference_data::upload_reference_data),
+                                web::post().to(reference_upload::upload_reference_data),
                             )
                             .route("/groups/{email}", web::get().to(get_api_groups))
                             .route("/group", web::post().to(add_api_group))
@@ -155,7 +160,7 @@ pub async fn start_http_server(
                                 "/key/usage/{email}/{key_id}",
                                 web::get().to(get_api_key_usage),
                             )
-                            .route("/health", web::get().to(health_check::health_check))
+                            .route("/health", web::get().to(health::health_check))
                             // Payment (Stripe) endpoints
                             .route("/payments/intent", web::post().to(create_payment_intent_handler))
                             .route("/payments/confirm", web::post().to(confirm_payment_handler))

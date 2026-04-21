@@ -385,7 +385,16 @@ pub async fn generate_api_key_with_provider(
             id, email, key_hash, key_prefix, key_name,
             generated_at, usage_count, is_active, tenant_id, provider_tenant_id
         ) VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7, $8)",
-        &[&key_id, &email, &key_hash, &key_prefix, &key_name, &now, &tenant_id, &provider_tenant_id],
+        &[
+            &key_id as &(dyn tokio_postgres::types::ToSql + Sync),
+            &email as &(dyn tokio_postgres::types::ToSql + Sync),
+            &key_hash as &(dyn tokio_postgres::types::ToSql + Sync),
+            &key_prefix as &(dyn tokio_postgres::types::ToSql + Sync),
+            &key_name as &(dyn tokio_postgres::types::ToSql + Sync),
+            &now as &(dyn tokio_postgres::types::ToSql + Sync),
+            &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+            &provider_tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+        ],
     )
     .await
     .to_store_error()?;

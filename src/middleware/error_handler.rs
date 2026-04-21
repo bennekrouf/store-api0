@@ -1,18 +1,12 @@
 use crate::app_log;
 use actix_web::middleware::ErrorHandlerResponse;
 use actix_web::HttpResponse;
-use actix_web::{dev::ServiceRequest, dev::ServiceResponse, Error, HttpMessage};
+use actix_web::{dev::ServiceResponse, Error};
 
 pub fn handle_internal_server_error<B>(
     res: ServiceResponse<B>,
 ) -> Result<ErrorHandlerResponse<B>, Error> {
     let request = res.request();
-    let error_msg = format!(
-        "Internal server error on {} {}",
-        request.method(),
-        request.path()
-    );
-
     app_log!(error,
         method = %request.method(),
         path = %request.path(),
@@ -26,5 +20,7 @@ pub fn handle_internal_server_error<B>(
         "path": request.path()
     }));
 
-    Ok(ErrorHandlerResponse::Response(res.into_response(response)))
+    Ok(ErrorHandlerResponse::Response(
+        res.into_response(response.map_into_right_body()),
+    ))
 }

@@ -87,7 +87,7 @@ pub async fn manage_single_endpoint(
         // Associate endpoint with user
         tx.execute(
             "INSERT INTO user_endpoints (email, endpoint_id) VALUES ($1, $2)",
-            &[&email, endpoint_id],
+            &[&email as &(dyn tokio_postgres::types::ToSql + Sync), endpoint_id as &(dyn tokio_postgres::types::ToSql + Sync)],
         )
         .await
         .to_store_error()?;
@@ -116,7 +116,12 @@ pub async fn manage_single_endpoint(
 
         tx.execute(
             "INSERT INTO parameters (endpoint_id, name, description, required) VALUES ($1, $2, $3, $4)",
-            &[endpoint_id, &param.name, &param.description, &required],
+            &[
+                endpoint_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &param.name as &(dyn tokio_postgres::types::ToSql + Sync),
+                &param.description as &(dyn tokio_postgres::types::ToSql + Sync),
+                &required as &(dyn tokio_postgres::types::ToSql + Sync),
+            ],
         )
         .await
         .to_store_error()?;
