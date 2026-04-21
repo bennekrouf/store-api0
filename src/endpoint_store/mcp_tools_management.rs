@@ -125,8 +125,7 @@ pub async fn list_mcp_tools(
     // We join api_groups (which now has tenant_id) to endpoints.
     let endpoint_rows = client
         .query(
-            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id,
-                    g.created_at -- we'll use group created_at as a proxy
+            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
