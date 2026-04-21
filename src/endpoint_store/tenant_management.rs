@@ -135,17 +135,16 @@ pub async fn get_default_tenant(
 }
 
 /// Look up a tenant by its OAuth client ID (e.g. "cvenom-mcp").
-/// Returns None if no tenant has registered that client_id.
-/// Also returns the optional Firebase config for the provider's project.
+/// Returns the tenant + the optional Google OAuth client_id the provider registered,
+/// or None if no tenant has registered that mcp_client_id.
 pub async fn get_tenant_by_mcp_client_id(
     store: &EndpointStore,
     mcp_client_id: &str,
-) -> Result<Option<(Tenant, Option<String>, Option<String>, Option<String>)>, StoreError> {
+) -> Result<Option<(Tenant, Option<String>)>, StoreError> {
     let client = store.get_conn().await?;
     let row = client
         .query_opt(
-            "SELECT id, name, credit_balance, created_at,
-                    firebase_project_id, firebase_api_key, firebase_auth_domain
+            "SELECT id, name, credit_balance, created_at, google_client_id
              FROM tenants WHERE mcp_client_id = $1",
             &[&mcp_client_id],
         )
@@ -159,21 +158,17 @@ pub async fn get_tenant_by_mcp_client_id(
             credit_balance: r.get(2),
             created_at:     r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
         };
-        let firebase_project_id:  Option<String> = r.get(4);
-        let firebase_api_key:     Option<String> = r.get(5);
-        let firebase_auth_domain: Option<String> = r.get(6);
-        (tenant, firebase_project_id, firebase_api_key, firebase_auth_domain)
+        let google_client_id: Option<String> = r.get(4);
+        (tenant, google_client_id)
     }))
 }
 
-/// Set (or clear) the mcp_client_id and optional Firebase config for a tenant.
+/// Set (or clear) the mcp_client_id and the Google OAuth client_id for a tenant.
 pub async fn set_mcp_client_id(
     store: &EndpointStore,
     email: &str,
     mcp_client_id: Option<&str>,
-    firebase_project_id: Option<&str>,
-    firebase_api_key: Option<&str>,
-    firebase_auth_domain: Option<&str>,
+    google_client_id: Option<&str>,
 ) -> Result<(), StoreError> {
     let tenant = get_default_tenant(store, email).await?;
     let client = store.get_conn().await?;
@@ -181,12 +176,10 @@ pub async fn set_mcp_client_id(
     client
         .execute(
             "UPDATE tenants
-             SET mcp_client_id       = $1,
-                 firebase_project_id = $2,
-                 firebase_api_key    = $3,
-                 firebase_auth_domain = $4
-             WHERE id = $5",
-            &[&mcp_client_id, &firebase_project_id, &firebase_api_key, &firebase_auth_domain, &tenant.id],
+             SET mcp_client_id    = $1,
+                 google_client_id = $2
+             WHERE id = $3",
+            &[&mcp_client_id, &google_client_id, &tenant.id],
         )
         .await
         .to_store_error()?;

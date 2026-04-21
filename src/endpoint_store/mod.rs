@@ -466,7 +466,7 @@ impl EndpointStore {
     pub async fn get_tenant_by_mcp_client_id(
         &self,
         mcp_client_id: &str,
-    ) -> Result<Option<(models::Tenant, Option<String>, Option<String>, Option<String>)>, StoreError> {
+    ) -> Result<Option<(models::Tenant, Option<String>)>, StoreError> {
         tenant_management::get_tenant_by_mcp_client_id(self, mcp_client_id).await
     }
 
@@ -474,13 +474,8 @@ impl EndpointStore {
         &self,
         email: &str,
         mcp_client_id: Option<&str>,
-        firebase_project_id: Option<&str>,
-        firebase_api_key: Option<&str>,
-        firebase_auth_domain: Option<&str>,
+        google_client_id: Option<&str>,
     ) -> Result<(), StoreError> {
-        tenant_management::set_mcp_client_id(
-            self, email, mcp_client_id,
-            firebase_project_id, firebase_api_key, firebase_auth_domain,
-        ).await
+        tenant_management::set_mcp_client_id(self, email, mcp_client_id, google_client_id).await
     }
 }

@@ -308,3 +308,17 @@ BEGIN
         ALTER TABLE tenants ADD COLUMN firebase_auth_domain VARCHAR;
     END IF;
 END $$;
+
+-- Google OAuth client_id — the provider's standard Google OAuth 2.0 Web Client ID.
+-- The api0 authorize page uses this (via Google Identity Services) to sign in
+-- end-users belonging to the provider's Google workspace / project.
+-- Replaces the Firebase-specific columns; those remain but are no longer written.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tenants' AND column_name = 'google_client_id'
+    ) THEN
+        ALTER TABLE tenants ADD COLUMN google_client_id VARCHAR;
+    END IF;
+END $$;
