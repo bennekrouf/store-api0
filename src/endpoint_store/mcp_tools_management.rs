@@ -105,7 +105,8 @@ pub async fn list_mcp_tools(
 ) -> Result<Vec<McpTool>, StoreError> {
     let client = store.get_conn().await?;
 
-    let rows = client
+    // 1. Fetch explicit tools from mcp_tools table
+    let explicit_rows = client
         .query(
             "SELECT id, tenant_id, tool_name, backend_url, description,
                     input_schema, cost_credits, timeout_ms, http_verb,
@@ -118,7 +119,87 @@ pub async fn list_mcp_tools(
         .await
         .to_store_error()?;
 
-    Ok(rows.into_iter().map(row_to_tool).collect())
+    let mut all_tools: Vec<McpTool> = explicit_rows.into_iter().map(row_to_tool).collect();
+
+    // 2. Fetch all endpoints for this tenant to expose them as virtual tools
+    // We join api_groups (which now has tenant_id) to endpoints.
+    let endpoint_rows = client
+        .query(
+            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id,
+                    g.created_at -- we'll use group created_at as a proxy
+             FROM api_groups g
+             JOIN endpoints e ON g.id = e.group_id
+             WHERE g.tenant_id = $1",
+            &[&tenant_id],
+        )
+        .await
+        .to_store_error()?;
+
+    for row in endpoint_rows {
+        let group_name: String = row.get(0);
+        let endpoint_text: String = row.get(1);
+        let endpoint_desc: String = row.get(2);
+        let suggested: String = row.get(3);
+        let verb: String = row.get(4);
+        let e_base: String = row.get(5);
+        let g_base: String = row.get(6);
+        let path: String = row.get(7);
+        let endpoint_id: String = row.get(8);
+        
+        let raw_name = format!("{} {}", group_name, endpoint_text);
+        let tool_name = slugify(&raw_name);
+        if tool_name.is_empty() { continue; }
+
+        // Skip if a tool with this name already exists (explicit tools take precedence)
+        if all_tools.iter().any(|t| t.tool_name == tool_name) {
+            continue;
+        }
+
+        let base = if e_base.is_empty() { &g_base } else { &e_base };
+        let backend_url = format!("{}{}", base.trim_end_matches('/'), path);
+        
+        let description = [endpoint_desc.as_str(), suggested.as_str(), endpoint_text.as_str()]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string();
+
+        // Parameters: we need another query if we want full schemas.
+        // For 'list_mcp_tools', we'll fetch them. (In a real high-load scenario we'd join, but this is cleaner).
+        let param_rows = client.query(
+            "SELECT name, description, required FROM parameters WHERE endpoint_id = $1",
+            &[&endpoint_id]
+        ).await.to_store_error()?;
+        
+        let mut params = Vec::new();
+        for pr in param_rows {
+            params.push(crate::endpoint_store::models::Parameter {
+                name: pr.get(0),
+                description: pr.get(1),
+                required: pr.get::<_, bool>(2).to_string(),
+                alternatives: vec![], // skipped for speed in list
+            });
+        }
+        
+        let input_schema = build_input_schema(&params);
+
+        all_tools.push(McpTool {
+            id: format!("virtual-{}", endpoint_id),
+            tenant_id: tenant_id.to_string(),
+            tool_name,
+            backend_url,
+            description,
+            input_schema,
+            cost_credits: 1,
+            timeout_ms: 30000,
+            http_verb: Some(verb.to_uppercase()),
+            is_active: true,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        });
+    }
+
+    Ok(all_tools)
 }
 
 pub async fn get_mcp_tool(
