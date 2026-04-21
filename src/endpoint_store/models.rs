@@ -21,6 +21,7 @@ pub struct Tenant {
     pub created_at: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TenantUser {
     pub tenant_id: String,
