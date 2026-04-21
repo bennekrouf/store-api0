@@ -136,42 +136,57 @@ pub async fn get_default_tenant(
 
 /// Look up a tenant by its OAuth client ID (e.g. "cvenom-mcp").
 /// Returns None if no tenant has registered that client_id.
+/// Also returns the optional Firebase config for the provider's project.
 pub async fn get_tenant_by_mcp_client_id(
     store: &EndpointStore,
     mcp_client_id: &str,
-) -> Result<Option<Tenant>, StoreError> {
+) -> Result<Option<(Tenant, Option<String>, Option<String>, Option<String>)>, StoreError> {
     let client = store.get_conn().await?;
     let row = client
         .query_opt(
-            "SELECT id, name, credit_balance, created_at
+            "SELECT id, name, credit_balance, created_at,
+                    firebase_project_id, firebase_api_key, firebase_auth_domain
              FROM tenants WHERE mcp_client_id = $1",
             &[&mcp_client_id],
         )
         .await
         .to_store_error()?;
 
-    Ok(row.map(|r| Tenant {
-        id:             r.get(0),
-        name:           r.get(1),
-        credit_balance: r.get(2),
-        created_at:     r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+    Ok(row.map(|r| {
+        let tenant = Tenant {
+            id:             r.get(0),
+            name:           r.get(1),
+            credit_balance: r.get(2),
+            created_at:     r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+        };
+        let firebase_project_id:  Option<String> = r.get(4);
+        let firebase_api_key:     Option<String> = r.get(5);
+        let firebase_auth_domain: Option<String> = r.get(6);
+        (tenant, firebase_project_id, firebase_api_key, firebase_auth_domain)
     }))
 }
 
-/// Set (or clear) the mcp_client_id for a tenant identified by owner email.
+/// Set (or clear) the mcp_client_id and optional Firebase config for a tenant.
 pub async fn set_mcp_client_id(
     store: &EndpointStore,
     email: &str,
     mcp_client_id: Option<&str>,
+    firebase_project_id: Option<&str>,
+    firebase_api_key: Option<&str>,
+    firebase_auth_domain: Option<&str>,
 ) -> Result<(), StoreError> {
-    // Resolve the tenant for this email
     let tenant = get_default_tenant(store, email).await?;
     let client = store.get_conn().await?;
 
     client
         .execute(
-            "UPDATE tenants SET mcp_client_id = $1 WHERE id = $2",
-            &[&mcp_client_id, &tenant.id],
+            "UPDATE tenants
+             SET mcp_client_id       = $1,
+                 firebase_project_id = $2,
+                 firebase_api_key    = $3,
+                 firebase_auth_domain = $4
+             WHERE id = $5",
+            &[&mcp_client_id, &firebase_project_id, &firebase_api_key, &firebase_auth_domain, &tenant.id],
         )
         .await
         .to_store_error()?;

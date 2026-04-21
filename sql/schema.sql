@@ -294,3 +294,17 @@ BEGIN
         CREATE INDEX idx_tenants_mcp_client_id ON tenants(mcp_client_id);
     END IF;
 END $$;
+
+-- Per-provider Firebase config — the OAuth authorize page uses the provider's
+-- own Firebase project for end-user sign-in (separate from api0's own project).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tenants' AND column_name = 'firebase_project_id'
+    ) THEN
+        ALTER TABLE tenants ADD COLUMN firebase_project_id VARCHAR;
+        ALTER TABLE tenants ADD COLUMN firebase_api_key VARCHAR;
+        ALTER TABLE tenants ADD COLUMN firebase_auth_domain VARCHAR;
+    END IF;
+END $$;
