@@ -145,6 +145,8 @@ pub async fn start_http_server(
                             )
                             // Key validation and usage
                             .route("/key/validate", web::post().to(validate_api_key))
+                            // Alias used by the gateway's OAuth token-exchange flow
+                            .route("/key/generate", web::post().to(generate_api_key))
                             .route(
                                 "/endpoints/{email}/{endpoint_id}",
                                 web::delete().to(delete_endpoint),

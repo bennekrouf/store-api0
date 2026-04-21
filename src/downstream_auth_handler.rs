@@ -40,25 +40,28 @@ pub async fn get_downstream_auth_handler(
         }
     };
 
-    // Also surface the tenant's OAuth client ID so the dashboard can display it.
-    let mcp_client_id: Option<String> = match store.get_conn().await {
-        Ok(client) => client
-            .query_opt(
-                "SELECT mcp_client_id FROM tenants WHERE id = $1",
-                &[&tenant.id],
-            )
-            .await
-            .ok()
-            .flatten()
-            .and_then(|row| row.get(0)),
-        Err(_) => None,
-    };
+    // Also surface the tenant's OAuth client IDs so the dashboard can display them.
+    let (mcp_client_id, google_client_id): (Option<String>, Option<String>) =
+        match store.get_conn().await {
+            Ok(client) => client
+                .query_opt(
+                    "SELECT mcp_client_id, google_client_id FROM tenants WHERE id = $1",
+                    &[&tenant.id],
+                )
+                .await
+                .ok()
+                .flatten()
+                .map(|row| (row.get(0), row.get(1)))
+                .unwrap_or((None, None)),
+            Err(_) => (None, None),
+        };
 
     match get_downstream_auth(&store, &tenant.id).await {
         Ok(Some(auth)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "auth": auth,
-            "mcp_client_id": mcp_client_id
+            "mcp_client_id": mcp_client_id,
+            "google_client_id": google_client_id
         })),
         Ok(None) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
@@ -71,7 +74,8 @@ pub async fn get_downstream_auth_handler(
                 "custom_headers": null,
                 "updated_at": null
             },
-            "mcp_client_id": mcp_client_id
+            "mcp_client_id": mcp_client_id,
+            "google_client_id": google_client_id
         })),
         Err(e) => {
             app_log!(error, error = %e, "get_downstream_auth: DB error");
