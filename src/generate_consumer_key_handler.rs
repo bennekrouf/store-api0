@@ -28,7 +28,6 @@ use crate::app_log;
 use crate::endpoint_store::api_key_management::{
     extract_key_prefix, generate_secure_key, hash_api_key,
 };
-use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
