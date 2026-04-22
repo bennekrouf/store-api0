@@ -239,16 +239,26 @@ impl EndpointStore {
         let log_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
 
-        // Resolve tenant_id
-        // Try to get from api_keys first (most reliable for API usage)
-        let tenant_row = client.query_opt(
-            "SELECT tenant_id FROM api_keys WHERE id = $1", 
-            &[&request.key_id]
-        ).await.to_store_error()?;
+        // Resolve tenant_id:
+        // 1. Explicitly provided in request
+        // 2. Provider's tenant (if this is a consumer key)
+        // 3. Key owner's tenant
+        // 4. Default tenant for user email
+        let mut tenant_id: Option<String> = request.tenant_id.clone();
+
+        if tenant_id.is_none() {
+            let key_row = client.query_opt(
+                "SELECT provider_tenant_id, tenant_id FROM api_keys WHERE id = $1", 
+                &[&request.key_id]
+            ).await.to_store_error()?;
+            
+            if let Some(row) = key_row {
+                // If this is a consumer key (provider_tenant_id set), the activity
+                // belongs to the PROVIDER's tenant (e.g. Cvenom).
+                tenant_id = row.get::<_, Option<String>>(0).or_else(|| row.get::<_, Option<String>>(1));
+            }
+        }
         
-        let mut tenant_id: Option<String> = tenant_row.map(|r| r.get(0));
-        
-        // If not found (maybe key deleted or invalid?), try from user email
         if tenant_id.is_none() {
              let user_tenant_row = client.query_opt(
                 "SELECT default_tenant_id FROM user_preferences WHERE email = $1", 

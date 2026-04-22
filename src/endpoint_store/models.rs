@@ -213,6 +213,8 @@ pub struct LogApiUsageRequest {
     /// api0 stores it verbatim — no PII assumed, no validation performed.
     /// Null when the tenant did not pass the header.
     pub consumer_id: Option<String>,
+    /// Explicit tenant attribution (optional, defaults to key owner's tenant)
+    pub tenant_id: Option<String>,
     // Add metadata for matched endpoint info (optional)
     pub metadata: Option<serde_json::Value>,
 }
