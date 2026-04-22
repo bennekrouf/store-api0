@@ -186,3 +186,23 @@ pub async fn set_mcp_client_id(
 
     Ok(())
 }
+
+/// Update the display name of a tenant.
+pub async fn update_tenant_name(
+    store: &EndpointStore,
+    email: &str,
+    new_name: &str,
+) -> Result<(), StoreError> {
+    let tenant = get_default_tenant(store, email).await?;
+    let client = store.get_conn().await?;
+
+    client
+        .execute(
+            "UPDATE tenants SET name = $1 WHERE id = $2",
+            &[&new_name, &tenant.id],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(())
+}

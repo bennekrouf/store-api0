@@ -37,7 +37,7 @@ use crate::api::key_revoke::revoke_api_key_handler;
 use crate::api::group_update::update_api_group;
 use crate::payment::update_balance::update_credit_balance_handler;
 use crate::user::update::update_user_preferences;
-
+use crate::api::tenant_name::update_tenant_name_handler;
 use crate::api::config_upload::upload_api_config;
 use crate::api::reference_upload;
 use crate::api::key_validate::validate_api_key;
@@ -178,6 +178,7 @@ pub async fn start_http_server(
                             // Downstream auth (tenant-level)
                             .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
                             .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
+                            .route("/user/tenant/name", web::put().to(update_tenant_name_handler))
                             // Internal: gateway uses tenant_id directly
                             .route("/tenant/downstream-auth/{tenant_id}", web::get().to(get_downstream_auth_by_id_handler))
                             // Per-provider OAuth client ID resolution
