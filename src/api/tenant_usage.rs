@@ -2,9 +2,15 @@
 //
 // GET /api/tenant/stats/{email}?hours=24&limit=50&offset=0
 //
-// Returns governance/security stats for the tenant that owns `email`:
-//   - summary KPIs (total requests, success/fail, avg latency, unique consumers/tools)
-//   - paginated request log joined with key_prefix from api_keys
+// Returns governance stats for the tenant that owns `email`:
+//   - MCP summary KPIs (total MCP calls, success/fail, avg latency, unique consumers/tools)
+//   - total_credit: Web credit events in the same window
+//   - unified paginated `events` array: MCP tool calls UNION ALL Web credit events,
+//     each row tagged with source = "mcp" | "web"
+//
+// MCP rows come from api_usage_logs.
+// Web rows come from credit_transactions WHERE action_type != 'mcp_tool_call'
+// (mcp_tool_call rows are already captured in api_usage_logs — exclude to avoid duplication).
 //
 // hours = 0  → all time (no timestamp filter)
 // hours > 0  → last N hours
@@ -15,15 +21,72 @@ use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
+// ── Shared SELECT fragments ────────────────────────────────────────────────────
+//
+// Both halves of the UNION ALL expose 14 columns in the same order and types:
+//   0  id            TEXT
+//   1  timestamp     TIMESTAMPTZ
+//   2  source        TEXT  ('mcp' | 'web')
+//   3  name          TEXT  (endpoint_path or action_type)
+//   4  consumer_id   TEXT  (nullable — MCP only)
+//   5  key_prefix    TEXT  (nullable — MCP only)
+//   6  key_name      TEXT  (nullable — MCP only)
+//   7  status_code   INT4  (nullable — MCP only)
+//   8  latency_ms    INT8  (nullable — MCP only)
+//   9  tokens        INT8  (nullable — MCP only)
+//  10  amount        INT8  (nullable — Web only)
+//  11  balance_after INT8  (nullable — Web only)
+//  12  web_user      TEXT  (nullable — Web only)
+//  13  description   TEXT  (nullable — Web only)
+
+const MCP_SEL: &str =
+    "SELECT
+        l.id,
+        l.timestamp,
+        'mcp'                          AS source,
+        l.endpoint_path                AS name,
+        l.consumer_id,
+        k.key_prefix,
+        k.key_name,
+        l.response_status              AS status_code,
+        l.response_time_ms             AS latency_ms,
+        l.total_tokens                 AS tokens,
+        NULL::BIGINT                   AS amount,
+        NULL::BIGINT                   AS balance_after,
+        NULL::TEXT                     AS web_user,
+        NULL::TEXT                     AS description
+     FROM api_usage_logs l
+     LEFT JOIN api_keys k ON l.key_id = k.id
+     WHERE l.tenant_id = $1";
+
+const WEB_SEL: &str =
+    "SELECT
+        ct.id::TEXT,
+        ct.created_at                  AS timestamp,
+        'web'                          AS source,
+        ct.action_type                 AS name,
+        NULL::TEXT                     AS consumer_id,
+        NULL::TEXT                     AS key_prefix,
+        NULL::TEXT                     AS key_name,
+        NULL::INT                      AS status_code,
+        NULL::BIGINT                   AS latency_ms,
+        NULL::BIGINT                   AS tokens,
+        ct.amount,
+        ct.balance_after,
+        ct.email                       AS web_user,
+        ct.description
+     FROM credit_transactions ct
+     WHERE ct.tenant_id = $1
+       AND ct.action_type != 'mcp_tool_call'";
+
 pub async fn get_tenant_stats(
     store: web::Data<Arc<EndpointStore>>,
     path_email: web::Path<String>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let email = path_email.into_inner();
-    // hours / limit / offset are small numbers — i32 (INT4) matches make_interval's
-    // parameter type directly and avoids a BIGINT vs INT4 type-mismatch in the
-    // prepared-statement protocol when hours > 0.
+    // i32 (INT4) matches make_interval's expected type — avoids BIGINT vs INT4
+    // type mismatch in the prepared-statement protocol.
     let hours: i32 = query
         .get("hours")
         .and_then(|h| h.parse().ok())
@@ -73,17 +136,10 @@ pub async fn get_tenant_stats(
         }
     };
 
-    // ── Summary KPIs ─────────────────────────────────────────────────────────
-    // hours / limit / offset are i32 (INT4) so make_interval receives the right
-    // type without any cast — avoids the BIGINT vs INT4 mismatch that would
-    // occur if these were i64.
-    //
-    // COUNT(DISTINCT NULLIF(consumer_id,'')) treats empty-string as NULL.
-    // SUM returns NULL when there are no matching rows — always COALESCE to 0.
-    // COUNT returns 0 naturally. AVG returns NULL on empty → COALESCE handles it.
+    // ── MCP Summary KPIs ──────────────────────────────────────────────────────
     let summary_sql_base =
         "SELECT
-            COUNT(*)::BIGINT                                                     AS total_requests,
+            COUNT(*)::BIGINT                                                     AS total_mcp,
             COALESCE(SUM(CASE WHEN response_status < 400 THEN 1 ELSE 0 END), 0)::BIGINT
                                                                                  AS successful,
             COALESCE(SUM(CASE WHEN response_status >= 400
@@ -91,7 +147,7 @@ pub async fn get_tenant_stats(
                                                                                  AS failed,
             ROUND(COALESCE(AVG(response_time_ms), 0))::BIGINT                   AS avg_latency_ms,
             COUNT(DISTINCT NULLIF(consumer_id, ''))::BIGINT                     AS unique_consumers,
-            COUNT(DISTINCT endpoint_path)::BIGINT                                AS unique_tools
+            COUNT(DISTINCT endpoint_path)::BIGINT                               AS unique_tools
          FROM api_usage_logs
          WHERE tenant_id = $1";
 
@@ -113,99 +169,99 @@ pub async fn get_tenant_stats(
         }
     };
 
-    // COUNT() returns i64, ROUND(AVG)::BIGINT returns i64
-    let total_requests: i64 = summary_row.get(0);
-    let successful: i64     = summary_row.get(1);
-    let failed: i64         = summary_row.get(2);
-    let avg_latency_ms: i64 = summary_row.get(3);
+    let total_mcp: i64        = summary_row.get(0);
+    let successful: i64       = summary_row.get(1);
+    let failed: i64           = summary_row.get(2);
+    let avg_latency_ms: i64   = summary_row.get(3);
     let unique_consumers: i64 = summary_row.get(4);
-    let unique_tools: i64   = summary_row.get(5);
+    let unique_tools: i64     = summary_row.get(5);
 
-    let success_rate: f64 = if total_requests > 0 {
-        ((successful as f64 / total_requests as f64) * 1000.0).round() / 10.0
+    let success_rate: f64 = if total_mcp > 0 {
+        ((successful as f64 / total_mcp as f64) * 1000.0).round() / 10.0
     } else {
         0.0
     };
 
-    // ── Paginated request log ─────────────────────────────────────────────────
-    let log_rows = if hours == 0 {
-        client.query(
-            "SELECT
-                l.id,
-                l.timestamp,
-                l.endpoint_path,
-                l.method,
-                l.response_status,
-                l.response_time_ms,
-                l.consumer_id,
-                l.total_tokens,
-                l.metadata,
-                COALESCE(k.key_prefix, '') AS key_prefix,
-                COALESCE(k.key_name,   '') AS key_name
-             FROM api_usage_logs l
-             LEFT JOIN api_keys k ON l.key_id = k.id
-             WHERE l.tenant_id = $1
-             ORDER BY l.timestamp DESC
-             LIMIT $2 OFFSET $3",
-            &[&tenant_id, &limit, &offset],
-        ).await
-    } else {
-        client.query(
-            "SELECT
-                l.id,
-                l.timestamp,
-                l.endpoint_path,
-                l.method,
-                l.response_status,
-                l.response_time_ms,
-                l.consumer_id,
-                l.total_tokens,
-                l.metadata,
-                COALESCE(k.key_prefix, '') AS key_prefix,
-                COALESCE(k.key_name,   '') AS key_name
-             FROM api_usage_logs l
-             LEFT JOIN api_keys k ON l.key_id = k.id
-             WHERE l.tenant_id = $1
-               AND l.timestamp >= NOW() - make_interval(hours => $4)
-             ORDER BY l.timestamp DESC
-             LIMIT $2 OFFSET $3",
-            &[&tenant_id, &limit, &offset, &hours],
-        ).await
+    // ── Web credit events count ───────────────────────────────────────────────
+    let credit_count: i64 = {
+        let res = if hours == 0 {
+            client.query_one(
+                "SELECT COUNT(*)::BIGINT FROM credit_transactions \
+                 WHERE tenant_id = $1 AND action_type != 'mcp_tool_call'",
+                &[&tenant_id],
+            ).await
+        } else {
+            client.query_one(
+                "SELECT COUNT(*)::BIGINT FROM credit_transactions \
+                 WHERE tenant_id = $1 AND action_type != 'mcp_tool_call' \
+                   AND created_at >= NOW() - make_interval(hours => $2)",
+                &[&tenant_id, &hours],
+            ).await
+        };
+        match res {
+            Ok(r) => r.get(0),
+            Err(e) => {
+                app_log!(warn, error = %e, "Credit count query failed, defaulting 0");
+                0i64
+            }
+        }
     };
 
-    let log_rows = match log_rows {
+    let total_count = total_mcp + credit_count;
+
+    // ── Unified activity log (UNION ALL, sorted, paginated) ──────────────────
+    //
+    // $1 = tenant_id (shared by both halves)
+    // $2 = limit, $3 = offset
+    // $4 = hours (only in the time-filtered branch, shared by both halves)
+    let events_rows = if hours == 0 {
+        let sql = format!(
+            "{} UNION ALL {} ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
+            MCP_SEL, WEB_SEL
+        );
+        client.query(&sql, &[&tenant_id, &limit, &offset]).await
+    } else {
+        let sql = format!(
+            "{mcp} AND l.timestamp  >= NOW() - make_interval(hours => $4) \
+             UNION ALL \
+             {web} AND ct.created_at >= NOW() - make_interval(hours => $4) \
+             ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
+            mcp = MCP_SEL,
+            web = WEB_SEL,
+        );
+        client.query(&sql, &[&tenant_id, &limit, &offset, &hours]).await
+    };
+
+    let events_rows = match events_rows {
         Ok(r) => r,
         Err(e) => {
-            app_log!(error, error = %e, tenant_id = %tenant_id, "Stats log query failed");
+            app_log!(error, error = %e, tenant_id = %tenant_id, "Activity log query failed");
             return HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
-                "message": format!("Log query error: {}", e)
+                "message": format!("Activity query error: {}", e)
             }));
         }
     };
 
-    let logs: Vec<serde_json::Value> = log_rows
+    let events: Vec<serde_json::Value> = events_rows
         .iter()
         .map(|row| {
             let ts: chrono::DateTime<chrono::Utc> = row.get(1);
-            // metadata is stored as JSONB — try get as Value first, else try String
-            let metadata: Option<serde_json::Value> = row
-                .try_get::<_, serde_json::Value>(8)
-                .ok()
-                .filter(|v| !v.is_null());
-
             serde_json::json!({
-                "id":               row.get::<_, String>(0),
-                "timestamp":        ts.to_rfc3339(),
-                "endpoint_path":    row.get::<_, String>(2),
-                "method":           row.get::<_, String>(3),
-                "response_status":  row.get::<_, Option<i32>>(4),
-                "response_time_ms": row.get::<_, Option<i64>>(5),
-                "consumer_id":      row.get::<_, Option<String>>(6),
-                "total_tokens":     row.get::<_, Option<i64>>(7),
-                "metadata":         metadata,
-                "key_prefix":       row.get::<_, String>(9),
-                "key_name":         row.get::<_, String>(10),
+                "id":           row.get::<_, String>(0),
+                "timestamp":    ts.to_rfc3339(),
+                "source":       row.get::<_, String>(2),
+                "name":         row.get::<_, Option<String>>(3),
+                "consumer_id":  row.get::<_, Option<String>>(4),
+                "key_prefix":   row.get::<_, Option<String>>(5),
+                "key_name":     row.get::<_, Option<String>>(6),
+                "status_code":  row.get::<_, Option<i32>>(7),
+                "latency_ms":   row.get::<_, Option<i64>>(8),
+                "tokens":       row.get::<_, Option<i64>>(9),
+                "amount":       row.get::<_, Option<i64>>(10),
+                "balance_after":row.get::<_, Option<i64>>(11),
+                "web_user":     row.get::<_, Option<String>>(12),
+                "description":  row.get::<_, Option<String>>(13),
             })
         })
         .collect();
@@ -213,24 +269,26 @@ pub async fn get_tenant_stats(
     app_log!(info,
         email = %email,
         tenant_id = %tenant_id,
-        total_requests = total_requests,
-        logs_returned = logs.len(),
+        total_mcp = total_mcp,
+        total_credit = credit_count,
+        events_returned = events.len(),
         "Tenant stats returned"
     );
 
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "summary": {
-            "total_requests":   total_requests,
+            "total_mcp":        total_mcp,
             "successful":       successful,
             "failed":           failed,
             "success_rate":     success_rate,
             "avg_latency_ms":   avg_latency_ms,
             "unique_consumers": unique_consumers,
             "unique_tools":     unique_tools,
+            "total_credit":     credit_count,
             "period_hours":     hours,
         },
-        "logs":        logs,
-        "total_count": total_requests,
+        "events":      events,
+        "total_count": total_count,
     }))
 }
