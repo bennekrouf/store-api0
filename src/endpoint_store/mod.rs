@@ -226,9 +226,9 @@ impl EndpointStore {
         api_key_management::validate_api_key(self, key).await
     }
 
-    // pub async fn record_api_key_usage(&self, key_id: &str) -> Result<(), StoreError> {
-    //     api_key_management::record_api_key_usage(self, key_id).await
-    // }
+    pub async fn record_api_key_usage(&self, key_id: &str) -> Result<(), StoreError> {
+        api_key_management::record_api_key_usage(self, key_id).await
+    }
 
     pub async fn get_api_key_usage(&self, key_id: &str) -> Result<Option<ApiKeyInfo>, StoreError> {
         api_key_management::get_api_key_usage(self, key_id).await

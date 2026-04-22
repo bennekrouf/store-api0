@@ -170,23 +170,23 @@ pub async fn revoke_all_api_keys(store: &EndpointStore, email: &str) -> Result<u
 }
 
 /// Record API key usage
-// pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result<(), StoreError> {
-//     let client = store.get_conn().await?;
-//     let now = Utc::now();
-//
-//     client
-//         .execute(
-//             "UPDATE api_keys SET
-//              last_used = $1,
-//              usage_count = usage_count + 1
-//              WHERE id = $2 AND is_active = true",
-//             &[&now, &key_id],
-//         )
-//         .await
-//         .to_store_error()?;
-//
-//     Ok(())
-// }
+pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result<(), StoreError> {
+    let client = store.get_conn().await?;
+    let now = Utc::now();
+
+    client
+        .execute(
+            "UPDATE api_keys SET
+             last_used = $1,
+             usage_count = usage_count + 1
+             WHERE id = $2 AND is_active = true",
+            &[&now, &key_id],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(())
+}
 
 /// Validate an API key and return the key_id and email if valid
 /// Returns (email, key_id, tenant_id, provider_tenant_id) for a valid key.
