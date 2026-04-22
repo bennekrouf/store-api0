@@ -21,16 +21,19 @@ pub async fn get_tenant_stats(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let email = path_email.into_inner();
-    let hours: i64 = query
+    // hours / limit / offset are small numbers — i32 (INT4) matches make_interval's
+    // parameter type directly and avoids a BIGINT vs INT4 type-mismatch in the
+    // prepared-statement protocol when hours > 0.
+    let hours: i32 = query
         .get("hours")
         .and_then(|h| h.parse().ok())
         .unwrap_or(24);
-    let limit: i64 = query
+    let limit: i32 = query
         .get("limit")
         .and_then(|l| l.parse().ok())
         .unwrap_or(50)
         .min(200);
-    let offset: i64 = query
+    let offset: i32 = query
         .get("offset")
         .and_then(|o| o.parse().ok())
         .unwrap_or(0);
@@ -71,14 +74,13 @@ pub async fn get_tenant_stats(
     };
 
     // ── Summary KPIs ─────────────────────────────────────────────────────────
-    // Cast $2 to int4 for make_interval — i64 maps to BIGINT but make_interval
-    // takes INTEGER. hours is always small (≤ 720) so the cast is safe.
+    // hours / limit / offset are i32 (INT4) so make_interval receives the right
+    // type without any cast — avoids the BIGINT vs INT4 mismatch that would
+    // occur if these were i64.
     //
-    // COUNT(DISTINCT NULLIF(consumer_id,'')) treats empty-string as NULL,
-    // which is cleaner than the FILTER trick that had a cast-placement bug.
+    // COUNT(DISTINCT NULLIF(consumer_id,'')) treats empty-string as NULL.
     // SUM returns NULL when there are no matching rows — always COALESCE to 0.
     // COUNT returns 0 naturally. AVG returns NULL on empty → COALESCE handles it.
-    // make_interval(hours => $2::INT) avoids the missing bigint×interval operator.
     let summary_sql_base =
         "SELECT
             COUNT(*)::BIGINT                                                     AS total_requests,
@@ -96,7 +98,7 @@ pub async fn get_tenant_stats(
     let summary_row = if hours == 0 {
         client.query_one(summary_sql_base, &[&tenant_id]).await
     } else {
-        let sql = format!("{} AND timestamp >= NOW() - make_interval(hours => $2::INT)", summary_sql_base);
+        let sql = format!("{} AND timestamp >= NOW() - make_interval(hours => $2)", summary_sql_base);
         client.query_one(&sql, &[&tenant_id, &hours]).await
     };
 
@@ -164,7 +166,7 @@ pub async fn get_tenant_stats(
              FROM api_usage_logs l
              LEFT JOIN api_keys k ON l.key_id = k.id
              WHERE l.tenant_id = $1
-               AND l.timestamp >= NOW() - make_interval(hours => $4::INT)
+               AND l.timestamp >= NOW() - make_interval(hours => $4)
              ORDER BY l.timestamp DESC
              LIMIT $2 OFFSET $3",
             &[&tenant_id, &limit, &offset, &hours],
