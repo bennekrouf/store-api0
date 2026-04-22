@@ -19,7 +19,11 @@ pub struct McpTool {
     pub backend_url: String,
     pub description: String,
     pub input_schema: String, // JSON Schema as text
-    pub cost_credits: i64,
+    /// api0 credit cost per call.
+    /// `None`  → tool belongs to an external provider that manages its own billing;
+    ///           the gateway will NOT check or deduct api0 credits.
+    /// `Some(n)` → deduct n api0 credits on each successful call.
+    pub cost_credits: Option<i64>,
     pub timeout_ms: i32,
     /// When Some("GET"|"POST"|…) the gateway does REST passthrough.
     /// When None the backend is expected to speak native MCP format.
