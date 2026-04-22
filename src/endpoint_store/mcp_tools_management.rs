@@ -210,7 +210,10 @@ pub async fn list_mcp_tools(
             backend_url,
             description,
             input_schema,
-            cost_credits: 1,
+            // Virtual (endpoint-imported) tools belong to an external provider
+            // that manages its own billing. Set None so the gateway never checks
+            // or deducts api0 credits for these calls.
+            cost_credits: None,
             timeout_ms: 30000,
             http_verb: Some(verb.to_uppercase()),
             is_active: true,
@@ -314,7 +317,8 @@ pub async fn get_mcp_tool(
                 backend_url,
                 description,
                 input_schema,
-                cost_credits: 1,
+                // Virtual (endpoint-imported) tools — no api0 billing.
+                cost_credits: None,
                 timeout_ms: 30000,
                 http_verb: Some(verb.to_uppercase()),
                 is_active: true,
@@ -405,7 +409,9 @@ pub async fn sync_endpoints_as_mcp_tools(
                 backend_url,
                 description: Some(description),
                 input_schema: Some(input_schema),
-                cost_credits: Some(1),
+                // Endpoint-imported tools belong to external providers — no api0 billing.
+                // Providers manage their own credits downstream.
+                cost_credits: None,
                 timeout_ms: Some(30_000),
                 http_verb: Some(endpoint.verb.to_uppercase()),
             };
@@ -491,6 +497,10 @@ fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> St
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
+    // cost_credits is INTEGER NOT NULL in the DB (explicit tools always have a value).
+    // Wrap in Some so the gateway can distinguish "has api0 billing" (Some) from
+    // "external provider" (None, only possible for virtual/endpoint-based tools).
+    let cost_credits_raw: i64 = row.get(6);
     McpTool {
         id:           row.get(0),
         tenant_id:    row.get(1),
@@ -498,7 +508,7 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
         backend_url:  row.get(3),
         description:  row.get(4),
         input_schema: row.get(5),
-        cost_credits: row.get(6),
+        cost_credits: Some(cost_credits_raw),
         timeout_ms:   row.get(7),
         http_verb:    row.get(8),
         is_active:    row.get(9),
