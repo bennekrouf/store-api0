@@ -90,6 +90,43 @@ pub struct AdminUser {
     pub email: String,
 }
 
+// ── Any authenticated Firebase user ──────────────────────────────────────────
+
+/// Actix-web extractor for any valid Firebase JWT (not just admin).
+/// Inject as a handler parameter; returns 401 if the token is missing or invalid.
+pub struct FirebaseUser {
+    pub email: String,
+}
+
+impl FromRequest for FirebaseUser {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let token = match extract_bearer(req) {
+            Some(t) => t,
+            None => return ready(Err(ErrorUnauthorized("Missing Authorization header"))),
+        };
+
+        let project_id = match req.app_data::<web::Data<String>>() {
+            Some(id) => id.get_ref().clone(),
+            None => return ready(Err(ErrorUnauthorized("Server misconfiguration"))),
+        };
+
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(verify(&token, &project_id))
+        });
+
+        match result {
+            Ok(email) => ready(Ok(FirebaseUser { email })),
+            Err(e) => {
+                crate::app_log!(warn, error = %e, "FirebaseUser: token verification failed");
+                ready(Err(ErrorUnauthorized("Token verification failed")))
+            }
+        }
+    }
+}
+
 impl FromRequest for AdminUser {
     type Error = Error;
     type Future = Ready<Result<Self, Self::Error>>;
@@ -135,11 +172,19 @@ impl FromRequest for AdminUser {
 }
 
 fn extract_bearer(req: &HttpRequest) -> Option<String> {
+    // Accept `Authorization: Bearer <token>` (standard) OR
+    // `X-Firebase-Auth: <token>` (dashboard convention).
     req.headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string())
+        .or_else(|| {
+            req.headers()
+                .get("X-Firebase-Auth")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
 }
 
 async fn verify(token: &str, project_id: &str) -> anyhow::Result<String> {

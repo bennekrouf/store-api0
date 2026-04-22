@@ -6,6 +6,10 @@ use crate::mcp::downstream_auth::{
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::payment::admin::admin_credit_handler;
 use crate::api::key_consumer::generate_consumer_key_handler;
+use crate::api::providers::list_providers_handler;
+use crate::api::key_consumer_self_service::{
+    generate_self_service_key, list_self_service_keys,
+};
 use crate::mcp::tools::{
     delete_mcp_tool_handler, get_mcp_tool_handler, list_mcp_tools_handler,
     upsert_mcp_tool_handler,
@@ -173,8 +177,13 @@ pub async fn start_http_server(
                             .route("/mcp-tools/{tenant_id}", web::get().to(list_mcp_tools_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::get().to(get_mcp_tool_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::delete().to(delete_mcp_tool_handler))
-                            // Consumer key generation (B2B2C)
+                            // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)
                             .route("/consumer-keys", web::post().to(generate_consumer_key_handler))
+                            // Self-service consumer keys (end-users, Firebase JWT auth)
+                            .route("/consumer-keys/me", web::post().to(generate_self_service_key))
+                            .route("/consumer-keys/me", web::get().to(list_self_service_keys))
+                            // Provider discovery (public)
+                            .route("/providers", web::get().to(list_providers_handler))
                             // Downstream auth (tenant-level)
                             .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
                             .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
