@@ -85,18 +85,19 @@ pub async fn get_tenant_stats(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let email = path_email.into_inner();
-    // i32 (INT4) matches make_interval's expected type — avoids BIGINT vs INT4
-    // type mismatch in the prepared-statement protocol.
+    // hours: i32 (INT4) — make_interval(hours => $n) expects INT4.
+    // limit / offset: i64 (INT8) — PostgreSQL infers LIMIT $n / OFFSET $n as INT8.
+    // Mixing these up causes "cannot convert i32 ↔ int8" at bind time.
     let hours: i32 = query
         .get("hours")
         .and_then(|h| h.parse().ok())
         .unwrap_or(24);
-    let limit: i32 = query
+    let limit: i64 = query
         .get("limit")
         .and_then(|l| l.parse().ok())
         .unwrap_or(50)
         .min(200);
-    let offset: i32 = query
+    let offset: i64 = query
         .get("offset")
         .and_then(|o| o.parse().ok())
         .unwrap_or(0);
