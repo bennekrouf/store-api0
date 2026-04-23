@@ -61,24 +61,34 @@ pub async fn get_api_groups(
     if is_new_user && current_balance == 0 {
         app_log!(info, email = %email, "New user detected, adding $5 default credit");
 
-        match store.update_credit_balance(&email, 500, "welcome", None).await {
-            Ok(new_balance) => {
-                app_log!(info,
-                    email = %email,
-                    new_balance = new_balance,
-                    "Added $5 default credit for new user"
-                );
-                response.credit_balance = new_balance;
-                response.message = "Welcome! $5 credit has been added to your account. Create an API key to start using the service.".to_string();
-            }
+        let tenant_id = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
+            Ok(t) => t.id,
             Err(e) => {
-                app_log!(error,
-                    error = %e,
-                    email = %email,
-                    "Failed to add default credit for new user"
-                );
-                response.message =
-                    "Welcome! Please create an API key to start using the service.".to_string();
+                 app_log!(error, error = %e, email = %email, "Failed to resolve tenant for welcome credit");
+                 "".to_string()
+            }
+        };
+
+        if !tenant_id.is_empty() {
+            match store.update_credit_balance(&tenant_id, &email, 500, "welcome", None).await {
+                Ok(new_balance) => {
+                    app_log!(info,
+                        email = %email,
+                        new_balance = new_balance,
+                        "Added $5 default credit for new user"
+                    );
+                    response.credit_balance = new_balance;
+                    response.message = "Welcome! $5 credit has been added to your account. Create an API key to start using the service.".to_string();
+                }
+                Err(e) => {
+                    app_log!(error,
+                        error = %e,
+                        email = %email,
+                        "Failed to add default credit for new user"
+                    );
+                    response.message =
+                        "Welcome! Please create an API key to start using the service.".to_string();
+                }
             }
         }
     }
