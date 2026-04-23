@@ -126,7 +126,7 @@ pub async fn get_tenant_stats(
         }
     };
 
-    let client = match store.get_conn().await {
+    let client = match store.get_conn(Some(&tenant_id)).await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed for stats");

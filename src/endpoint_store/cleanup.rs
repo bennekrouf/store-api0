@@ -7,7 +7,7 @@ pub async fn fallback_clean_user_data(
     store: &EndpointStore,
     email: &str,
 ) -> Result<(), StoreError> {
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     // Get endpoint IDs
