@@ -45,7 +45,7 @@ use crate::api::tenant_name::update_tenant_name_handler;
 use crate::api::config_upload::upload_api_config;
 use crate::api::reference_upload;
 use crate::api::key_validate::validate_api_key;
-use crate::api::tenant_management::verify_tenant_access;
+use crate::api::tenant_management::{verify_tenant_access, list_user_tenants};
 use crate::middleware::error_handler::handle_internal_server_error;
 use actix_cors::Cors;
 use actix_web::middleware::{ErrorHandlers, Logger};
@@ -176,7 +176,11 @@ pub async fn start_http_server(
                             // Tenant access verification
                             .route(
                                 "/tenant/verify-access/{email}/{tenant_id}",
-                                web::get().to(verify_tenant_access),
+                                web::get().to(verify_tenant_access,
+                            )
+                            .route(
+                                "/user/tenants/{email}",
+                                web::get().to(list_user_tenants),
                             )
                             // MCP tool registry
                             .route("/mcp-tools", web::post().to(upsert_mcp_tool_handler))

@@ -25,3 +25,26 @@ pub async fn verify_tenant_access(
         }
     }
 }
+
+pub async fn list_user_tenants(
+    store: web::Data<Arc<EndpointStore>>,
+    email: web::Path<String>,
+) -> impl Responder {
+    let email = email.into_inner();
+    
+    match store.list_user_tenants(&email).await {
+        Ok(tenants) => {
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "tenants": tenants,
+            }))
+        }
+        Err(e) => {
+            app_log!(error, email = %email, "Failed to list user tenants: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Internal error: {}", e),
+            }))
+        }
+    }
+}
