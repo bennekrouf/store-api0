@@ -233,6 +233,7 @@ pub async fn validate_api_key(
 pub async fn get_api_key_usage(
     store: &EndpointStore,
     key_id: &str,
+    tenant_id: &str,
 ) -> Result<Option<ApiKeyInfo>, StoreError> {
     let client = store.get_conn().await?;
 
@@ -240,8 +241,8 @@ pub async fn get_api_key_usage(
         .query_opt(
             "SELECT id, key_prefix, key_name, generated_at, last_used, usage_count
              FROM api_keys
-             WHERE id = $1 AND is_active = true",
-            &[&key_id],
+             WHERE id = $1 AND tenant_id = $2 AND is_active = true",
+            &[&key_id, &tenant_id],
         )
         .await
         .to_store_error()?;

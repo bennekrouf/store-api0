@@ -231,8 +231,8 @@ impl EndpointStore {
         api_key_management::record_api_key_usage(self, key_id).await
     }
 
-    pub async fn get_api_key_usage(&self, key_id: &str) -> Result<Option<ApiKeyInfo>, StoreError> {
-        api_key_management::get_api_key_usage(self, key_id).await
+    pub async fn get_api_key_usage(&self, key_id: &str, tenant_id: &str) -> Result<Option<ApiKeyInfo>, StoreError> {
+        api_key_management::get_api_key_usage(self, key_id, tenant_id).await
     }
 
     pub async fn log_api_usage(&self, request: &LogApiUsageRequest) -> Result<String, StoreError> {
@@ -314,6 +314,7 @@ impl EndpointStore {
     pub async fn get_api_usage_logs(
         &self,
         key_id: &str,
+        tenant_id: &str,
         limit: Option<i64>,
     ) -> Result<Vec<ApiUsageLog>, StoreError> {
         let client = self.get_conn().await?;
@@ -326,10 +327,14 @@ impl EndpointStore {
             ip_address, user_agent, usage_estimated, input_tokens,
             output_tokens, total_tokens, model_used, metadata, consumer_id
             FROM api_usage_logs
-            WHERE key_id = $1
+            WHERE key_id = $1 AND tenant_id = $3
             ORDER BY timestamp DESC
             LIMIT $2",
-                &[&key_id as &(dyn tokio_postgres::types::ToSql + Sync), &limit as &(dyn tokio_postgres::types::ToSql + Sync)],
+                &[
+                    &key_id as &(dyn tokio_postgres::types::ToSql + Sync), 
+                    &limit as &(dyn tokio_postgres::types::ToSql + Sync),
+                    &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync)
+                ],
             )
             .await
             .to_store_error()?;

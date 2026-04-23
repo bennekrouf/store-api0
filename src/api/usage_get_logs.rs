@@ -22,7 +22,7 @@ pub async fn get_api_usage_logs(
         "Received HTTP get API usage logs request"
     );
 
-    match store.get_api_usage_logs(&key_id, limit).await {
+    match store.get_api_usage_logs(&key_id, &email, limit).await {
         Ok(logs) => {
             app_log!(info,
                 email = %email,

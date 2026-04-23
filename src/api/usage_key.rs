@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 pub async fn get_api_key_usage(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    path: web::Path<(String, String)>,
 ) -> impl Responder {
-    let email = email.into_inner();
-    app_log!(info, email = %email, "Received HTTP get API key usage request");
+    let (email, key_id) = path.into_inner();
+    app_log!(info, email = %email, key_id = %key_id, "Received HTTP get API key usage request");
 
-    match store.get_api_key_usage(&email).await {
+    match store.get_api_key_usage(&key_id, &email).await {
         Ok(usage) => {
             app_log!(info,
                 email = %email,
