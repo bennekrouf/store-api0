@@ -51,12 +51,14 @@ async fn test_credit_deduction_logic() {
 
     let store = EndpointStore::new(&database_url).await.expect("Failed to create store");
     let email = format!("test_credit_{}@example.com", Uuid::new_v4());
+    let tenant = crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await.expect("Failed to get tenant");
+    let tenant_id = &tenant.id;
 
-    println!("Testing with user: {}", email);
+    println!("Testing with user: {} and tenant: {}", email, tenant_id);
 
     // 2. Initial Credit Balance
     let initial_credits = 1000;
-    let balance = store.update_credit_balance(&email, initial_credits).await.expect("Failed to set initial balance");
+    let balance = store.update_credit_balance(tenant_id, &email, initial_credits, "test", None).await.expect("Failed to set initial balance");
     assert_eq!(balance, initial_credits, "Initial balance mismatch");
 
     // 3. Test Case 1: 1000 tokens -> 20 credits deduction
@@ -65,7 +67,7 @@ async fn test_credit_deduction_logic() {
     let cost_1 = (tokens_1 as i64 * 20) / 1000;
     assert_eq!(cost_1, 20);
 
-    let new_balance_1 = store.update_credit_balance(&email, -cost_1).await.expect("Failed to deduct Case 1");
+    let new_balance_1 = store.update_credit_balance(tenant_id, &email, -cost_1, "test", None).await.expect("Failed to deduct Case 1");
     assert_eq!(new_balance_1, 980, "Balance mismatch after Case 1");
 
     // 4. Test Case 2: 50 tokens -> 1 credit deduction
@@ -74,7 +76,7 @@ async fn test_credit_deduction_logic() {
     let cost_2 = (tokens_2 as i64 * 20) / 1000;
     assert_eq!(cost_2, 1);
 
-    let new_balance_2 = store.update_credit_balance(&email, -cost_2).await.expect("Failed to deduct Case 2");
+    let new_balance_2 = store.update_credit_balance(tenant_id, &email, -cost_2, "test", None).await.expect("Failed to deduct Case 2");
     assert_eq!(new_balance_2, 979, "Balance mismatch after Case 2");
 
     // 5. Test Case 3: 10 tokens -> 1 credit deduction (Minimum)
@@ -84,7 +86,7 @@ async fn test_credit_deduction_logic() {
     let cost_3 = if raw_cost_3 < 1 && tokens_3 > 0 { 1 } else { raw_cost_3 };
     assert_eq!(cost_3, 1, "Minimum cost should be 1");
 
-    let new_balance_3 = store.update_credit_balance(&email, -cost_3).await.expect("Failed to deduct Case 3");
+    let new_balance_3 = store.update_credit_balance(tenant_id, &email, -cost_3, "test", None).await.expect("Failed to deduct Case 3");
     assert_eq!(new_balance_3, 978, "Balance mismatch after Case 3");
 
     // Cleanup
