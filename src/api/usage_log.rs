@@ -47,9 +47,20 @@ pub async fn log_api_usage(
 
                 if cost > 0 {
                     app_log!(info, email = %log_request.email, cost = cost, "Deducting credits for usage");
-                    // Pass negative amount to decrement
-                    if let Err(e) = store.update_credit_balance(&log_request.email, -cost, "api_usage", None).await {
-                         app_log!(error, error = %e, email = %log_request.email, "Failed to deduct credits");
+                    // Resolve tenant_id
+                    let tenant_id = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &log_request.email).await {
+                        Ok(t) => t.id,
+                        Err(e) => {
+                             app_log!(error, error = %e, email = %log_request.email, "Failed to resolve tenant for credit deduction");
+                             "".to_string()
+                        }
+                    };
+                    
+                    if !tenant_id.is_empty() {
+                        // Pass negative amount to decrement
+                        if let Err(e) = store.update_credit_balance(&tenant_id, &log_request.email, -cost, "api_usage", None).await {
+                             app_log!(error, error = %e, email = %log_request.email, "Failed to deduct credits");
+                        }
                     }
                 }
             }

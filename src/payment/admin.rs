@@ -58,8 +58,20 @@ pub async fn admin_credit_handler(
         "admin_deduct"
     };
 
+    let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
+        Ok(t) => t,
+        Err(e) => {
+            app_log!(error, email = %email, error = %e, "Admin credit adjustment: tenant resolution failed");
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": "Account resolution failed",
+            }));
+        }
+    };
+
     match store
         .update_credit_balance(
+            &tenant.id,
             &email,
             request.amount,
             action_type,
