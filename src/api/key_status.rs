@@ -6,12 +6,12 @@ use std::sync::Arc;
 // Handler for getting API key status
 pub async fn get_api_keys_status(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    tenant_id: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
-    app_log!(info, email = %email, "Received HTTP get API keys status request");
+    let tenant_id = tenant_id.into_inner();
+    app_log!(info, tenant_id = %tenant_id, "Received HTTP get API keys status request");
 
-    match store.get_api_keys_status(&email).await {
+    match store.get_api_keys_status(&tenant_id).await {
         Ok(key_preference) => {
             app_log!(info,
                 email = %email,

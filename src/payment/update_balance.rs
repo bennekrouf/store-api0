@@ -9,13 +9,24 @@ pub async fn update_credit_balance_handler(
     let email = &request.email;
     let amount = request.amount;
 
-    app_log!(info,
-        email = %email,
-        amount = amount,
-        "Received HTTP update credit balance request"
-    );
+    // Resolve tenant_id: use explicit one if provided, otherwise fallback to default for email.
+    let tenant_id = if let Some(tid) = &request.tenant_id {
+        tid.clone()
+    } else {
+        use crate::endpoint_store::tenant_management;
+        match tenant_management::get_default_tenant(&store, email).await {
+            Ok(t) => t.id,
+            Err(e) => {
+                app_log!(error, email = %email, "Failed to resolve default tenant for credit update: {}", e);
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "message": "Failed to resolve tenant",
+                }));
+            }
+        }
+    };
 
-    match store.update_credit_balance(email, amount, &request.action_type, request.description.as_deref()).await {
+    match store.update_credit_balance(&tenant_id, email, amount, &request.action_type, request.description.as_deref()).await {
         Ok(new_balance) => {
             app_log!(info,
                 email = %email,

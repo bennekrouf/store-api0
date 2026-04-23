@@ -154,6 +154,9 @@ pub struct KeyPreference {
 pub struct GenerateKeyRequest {
     pub email: String,
     pub key_name: String,
+    /// The tenant to associate this key with. If omitted, the user's default personal tenant is used.
+    #[serde(default)]
+    pub tenant_id: Option<String>,
     /// When set, the generated key is a consumer key scoped to this provider tenant.
     #[serde(default)]
     pub provider_tenant_id: Option<String>,
@@ -162,6 +165,8 @@ pub struct GenerateKeyRequest {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UpdateCreditRequest {
     pub email: String,
+    /// Explicit tenant attribution (optional, defaults to user's personal tenant)
+    pub tenant_id: Option<String>,
     pub amount: i64,
     /// e.g. "cv_generation", "cover_letter", "optimize", "translate", "cv_import", "topup", "welcome"
     #[serde(default = "default_action_type")]

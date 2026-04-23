@@ -48,36 +48,44 @@ pub fn extract_key_prefix(key: &str) -> String {
     }
 }
 
-/// Get API keys status for a user
+/// Get API keys status for a tenant
 pub async fn get_api_keys_status(
     store: &EndpointStore,
-    email: &str,
+    tenant_id: &str,
 ) -> Result<KeyPreference, StoreError> {
-    use crate::endpoint_store::tenant_management;
-
-    app_log!(debug, email = %email, "Checking API keys status");
-
-    // Read balance from the tenant (same source as get_credit_balance / header widget)
-    let tenant = tenant_management::get_default_tenant(store, email).await?;
-    let balance = tenant.credit_balance;
-
-    app_log!(debug, email = %email, balance = balance, "Retrieved credit balance from tenant");
+    app_log!(debug, tenant_id = %tenant_id, "Checking API keys status");
 
     let client = store.get_conn().await?;
 
+    // 1. Get balance and name from the tenant
+    let tenant_row = client
+        .query_opt(
+            "SELECT credit_balance, name FROM tenants WHERE id = $1",
+            &[&tenant_id],
+        )
+        .await
+        .to_store_error()?;
+
+    let (balance, _tenant_name) = match tenant_row {
+        Some(row) => (row.get::<_, i64>(0), row.get::<_, String>(1)),
+        None => return Err(StoreError::NotFound(format!("Tenant {} not found", tenant_id))),
+    };
+
+    app_log!(debug, tenant_id = %tenant_id, balance = balance, "Retrieved credit balance from tenant");
+
+    // 2. Count active keys for this tenant
     let key_count_row = client
         .query_one(
-            "SELECT COUNT(*) FROM api_keys WHERE email = $1 AND is_active = true",
-            &[&email],
+            "SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND is_active = true",
+            &[&tenant_id],
         )
         .await
         .to_store_error()?;
     let key_count: i64 = key_count_row.get(0);
 
-    app_log!(debug, email = %email, active_key_count = key_count, "Found active API keys");
+    app_log!(debug, tenant_id = %tenant_id, active_key_count = key_count, "Found active API keys");
 
     if key_count == 0 {
-        app_log!(info, email = %email, "No active API keys found - user is considered new");
         return Ok(KeyPreference {
             has_keys: false,
             active_key_count: 0,
@@ -86,15 +94,14 @@ pub async fn get_api_keys_status(
         });
     }
 
-    app_log!(info, email = %email, key_count = key_count, "User has active API keys");
-
+    // 3. Get key details
     let rows = client
         .query(
             "SELECT id, key_prefix, key_name, generated_at, last_used, usage_count
             FROM api_keys
-            WHERE email = $1 AND is_active = true
+            WHERE tenant_id = $1 AND is_active = true
             ORDER BY generated_at DESC",
-            &[&email],
+            &[&tenant_id],
         )
         .await
         .to_store_error()?;
@@ -113,8 +120,6 @@ pub async fn get_api_keys_status(
         });
     }
 
-    app_log!(debug, email = %email, keys_found = keys.len(), "Retrieved API key details");
-
     Ok(KeyPreference {
         has_keys: true,
         active_key_count: key_count as usize,
@@ -126,15 +131,15 @@ pub async fn get_api_keys_status(
 /// Revoke a specific API key
 pub async fn revoke_api_key(
     store: &EndpointStore,
-    email: &str,
+    tenant_id: &str,
     key_id: &str,
 ) -> Result<bool, StoreError> {
     let client = store.get_conn().await?;
 
     let key_exists_row = client
         .query_opt(
-            "SELECT 1 FROM api_keys WHERE id = $1 AND email = $2 AND is_active = true",
-            &[&key_id, &email],
+            "SELECT 1 FROM api_keys WHERE id = $1 AND tenant_id = $2 AND is_active = true",
+            &[&key_id, &tenant_id],
         )
         .await
         .to_store_error()?;
@@ -145,8 +150,8 @@ pub async fn revoke_api_key(
 
     client
         .execute(
-            "UPDATE api_keys SET is_active = false WHERE id = $1 AND email = $2",
-            &[&key_id, &email],
+            "UPDATE api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2",
+            &[&key_id, &tenant_id],
         )
         .await
         .to_store_error()?;
@@ -154,19 +159,22 @@ pub async fn revoke_api_key(
     Ok(true)
 }
 
-/// Revoke all API keys for a user
-pub async fn revoke_all_api_keys(store: &EndpointStore, email: &str) -> Result<usize, StoreError> {
+/// Revoke all API keys for a tenant
+pub async fn revoke_all_api_keys(
+    store: &EndpointStore,
+    tenant_id: &str,
+) -> Result<u64, StoreError> {
     let client = store.get_conn().await?;
 
-    let affected = client
+    let count = client
         .execute(
-            "UPDATE api_keys SET is_active = false WHERE email = $1 AND is_active = true",
-            &[&email],
+            "UPDATE api_keys SET is_active = false WHERE tenant_id = $1 AND is_active = true",
+            &[&tenant_id],
         )
         .await
         .to_store_error()?;
 
-    Ok(affected as usize)
+    Ok(count)
 }
 
 /// Record API key usage
@@ -357,13 +365,14 @@ pub async fn get_credit_balance(store: &EndpointStore, tenant_id: &str) -> Resul
     Ok(row.get(0))
 }
 
-/// Generate a new API key for a user (associated with their default tenant)
+/// Generate a new API key for a user
 pub async fn generate_api_key(
     store: &EndpointStore,
     email: &str,
     key_name: &str,
+    tenant_id: Option<&str>,
 ) -> Result<(String, String, String), StoreError> {
-    generate_api_key_with_provider(store, email, key_name, None).await
+    generate_api_key_with_provider(store, email, key_name, tenant_id, None).await
 }
 
 /// Generate a new API key, optionally scoped to a provider tenant.
@@ -371,14 +380,14 @@ pub async fn generate_api_key_with_provider(
     store: &EndpointStore,
     email: &str,
     key_name: &str,
+    explicit_tenant_id: Option<&str>,
     provider_tenant_id: Option<&str>,
 ) -> Result<(String, String, String), StoreError> {
     use crate::endpoint_store::tenant_management;
 
-    // Use the provider_tenant_id as the primary tenant if provided (Consumer/OAuth flow).
-    // Otherwise, use the user's default personal tenant.
-    let tenant_id = if let Some(ptid) = provider_tenant_id {
-        ptid.to_string()
+    // 1. Resolve billing tenant_id
+    let tenant_id = if let Some(tid) = explicit_tenant_id {
+        tid.to_string()
     } else {
         let tenant = tenant_management::get_default_tenant(store, email).await?;
         tenant.id

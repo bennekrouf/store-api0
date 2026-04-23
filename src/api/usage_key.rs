@@ -8,10 +8,10 @@ pub async fn get_api_key_usage(
     store: web::Data<Arc<EndpointStore>>,
     path: web::Path<(String, String)>,
 ) -> impl Responder {
-    let (email, key_id) = path.into_inner();
-    app_log!(info, email = %email, key_id = %key_id, "Received HTTP get API key usage request");
+    let (tenant_id, key_id) = path.into_inner();
+    app_log!(info, tenant_id = %tenant_id, key_id = %key_id, "Received HTTP get API key usage request");
 
-    match store.get_api_key_usage(&key_id, &email).await {
+    match store.get_api_key_usage(&key_id, &tenant_id).await {
         Ok(usage) => {
             app_log!(info,
                 email = %email,

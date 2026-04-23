@@ -9,10 +9,10 @@ pub async fn revoke_api_key_handler(
     store: web::Data<Arc<EndpointStore>>,
     path_params: web::Path<(String, String)>,
 ) -> impl Responder {
-    let (email, key_id) = path_params.into_inner();
-    app_log!(info, email = %email, "Received HTTP revoke API key request");
+    let (tenant_id, key_id) = path_params.into_inner();
+    app_log!(info, tenant_id = %tenant_id, key_id = %key_id, "Received HTTP revoke API key request");
 
-    match store.revoke_api_key(&email, &key_id).await {
+    match store.revoke_api_key(&tenant_id, &key_id).await {
         Ok(revoked) => {
             if revoked {
                 app_log!(info,

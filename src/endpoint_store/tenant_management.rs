@@ -187,7 +187,6 @@ pub async fn set_mcp_client_id(
     Ok(())
 }
 
-/// Update the display name of a tenant.
 pub async fn update_tenant_name(
     store: &EndpointStore,
     email: &str,
@@ -205,4 +204,22 @@ pub async fn update_tenant_name(
         .to_store_error()?;
 
     Ok(())
+}
+
+/// Verify if a user (email) has access to a specific tenant_id.
+pub async fn verify_tenant_access(
+    store: &EndpointStore,
+    email: &str,
+    tenant_id: &str,
+) -> Result<bool, StoreError> {
+    let client = store.get_conn().await?;
+    let row = client
+        .query_opt(
+            "SELECT 1 FROM tenant_users WHERE tenant_id = $1 AND email = $2",
+            &[&tenant_id, &email],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(row.is_some())
 }

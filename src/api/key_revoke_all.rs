@@ -5,12 +5,12 @@ use std::sync::Arc;
 // Handler for revoking all API keys for a user
 pub async fn revoke_all_api_keys_handler(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    tenant_id: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
-    app_log!(info, email = %email, "Received HTTP revoke all API keys request");
+    let tenant_id = tenant_id.into_inner();
+    app_log!(info, tenant_id = %tenant_id, "Received HTTP revoke all API keys request");
 
-    match store.revoke_all_api_keys(&email).await {
+    match store.revoke_all_api_keys(&tenant_id).await {
         Ok(count) => {
             app_log!(info,
                 email = %email,

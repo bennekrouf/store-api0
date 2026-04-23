@@ -45,6 +45,7 @@ use crate::api::tenant_name::update_tenant_name_handler;
 use crate::api::config_upload::upload_api_config;
 use crate::api::reference_upload;
 use crate::api::key_validate::validate_api_key;
+use crate::api::tenant_management::verify_tenant_access;
 use crate::middleware::error_handler::handle_internal_server_error;
 use actix_cors::Cors;
 use actix_web::middleware::{ErrorHandlers, Logger};
@@ -130,14 +131,14 @@ pub async fn start_http_server(
                                 web::delete().to(reset_user_preferences),
                             )
                             // Updated API key endpoints
-                            .route("/user/keys/{email}", web::get().to(get_api_keys_status))
+                            .route("/user/keys/{tenant_id}", web::get().to(get_api_keys_status))
                             .route("/user/keys", web::post().to(generate_api_key))
                             .route(
-                                "/user/keys/{email}/{key_id}",
+                                "/user/keys/{tenant_id}/{key_id}",
                                 web::delete().to(revoke_api_key_handler),
                             )
                             .route(
-                                "/user/keys/{email}",
+                                "/user/keys/{tenant_id}",
                                 web::delete().to(revoke_all_api_keys_handler),
                             )
                             // Credit balance endpoints
@@ -172,6 +173,11 @@ pub async fn start_http_server(
                             .route("/payments/history/{tenant_id}", web::get().to(get_payment_history_handler))
                             // Admin endpoints (Firebase JWT, admin email only)
                             .route("/admin/credits", web::post().to(admin_credit_handler))
+                            // Tenant access verification
+                            .route(
+                                "/tenant/verify-access/{email}/{tenant_id}",
+                                web::get().to(verify_tenant_access),
+                            )
                             // MCP tool registry
                             .route("/mcp-tools", web::post().to(upsert_mcp_tool_handler))
                             .route("/mcp-tools/{tenant_id}", web::get().to(list_mcp_tools_handler))

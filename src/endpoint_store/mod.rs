@@ -188,8 +188,8 @@ impl EndpointStore {
         cleanup::fallback_clean_user_data(self, email).await
     }
 
-    pub async fn get_api_keys_status(&self, email: &str) -> Result<KeyPreference, StoreError> {
-        api_key_management::get_api_keys_status(self, email).await
+    pub async fn get_api_keys_status(&self, tenant_id: &str) -> Result<KeyPreference, StoreError> {
+        api_key_management::get_api_keys_status(self, tenant_id).await
     }
 
     #[allow(dead_code)]
@@ -197,8 +197,9 @@ impl EndpointStore {
         &self,
         email: &str,
         key_name: &str,
+        tenant_id: Option<&str>,
     ) -> Result<(String, String, String), StoreError> {
-        api_key_management::generate_api_key(self, email, key_name).await
+        api_key_management::generate_api_key(self, email, key_name, tenant_id).await
     }
 
     #[allow(dead_code)]
@@ -206,17 +207,18 @@ impl EndpointStore {
         &self,
         email: &str,
         key_name: &str,
+        explicit_tenant_id: Option<&str>,
         provider_tenant_id: Option<&str>,
     ) -> Result<(String, String, String), StoreError> {
-        api_key_management::generate_api_key_with_provider(self, email, key_name, provider_tenant_id).await
+        api_key_management::generate_api_key_with_provider(self, email, key_name, explicit_tenant_id, provider_tenant_id).await
     }
 
-    pub async fn revoke_api_key(&self, email: &str, key_id: &str) -> Result<bool, StoreError> {
-        api_key_management::revoke_api_key(self, email, key_id).await
+    pub async fn revoke_api_key(&self, tenant_id: &str, key_id: &str) -> Result<bool, StoreError> {
+        api_key_management::revoke_api_key(self, tenant_id, key_id).await
     }
 
-    pub async fn revoke_all_api_keys(&self, email: &str) -> Result<usize, StoreError> {
-        api_key_management::revoke_all_api_keys(self, email).await
+    pub async fn revoke_all_api_keys(&self, tenant_id: &str) -> Result<u64, StoreError> {
+        api_key_management::revoke_all_api_keys(self, tenant_id).await
     }
 
     pub async fn validate_api_key(
@@ -498,5 +500,13 @@ impl EndpointStore {
         google_client_id: Option<&str>,
     ) -> Result<(), StoreError> {
         tenant_management::set_mcp_client_id(self, email, mcp_client_id, google_client_id).await
+    }
+
+    pub async fn verify_tenant_access(
+        &self,
+        email: &str,
+        tenant_id: &str,
+    ) -> Result<bool, StoreError> {
+        tenant_management::verify_tenant_access(self, email, tenant_id).await
     }
 }

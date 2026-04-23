@@ -20,3 +20,4 @@ pub mod tenant_usage;
 pub mod tenant_name;
 pub mod providers;
 pub mod key_consumer_self_service;
+pub mod tenant_management;
