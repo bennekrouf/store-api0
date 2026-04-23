@@ -175,7 +175,7 @@ pub async fn get_payment_history_handler(
             "payments": payments,
         })),
         Err(e) => {
-            app_log!(error, error = %e, email = %email, "Failed to fetch payment history");
+            app_log!(error, error = %e, tenant_id = %tenant_id, "Failed to fetch payment history");
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
                 "payments": serde_json::json!([]),
