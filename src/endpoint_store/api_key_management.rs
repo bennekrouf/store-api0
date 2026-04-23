@@ -188,25 +188,38 @@ pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result
     Ok(())
 }
 
-/// Validate an API key and return the key_id and email if valid
+/// Validate an API key and return the key_id and email if valid.
+/// If expected_tenant_id is provided, the key MUST belong to that tenant.
 /// Returns (email, key_id, tenant_id, provider_tenant_id) for a valid key.
-/// provider_tenant_id is Some(...) for consumer keys, None for regular keys.
 pub async fn validate_api_key(
     store: &EndpointStore,
     key: &str,
+    expected_tenant_id: Option<&str>,
 ) -> Result<Option<(String, String, String, Option<String>)>, StoreError> {
     let client = store.get_conn().await?;
     let key_hash = hash_api_key(key);
 
-    let row = client
-        .query_opt(
-            "SELECT id, email, tenant_id, provider_tenant_id
-             FROM api_keys
-             WHERE key_hash = $1 AND is_active = true",
-            &[&key_hash],
-        )
-        .await
-        .to_store_error()?;
+    let row = if let Some(expected_id) = expected_tenant_id {
+        client
+            .query_opt(
+                "SELECT id, email, tenant_id, provider_tenant_id
+                 FROM api_keys
+                 WHERE key_hash = $1 AND tenant_id = $2 AND is_active = true",
+                &[&key_hash, &expected_id],
+            )
+            .await
+            .to_store_error()?
+    } else {
+        client
+            .query_opt(
+                "SELECT id, email, tenant_id, provider_tenant_id
+                 FROM api_keys
+                 WHERE key_hash = $1 AND is_active = true",
+                &[&key_hash],
+            )
+            .await
+            .to_store_error()?
+    };
 
     Ok(row.map(|r| (
         r.get::<_, String>(1),                        // email

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 pub struct ValidateKeyRequest {
     pub api_key: String,
+    pub expected_tenant_id: Option<String>,
 }
 
 // #[derive(Debug, Clone, Deserialize)]
