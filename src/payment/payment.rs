@@ -147,23 +147,29 @@ pub async fn confirm_payment_handler(
 /// Returns the user's Stripe top-up history from credit_transactions.
 pub async fn get_payment_history_handler(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    tenant_id_or_email: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
-    app_log!(info, email = %email, "Fetching payment history");
+    let mut tenant_id = tenant_id_or_email.into_inner();
+    app_log!(info, input = %tenant_id, "Fetching payment history");
 
-    let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
-        Ok(t) => t,
-        Err(e) => {
-            app_log!(error, error = %e, email = %email, "Payment history: tenant lookup failed");
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "success": false,
-                "message": "Account resolution failed"
-            }));
+    // If it looks like an email, resolve it
+    if tenant_id.contains('@') {
+        match crate::endpoint_store::tenant_management::get_default_tenant(&store, &tenant_id).await {
+            Ok(t) => {
+                app_log!(info, email = %tenant_id, resolved_tenant_id = %t.id, "Resolved email to tenant ID");
+                tenant_id = t.id;
+            },
+            Err(e) => {
+                app_log!(error, error = %e, email = %tenant_id, "Payment history: tenant lookup failed");
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "message": "Account resolution failed"
+                }));
+            }
         }
-    };
+    }
 
-    match store.get_payment_history(&tenant.id).await {
+    match store.get_payment_history(&tenant_id).await {
         Ok(payments) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "payments": payments,
