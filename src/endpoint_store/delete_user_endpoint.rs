@@ -7,7 +7,7 @@ pub async fn delete_user_endpoint(
     email: &str,
     endpoint_id: &str,
 ) -> Result<bool, StoreError> {
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     app_log!(debug,

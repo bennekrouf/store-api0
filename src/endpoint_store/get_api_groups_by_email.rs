@@ -12,7 +12,7 @@ pub async fn get_api_groups_by_email(
     email: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
     app_log!(info, email = %email, "Starting to fetch API groups and endpoints");
-    let client = store.get_conn().await?;
+    let client = store.get_admin_conn().await?;
 
     app_log!(info, email = %email, "Fetching custom groups and endpoints");
     let result = fetch_custom_groups_with_endpoints(&client, email).await?;

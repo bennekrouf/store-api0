@@ -184,7 +184,7 @@ pub async fn revoke_all_api_keys(
 
 /// Record API key usage
 pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result<(), StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_admin_conn().await?;
     let now = Utc::now();
 
     client
@@ -209,7 +209,7 @@ pub async fn validate_api_key(
     key: &str,
     expected_tenant_id: Option<&str>,
 ) -> Result<Option<(String, String, String, Option<String>)>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_admin_conn().await?;
     let key_hash = hash_api_key(key);
 
     let row = if let Some(expected_id) = expected_tenant_id {

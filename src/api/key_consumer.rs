@@ -115,7 +115,7 @@ pub async fn generate_consumer_key_handler(
     let key_id = Uuid::new_v4().to_string();
     let now = Utc::now();
 
-    let mut client = match store.get_conn().await {
+    let mut client = match store.get_conn(Some(&consumer_tenant.id)).await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed");

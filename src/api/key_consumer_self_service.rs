@@ -61,7 +61,7 @@ pub async fn generate_self_service_key(
     }
 
     // 1. Verify the provider tenant exists
-    let client = match store.get_conn().await {
+    let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed");
@@ -109,7 +109,7 @@ pub async fn generate_self_service_key(
     let key_id     = Uuid::new_v4().to_string();
     let now        = Utc::now();
 
-    let mut client = match store.get_conn().await {
+    let mut client = match store.get_conn(Some(&consumer_tenant.id)).await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed");
@@ -184,8 +184,15 @@ pub async fn list_self_service_keys(
     store: web::Data<Arc<EndpointStore>>,
 ) -> impl Responder {
     let consumer_email = user.email.trim().to_lowercase();
+    let consumer_tenant = match get_default_tenant(&store, &consumer_email).await {
+        Ok(t) => t,
+        Err(e) => {
+            app_log!(error, consumer_email = %consumer_email, error = %e, "list_keys: failed to resolve tenant");
+            return HttpResponse::InternalServerError().json(serde_json::json!({"success":false,"error":"Failed to resolve account"}));
+        }
+    };
 
-    let client = match store.get_conn().await {
+    let client = match store.get_conn(Some(&consumer_tenant.id)).await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed");

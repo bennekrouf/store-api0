@@ -50,7 +50,7 @@ pub async fn upsert_mcp_tool(
     tenant_id: &str,
     req: &UpsertMcpToolRequest,
 ) -> Result<McpTool, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
     let now = Utc::now();
     let id = Uuid::new_v4().to_string();
 
@@ -115,7 +115,7 @@ pub async fn list_mcp_tools(
     tenant_id: &str,
     user_email: Option<&str>,
 ) -> Result<Vec<McpTool>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     // 1. Fetch explicit tools from mcp_tools table
     let explicit_rows = client
@@ -231,7 +231,7 @@ pub async fn get_mcp_tool(
     tool_name: &str,
     user_email: Option<&str>,
 ) -> Result<Option<McpTool>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     // 1. Check explicit tools
     let row = client
@@ -336,7 +336,7 @@ pub async fn delete_mcp_tool(
     tenant_id: &str,
     tool_name: &str,
 ) -> Result<bool, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     let n = client
         .execute(

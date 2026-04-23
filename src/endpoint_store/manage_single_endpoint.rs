@@ -7,7 +7,7 @@ pub async fn manage_single_endpoint(
     email: &str,
     endpoint: &Endpoint,
 ) -> Result<String, StoreError> {
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     let endpoint_id = &endpoint.id;

@@ -65,7 +65,7 @@ pub async fn fallback_clean_user_data(
 
 /// Forces a clean of user data
 pub async fn force_clean_user_data(store: &EndpointStore, email: &str) -> Result<(), StoreError> {
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     // Get user's custom endpoints

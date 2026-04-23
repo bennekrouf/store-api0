@@ -3,7 +3,7 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{EndpointStore, StoreError};
 /// Get all authorized domains (system-wide for CORS)
 pub async fn get_all_authorized_domains(store: &EndpointStore) -> Result<Vec<String>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_admin_conn().await?;
 
     app_log!(debug, "Fetching all authorized domains");
 
@@ -42,7 +42,7 @@ pub async fn get_all_authorized_domains(store: &EndpointStore) -> Result<Vec<Str
 
 /// Initialize default system domains
 pub async fn initialize_system_domains(store: &EndpointStore) -> Result<(), StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_admin_conn().await?;
 
     // Check if system domains already exist
     let count_row = client

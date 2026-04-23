@@ -19,7 +19,7 @@ pub async fn get_or_create_user_api_groups(
     }
 
     // Create a default group for new users if they don't have any
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     app_log!(info, email = %email, "User has no API groups, creating a default one");

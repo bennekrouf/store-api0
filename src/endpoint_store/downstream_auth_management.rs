@@ -32,7 +32,7 @@ pub async fn get_downstream_auth(
     store: &EndpointStore,
     tenant_id: &str,
 ) -> Result<Option<TenantDownstreamAuth>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     let row = client
         .query_opt(
@@ -60,7 +60,7 @@ pub async fn save_downstream_auth(
     tenant_id: &str,
     req: &SaveDownstreamAuthRequest,
 ) -> Result<TenantDownstreamAuth, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
     let now = Utc::now();
 
     let row = client

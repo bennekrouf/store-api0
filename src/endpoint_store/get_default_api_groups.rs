@@ -10,7 +10,7 @@ pub(crate) async fn get_default_api_groups(
     
     // First get all default groups in a single transaction scope
     let groups: Vec<ApiGroup> = {
-        let mut conn = store.get_conn().await?;
+        let mut conn = store.get_admin_conn().await?;
         let tx = conn.transaction().to_store_error()?;
 
         // Check if there are any default groups

@@ -13,7 +13,7 @@ pub async fn add_user_api_group(
     let tenant = tenant_management::get_default_tenant(store, email).await?;
     let tenant_id = tenant.id.clone();
 
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     let group_id = &api_group.group.id;

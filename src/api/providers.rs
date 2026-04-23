@@ -19,7 +19,7 @@ use std::sync::Arc;
 pub async fn list_providers_handler(
     store: web::Data<Arc<EndpointStore>>,
 ) -> impl Responder {
-    let client = match store.get_conn().await {
+    let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed for list_providers");

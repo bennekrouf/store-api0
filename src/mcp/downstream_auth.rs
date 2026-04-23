@@ -42,7 +42,7 @@ pub async fn get_downstream_auth_handler(
 
     // Also surface the tenant's OAuth client IDs so the dashboard can display them.
     let (mcp_client_id, google_client_id): (Option<String>, Option<String>) =
-        match store.get_conn().await {
+        match store.get_conn(Some(&tenant.id)).await {
             Ok(client) => client
                 .query_opt(
                     "SELECT mcp_client_id, google_client_id FROM tenants WHERE id = $1",

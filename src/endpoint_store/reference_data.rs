@@ -13,7 +13,7 @@ impl EndpointStore {
         name: &str,
         data: &serde_json::Value,
     ) -> Result<ReferenceData, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_admin_conn().await?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
@@ -47,7 +47,7 @@ impl EndpointStore {
         &self,
         email: &str,
     ) -> Result<Vec<ReferenceData>, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_admin_conn().await?;
 
         let rows = client
             .query(

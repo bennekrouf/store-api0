@@ -41,7 +41,7 @@ pub async fn replace_user_api_groups(
     let tenant_id = tenant.id;
 
     let mut imported_count = 0;
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
     for group_with_endpoints in &api_groups {
