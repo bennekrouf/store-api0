@@ -223,3 +223,34 @@ pub async fn verify_tenant_access(
 
     Ok(row.is_some())
 }
+
+/// List all tenants a user (email) belongs to.
+pub async fn list_user_tenants(
+    store: &EndpointStore,
+    email: &str,
+) -> Result<Vec<Tenant>, StoreError> {
+    let client = store.get_conn().await?;
+    let rows = client
+        .query(
+            "SELECT t.id, t.name, t.credit_balance, t.created_at
+             FROM tenants t
+             JOIN tenant_users tu ON t.id = tu.tenant_id
+             WHERE tu.email = $1
+             ORDER BY t.created_at ASC",
+            &[&email],
+        )
+        .await
+        .to_store_error()?;
+
+    let mut tenants = Vec::new();
+    for row in rows {
+        tenants.push(Tenant {
+            id: row.get(0),
+            name: row.get(1),
+            credit_balance: row.get(2),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+        });
+    }
+
+    Ok(tenants)
+}

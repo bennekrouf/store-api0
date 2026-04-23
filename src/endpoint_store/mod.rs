@@ -509,4 +509,11 @@ impl EndpointStore {
     ) -> Result<bool, StoreError> {
         tenant_management::verify_tenant_access(self, email, tenant_id).await
     }
+
+    pub async fn list_user_tenants(
+        &self,
+        email: &str,
+    ) -> Result<Vec<Tenant>, StoreError> {
+        tenant_management::list_user_tenants(self, email).await
+    }
 }

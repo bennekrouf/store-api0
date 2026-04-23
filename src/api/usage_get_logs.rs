@@ -7,22 +7,22 @@ use std::sync::Arc;
 /// Handler for getting detailed API usage logs with token information
 pub async fn get_api_usage_logs(
     store: web::Data<Arc<EndpointStore>>,
-    path_params: web::Path<(String, String)>, // (email, key_id)
+    path_params: web::Path<(String, String)>, // (tenant_id, key_id)
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
-    let (email, key_id) = path_params.into_inner();
+    let (tenant_id, key_id) = path_params.into_inner();
 
     // Extract limit from query parameters if provided
     let limit = query.get("limit").and_then(|l| l.parse::<i64>().ok());
 
     app_log!(info,
-        email = %email,
+        tenant_id = %tenant_id,
         key_id = %key_id,
         limit = limit,
         "Received HTTP get API usage logs request"
     );
 
-    match store.get_api_usage_logs(&key_id, &email, limit).await {
+    match store.get_api_usage_logs(&key_id, &tenant_id, limit).await {
         Ok(logs) => {
             app_log!(info,
                 email = %email,
