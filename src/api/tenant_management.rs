@@ -7,8 +7,27 @@ pub async fn verify_tenant_access(
     store: web::Data<Arc<EndpointStore>>,
     path: web::Path<(String, String)>,
 ) -> impl Responder {
-    let (email, tenant_id) = path.into_inner();
+    let (email, mut tenant_id) = path.into_inner();
     
+    // If tenant_id looks like an email, resolve it to the actual tenant ID
+    if tenant_id.contains('@') {
+        use crate::endpoint_store::tenant_management as tm;
+        match tm::get_default_tenant(&store, &tenant_id).await {
+            Ok(t) => {
+                app_log!(info, email = %tenant_id, resolved_tenant_id = %t.id, "Resolved email to tenant ID for access verification");
+                tenant_id = t.id;
+            },
+            Err(e) => {
+                app_log!(error, email = %tenant_id, error = %e, "Failed to resolve tenant for access verification");
+                // If we can't resolve the email to a tenant, then access is denied (or it doesn't exist)
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "has_access": false,
+                }));
+            }
+        }
+    }
+
     match store.verify_tenant_access(&email, &tenant_id).await {
         Ok(has_access) => {
             HttpResponse::Ok().json(serde_json::json!({
