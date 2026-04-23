@@ -91,9 +91,20 @@ pub async fn confirm_payment_handler(
             }
 
             // 2. Credit the user account
+            let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, email).await {
+                Ok(t) => t,
+                Err(e) => {
+                    app_log!(error, error = %e, email = %email, "Confirm payment: tenant lookup failed");
+                    return HttpResponse::InternalServerError().json(serde_json::json!({
+                        "success": false,
+                        "message": "Account resolution failed"
+                    }));
+                }
+            };
+
             let description = format!("Stripe payment – ${}", amount);
             match store
-                .update_credit_balance(email, amount, "stripe_topup", Some(&description))
+                .update_credit_balance(&tenant.id, email, amount, "stripe_topup", Some(&description))
                 .await
             {
                 Ok(new_balance) => {
@@ -141,7 +152,18 @@ pub async fn get_payment_history_handler(
     let email = email.into_inner();
     app_log!(info, email = %email, "Fetching payment history");
 
-    match store.get_payment_history(&email).await {
+    let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
+        Ok(t) => t,
+        Err(e) => {
+            app_log!(error, error = %e, email = %email, "Payment history: tenant lookup failed");
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": "Account resolution failed"
+            }));
+        }
+    };
+
+    match store.get_payment_history(&tenant.id).await {
         Ok(payments) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "payments": payments,
