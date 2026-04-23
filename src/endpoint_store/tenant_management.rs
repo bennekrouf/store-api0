@@ -184,6 +184,7 @@ pub async fn update_tenant_name(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn verify_tenant_access(
     store: &EndpointStore,
     email: &str,
@@ -209,6 +210,7 @@ pub async fn verify_tenant_access_with_conn(
     Ok(row.is_some())
 }
 
+#[allow(dead_code)]
 pub async fn list_user_tenants(
     store: &EndpointStore,
     email: &str,

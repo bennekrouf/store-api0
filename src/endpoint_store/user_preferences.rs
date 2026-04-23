@@ -3,6 +3,7 @@ use crate::endpoint_store::{EndpointStore, StoreError, UserPreferences};
 use crate::infra::db::PgConnection;
 
 /// Get user preferences by email
+#[allow(dead_code)]
 pub async fn get_user_preferences(
     store: &EndpointStore,
     email: &str,
@@ -46,7 +47,7 @@ pub async fn get_user_preferences_with_conn(
     }
 }
 
-/// Update user preferences
+#[allow(dead_code)]
 pub async fn update_user_preferences(
     store: &EndpointStore,
     email: &str,
@@ -131,6 +132,7 @@ pub async fn update_user_preferences_with_conn(
 }
 
 /// Reset user preferences
+#[allow(dead_code)]
 pub async fn reset_user_preferences(
     store: &EndpointStore,
     email: &str,

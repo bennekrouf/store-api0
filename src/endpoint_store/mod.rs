@@ -275,6 +275,7 @@ impl EndpointStore {
         api_key_management::validate_api_key(self, key, expected_tenant_id).await
     }
 
+    #[allow(dead_code)]
     pub async fn record_api_key_usage(&self, key_id: &str) -> Result<(), StoreError> {
         api_key_management::record_api_key_usage(self, key_id).await
     }

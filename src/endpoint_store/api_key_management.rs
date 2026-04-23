@@ -183,6 +183,7 @@ pub async fn revoke_all_api_keys(
 }
 
 /// Record API key usage
+#[allow(dead_code)]
 pub async fn record_api_key_usage(store: &EndpointStore, key_id: &str) -> Result<(), StoreError> {
     let client = store.get_admin_conn().await?;
     let now = Utc::now();
@@ -272,6 +273,7 @@ pub async fn get_api_key_usage(
     }))
 }
 
+#[allow(dead_code)]
 pub async fn update_credit_balance(
     store: &EndpointStore,
     tenant_id: &str,
