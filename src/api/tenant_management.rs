@@ -8,6 +8,7 @@ pub async fn verify_tenant_access(
     path: web::Path<(String, String)>,
 ) -> impl Responder {
     let (email, mut tenant_id) = path.into_inner();
+    app_log!(info, requester_email = %email, target_tenant_id = %tenant_id, "Verifying tenant access");
     
     // If tenant_id looks like an email, resolve it to the actual tenant ID
     if tenant_id.contains('@') {
@@ -30,6 +31,7 @@ pub async fn verify_tenant_access(
 
     match store.verify_tenant_access(&email, &tenant_id).await {
         Ok(has_access) => {
+            app_log!(info, requester_email = %email, tenant_id = %tenant_id, has_access = has_access, "Access verification result");
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "has_access": has_access,
@@ -49,7 +51,7 @@ pub async fn list_user_tenants(
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
+    let email = email.into_inner().to_lowercase();
     
     match store.list_user_tenants(&email).await {
         Ok(tenants) => {

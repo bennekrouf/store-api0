@@ -8,7 +8,7 @@ pub async fn get_user_preferences(
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
+    let email = email.into_inner().to_lowercase();
     app_log!(info, email = %email, "Received HTTP get user preferences request");
 
     match store.get_user_preferences(&email).await {

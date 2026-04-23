@@ -17,7 +17,7 @@ pub async fn get_api_groups(
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
+    let email = email.into_inner().to_lowercase();
     app_log!(info, email = %email, "Received HTTP get API groups request");
 
     // Check if this is a new user by looking for existing API keys

@@ -25,15 +25,17 @@ pub async fn create_payment_intent_handler(
     payment_service: web::Data<Arc<PaymentService>>,
     request: web::Json<CreateIntentRequest>,
 ) -> impl Responder {
+    let email = request.email.to_lowercase();
     app_log!(info,
-        email = %request.email,
+        email = %email,
         amount = request.amount,
         currency = %request.currency,
         "Creating Stripe payment intent"
     );
 
+    let email = request.email.to_lowercase();
     match payment_service
-        .create_payment_intent(request.amount, &request.currency, &request.email)
+        .create_payment_intent(request.amount, &request.currency, &email)
         .await
     {
         Ok(intent) => {
@@ -63,7 +65,7 @@ pub async fn confirm_payment_handler(
     payment_service: web::Data<Arc<PaymentService>>,
     request: web::Json<ConfirmRequest>,
 ) -> impl Responder {
-    let email = &request.email;
+    let email = request.email.to_lowercase();
     let payment_intent_id = &request.payment_intent_id;
     let amount = request.amount; // dollar amount, e.g. 10 for a $10 payment
 
@@ -91,7 +93,7 @@ pub async fn confirm_payment_handler(
             }
 
             // 2. Credit the user account
-            let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, email).await {
+            let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
                 Ok(t) => t,
                 Err(e) => {
                     app_log!(error, error = %e, email = %email, "Confirm payment: tenant lookup failed");
@@ -104,7 +106,7 @@ pub async fn confirm_payment_handler(
 
             let description = format!("Stripe payment – ${}", amount);
             match store
-                .update_credit_balance(&tenant.id, email, amount, "stripe_topup", Some(&description))
+                .update_credit_balance(&tenant.id, &email, amount, "stripe_topup", Some(&description))
                 .await
             {
                 Ok(new_balance) => {

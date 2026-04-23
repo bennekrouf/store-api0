@@ -6,7 +6,7 @@ pub async fn update_credit_balance_handler(
     store: web::Data<Arc<EndpointStore>>,
     request: web::Json<UpdateCreditRequest>,
 ) -> impl Responder {
-    let email = &request.email;
+    let email = request.email.to_lowercase();
     let amount = request.amount;
 
     // Resolve tenant_id: use explicit one if provided, otherwise fallback to default for email.
@@ -14,7 +14,7 @@ pub async fn update_credit_balance_handler(
         tid.clone()
     } else {
         use crate::endpoint_store::tenant_management;
-        match tenant_management::get_default_tenant(&store, email).await {
+        match tenant_management::get_default_tenant(&store, &email).await {
             Ok(t) => t.id,
             Err(e) => {
                 app_log!(error, email = %email, "Failed to resolve default tenant for credit update: {}", e);
@@ -26,7 +26,7 @@ pub async fn update_credit_balance_handler(
         }
     };
 
-    match store.update_credit_balance(&tenant_id, email, amount, &request.action_type, request.description.as_deref()).await {
+    match store.update_credit_balance(&tenant_id, &email, amount, &request.action_type, request.description.as_deref()).await {
         Ok(new_balance) => {
             app_log!(info,
                 email = %email,

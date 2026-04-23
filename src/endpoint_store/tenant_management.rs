@@ -18,13 +18,14 @@ pub async fn get_or_create_personal_tenant_with_conn(
     client: &PgConnection,
     email: &str,
 ) -> Result<Tenant, StoreError> {
+    let email = email.to_lowercase();
     // 1. Check if user has a default tenant
     let default_tenant_reow = client
         .query_opt(
             "SELECT t.id, t.name, t.credit_balance, t.created_at 
              FROM user_preferences up
              JOIN tenants t ON up.default_tenant_id = t.id
-             WHERE up.email = $1",
+             WHERE LOWER(up.email) = LOWER($1)",
             &[&email],
         )
         .await
@@ -49,7 +50,7 @@ pub async fn get_or_create_personal_tenant_with_conn(
     
     // 0. Ensure user exists in user_preferences
     let user_exists_row = client
-        .query_opt("SELECT 1 FROM user_preferences WHERE email = $1", &[&email])
+        .query_opt("SELECT 1 FROM user_preferences WHERE LOWER(email) = LOWER($1)", &[&email])
         .await
         .to_store_error()?;
 
@@ -113,7 +114,8 @@ pub async fn get_default_tenant(
     store: &EndpointStore,
     email: &str,
 ) -> Result<Tenant, StoreError> {
-    get_or_create_personal_tenant(store, email).await
+    let email = email.to_lowercase();
+    get_or_create_personal_tenant(store, &email).await
 }
 
 pub async fn get_tenant_by_mcp_client_id(
@@ -199,9 +201,10 @@ pub async fn verify_tenant_access_with_conn(
     email: &str,
     tenant_id: &str,
 ) -> Result<bool, StoreError> {
+    let email = email.to_lowercase();
     let row = client
         .query_opt(
-            "SELECT 1 FROM tenant_users WHERE tenant_id = $1 AND email = $2",
+            "SELECT 1 FROM tenant_users WHERE tenant_id = $1 AND LOWER(email) = LOWER($2)",
             &[&tenant_id, &email],
         )
         .await
@@ -223,12 +226,13 @@ pub async fn list_user_tenants_with_conn(
     client: &PgConnection,
     email: &str,
 ) -> Result<Vec<Tenant>, StoreError> {
+    let email = email.to_lowercase();
     let rows = client
         .query(
             "SELECT t.id, t.name, t.credit_balance, t.created_at
              FROM tenants t
              JOIN tenant_users tu ON t.id = tu.tenant_id
-             WHERE tu.email = $1
+             WHERE LOWER(tu.email) = LOWER($1)
              ORDER BY t.created_at ASC",
             &[&email],
         )
