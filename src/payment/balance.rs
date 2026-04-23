@@ -6,15 +6,15 @@ use std::sync::Arc;
 // Handler for getting credit balance
 pub async fn get_credit_balance_handler(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    tenant_id: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
-    app_log!(info, email = %email, "Received HTTP get credit balance request");
+    let tenant_id = tenant_id.into_inner();
+    app_log!(info, tenant_id = %tenant_id, "Received HTTP get credit balance request");
 
-    match store.get_credit_balance(&email).await {
+    match store.get_credit_balance(&tenant_id).await {
         Ok(balance) => {
             app_log!(info,
-                email = %email,
+                tenant_id = %tenant_id,
                 balance = balance,
                 "Successfully retrieved credit balance"
             );
@@ -27,7 +27,7 @@ pub async fn get_credit_balance_handler(
         Err(e) => {
             app_log!(error,
                 error = %e,
-                email = %email,
+                tenant_id = %tenant_id,
                 "Failed to retrieve credit balance"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({

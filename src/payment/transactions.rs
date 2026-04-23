@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 pub async fn get_credit_transactions_handler(
     store: web::Data<Arc<EndpointStore>>,
-    email: web::Path<String>,
+    tenant_id: web::Path<String>,
 ) -> impl Responder {
-    let email = email.into_inner();
-    app_log!(info, email = %email, "Received HTTP get credit transactions request");
+    let tenant_id = tenant_id.into_inner();
+    app_log!(info, tenant_id = %tenant_id, "Received HTTP get credit transactions request");
 
-    match store.get_credit_transactions(&email, 50).await {
+    match store.get_credit_transactions(&tenant_id, 50).await {
         Ok(transactions) => {
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
@@ -18,7 +18,7 @@ pub async fn get_credit_transactions_handler(
             }))
         }
         Err(e) => {
-            app_log!(error, error = %e, email = %email, "Failed to retrieve credit transactions");
+            app_log!(error, error = %e, tenant_id = %tenant_id, "Failed to retrieve credit transactions");
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
                 "message": format!("Error retrieving credit transactions: {}", e),

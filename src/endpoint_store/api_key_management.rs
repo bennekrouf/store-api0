@@ -261,16 +261,12 @@ pub async fn get_api_key_usage(
 
 pub async fn update_credit_balance(
     store: &EndpointStore,
-    email: &str,
+    tenant_id: &str,
+    email: &str, // keep email for transaction logging
     amount: i64,
     action_type: &str,
     description: Option<&str>,
 ) -> Result<i64, StoreError> {
-    use crate::endpoint_store::tenant_management;
-
-    let tenant = tenant_management::get_default_tenant(store, email).await?;
-    let tenant_id = tenant.id;
-
     let client = store.get_conn().await?;
 
     client
@@ -302,6 +298,7 @@ pub async fn update_credit_balance(
         .await
     {
         app_log!(error,
+            tenant_id = %tenant_id,
             email = %email,
             action_type = %action_type,
             amount = amount,
@@ -314,13 +311,9 @@ pub async fn update_credit_balance(
 
 pub async fn get_credit_transactions(
     store: &EndpointStore,
-    email: &str,
+    tenant_id: &str,
     limit: i64,
 ) -> Result<Vec<crate::endpoint_store::models::CreditTransaction>, StoreError> {
-    use crate::endpoint_store::tenant_management;
-
-    let tenant = tenant_management::get_default_tenant(store, email).await?;
-    let tenant_id = tenant.id;
     let client = store.get_conn().await?;
 
     let rows = client
@@ -349,18 +342,19 @@ pub async fn get_credit_transactions(
     }).collect())
 }
 
-/// Get credit balance for a user (via their default tenant)
-pub async fn get_credit_balance(store: &EndpointStore, email: &str) -> Result<i64, StoreError> {
-    use crate::endpoint_store::tenant_management;
+/// Get credit balance for a specific tenant
+pub async fn get_credit_balance(store: &EndpointStore, tenant_id: &str) -> Result<i64, StoreError> {
+    let client = store.get_conn().await?;
     
-    // Resolve tenant (this migrates legacy credits if needed)
-    let tenant = tenant_management::get_default_tenant(store, email).await?;
-    
-    // We can rely on the returned tenant object having the balance, 
-    // BUT since we might want the *latest* balance if `get_default_tenant` returned a cached object (it doesn't, but still),
-    // Querying fresh is safer, or just use the returned value since `get_default_tenant` fetches it.
-    // The `get_default_tenant` implementation fetches fresh data.
-    Ok(tenant.credit_balance)
+    let row = client
+        .query_one(
+            "SELECT credit_balance FROM tenants WHERE id = $1",
+            &[&tenant_id],
+        )
+        .await
+        .to_store_error()?;
+        
+    Ok(row.get(0))
 }
 
 /// Generate a new API key for a user (associated with their default tenant)

@@ -371,24 +371,21 @@ impl EndpointStore {
         Ok(logs)
     }
 
-    pub async fn update_credit_balance(&self, email: &str, amount: i64, action_type: &str, description: Option<&str>) -> Result<i64, StoreError> {
-        api_key_management::update_credit_balance(self, email, amount, action_type, description).await
+    pub async fn update_credit_balance(&self, tenant_id: &str, email: &str, amount: i64, action_type: &str, description: Option<&str>) -> Result<i64, StoreError> {
+        api_key_management::update_credit_balance(self, tenant_id, email, amount, action_type, description).await
     }
 
-    pub async fn get_credit_balance(&self, email: &str) -> Result<i64, StoreError> {
-        api_key_management::get_credit_balance(self, email).await
+    pub async fn get_credit_balance(&self, tenant_id: &str) -> Result<i64, StoreError> {
+        api_key_management::get_credit_balance(self, tenant_id).await
     }
 
-    pub async fn get_credit_transactions(&self, email: &str, limit: i64) -> Result<Vec<crate::endpoint_store::models::CreditTransaction>, StoreError> {
-        api_key_management::get_credit_transactions(self, email, limit).await
+    pub async fn get_credit_transactions(&self, tenant_id: &str, limit: i64) -> Result<Vec<crate::endpoint_store::models::CreditTransaction>, StoreError> {
+        api_key_management::get_credit_transactions(self, tenant_id, limit).await
     }
 
-    /// Returns Stripe top-up payments for a user (action_type = 'stripe_topup'),
+    /// Returns Stripe top-up payments for a tenant (action_type = 'stripe_topup'),
     /// shaped for the PaymentHistory frontend interface.
-    pub async fn get_payment_history(&self, email: &str) -> Result<Vec<serde_json::Value>, StoreError> {
-        use crate::endpoint_store::tenant_management;
-        let tenant = tenant_management::get_default_tenant(self, email).await?;
-        let tenant_id = tenant.id;
+    pub async fn get_payment_history(&self, tenant_id: &str) -> Result<Vec<serde_json::Value>, StoreError> {
         let client = self.get_conn().await?;
 
         let rows = client

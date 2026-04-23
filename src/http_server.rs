@@ -142,7 +142,7 @@ pub async fn start_http_server(
                             )
                             // Credit balance endpoints
                             .route(
-                                "/user/credits/{email}",
+                                "/user/credits/{tenant_id}",
                                 web::get().to(get_credit_balance_handler),
                             )
                             .route(
@@ -150,7 +150,7 @@ pub async fn start_http_server(
                                 web::post().to(update_credit_balance_handler),
                             )
                             .route(
-                                "/user/credit-transactions/{email}",
+                                "/user/credit-transactions/{tenant_id}",
                                 web::get().to(get_credit_transactions_handler),
                             )
                             // Key validation and usage
@@ -169,7 +169,7 @@ pub async fn start_http_server(
                             // Payment (Stripe) endpoints
                             .route("/payments/intent", web::post().to(create_payment_intent_handler))
                             .route("/payments/confirm", web::post().to(confirm_payment_handler))
-                            .route("/payments/history/{email}", web::get().to(get_payment_history_handler))
+                            .route("/payments/history/{tenant_id}", web::get().to(get_payment_history_handler))
                             // Admin endpoints (Firebase JWT, admin email only)
                             .route("/admin/credits", web::post().to(admin_credit_handler))
                             // MCP tool registry
