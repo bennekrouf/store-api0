@@ -176,7 +176,7 @@ pub async fn start_http_server(
                             // Tenant access verification
                             .route(
                                 "/tenant/verify-access/{email}/{tenant_id}",
-                                web::get().to(verify_tenant_access,
+                                web::get().to(verify_tenant_access),
                             )
                             .route(
                                 "/user/tenants/{email}",
