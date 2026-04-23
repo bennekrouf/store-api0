@@ -33,7 +33,7 @@ pub struct EndpointStore {
 impl EndpointStore {
     /// Health check for database connectivity
     pub async fn health_check(&self) -> Result<bool, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_admin_conn().await?;
 
         // Simple query to test database connectivity
         let _row = client
@@ -53,7 +53,7 @@ impl EndpointStore {
     }
 
     pub async fn get_group_base_url(&self, group_id: &str) -> Result<String, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_admin_conn().await?;
 
         let row = client
             .query_one("SELECT base FROM api_groups WHERE id = $1", &[&group_id])
@@ -71,7 +71,7 @@ impl EndpointStore {
 
         let store = Self { pool };
 
-        let client = store.get_conn().await?;
+        let client = store.get_admin_conn().await?;
 
         if let Err(e) = client
             .batch_execute(include_str!("../../sql/schema.sql"))
@@ -352,7 +352,7 @@ impl EndpointStore {
         tenant_id: &str,
         limit: Option<i64>,
     ) -> Result<Vec<ApiUsageLog>, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_conn(Some(tenant_id)).await?;
         let limit = limit.unwrap_or(50).min(100);
 
         let rows = client
@@ -421,7 +421,7 @@ impl EndpointStore {
     /// Returns Stripe top-up payments for a tenant (action_type = 'stripe_topup'),
     /// shaped for the PaymentHistory frontend interface.
     pub async fn get_payment_history(&self, tenant_id: &str) -> Result<Vec<serde_json::Value>, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_conn(Some(tenant_id)).await?;
 
         let rows = client
             .query(
