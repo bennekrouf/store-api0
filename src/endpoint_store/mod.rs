@@ -95,8 +95,41 @@ impl EndpointStore {
         Ok(store)
     }
 
-    pub async fn get_conn(&self) -> Result<PgConnection, StoreError> {
-        self.pool.get().await.to_store_error()
+    pub async fn get_conn(&self, tenant_id: Option<&str>) -> Result<PgConnection, StoreError> {
+        let mut client = self.pool.get().await.to_store_error()?;
+        
+        if let Some(tid) = tenant_id {
+            // Set the tenant ID for RLS
+            client.execute("SELECT set_config('app.current_tenant_id', $1, true)", &[&tid])
+                .await
+                .to_store_error()?;
+            // Ensure bypass is off
+            client.execute("SELECT set_config('app.bypass_rls', 'false', true)", &[])
+                .await
+                .to_store_error()?;
+        } else {
+            // No tenant ID provided, clear it and enable bypass if needed
+            // Actually, for safety, clear tenant ID
+            client.execute("SELECT set_config('app.current_tenant_id', '', true)", &[])
+                .await
+                .to_store_error()?;
+            // But we might need bypass for administrative tasks (like listing tenants)
+            // Callers should use get_admin_conn() for that.
+        }
+        
+        Ok(client)
+    }
+
+    /// Get a connection with RLS bypass (for admin/system tasks)
+    pub async fn get_admin_conn(&self) -> Result<PgConnection, StoreError> {
+        let mut client = self.pool.get().await.to_store_error()?;
+        client.execute("SELECT set_config('app.current_tenant_id', '', true)", &[])
+            .await
+            .to_store_error()?;
+        client.execute("SELECT set_config('app.bypass_rls', 'true', true)", &[])
+            .await
+            .to_store_error()?;
+        Ok(client)
     }
 
     pub async fn get_user_preferences(&self, email: &str) -> Result<UserPreferences, StoreError> {
