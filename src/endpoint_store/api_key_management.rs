@@ -367,9 +367,14 @@ pub async fn generate_api_key_with_provider(
 ) -> Result<(String, String, String), StoreError> {
     use crate::endpoint_store::tenant_management;
 
-    // Ensure tenant exists (this handles user_preferences creation too)
-    let tenant = tenant_management::get_default_tenant(store, email).await?;
-    let tenant_id = tenant.id;
+    // Use the provider_tenant_id as the primary tenant if provided (Consumer/OAuth flow).
+    // Otherwise, use the user's default personal tenant.
+    let tenant_id = if let Some(ptid) = provider_tenant_id {
+        ptid.to_string()
+    } else {
+        let tenant = tenant_management::get_default_tenant(store, email).await?;
+        tenant.id
+    };
 
     let mut client = store.get_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
