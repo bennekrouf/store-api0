@@ -148,6 +148,8 @@ pub struct KeyPreference {
     pub active_key_count: usize,
     pub keys: Vec<ApiKeyInfo>,
     pub balance: i64,
+    pub tenant_id: String,
+    pub tenant_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

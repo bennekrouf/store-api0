@@ -91,6 +91,8 @@ pub async fn get_api_keys_status(
             active_key_count: 0,
             keys: vec![],
             balance,
+            tenant_id: tenant_id.to_string(),
+            tenant_name: _tenant_name,
         });
     }
 
@@ -125,6 +127,8 @@ pub async fn get_api_keys_status(
         active_key_count: key_count as usize,
         keys,
         balance,
+        tenant_id: tenant_id.to_string(),
+        tenant_name: _tenant_name,
     })
 }
 
