@@ -222,8 +222,9 @@ impl EndpointStore {
     pub async fn validate_api_key(
         &self,
         key: &str,
+        expected_tenant_id: Option<&str>,
     ) -> Result<Option<(String, String, String, Option<String>)>, StoreError> {
-        api_key_management::validate_api_key(self, key).await
+        api_key_management::validate_api_key(self, key, expected_tenant_id).await
     }
 
     pub async fn record_api_key_usage(&self, key_id: &str) -> Result<(), StoreError> {

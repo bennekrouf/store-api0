@@ -44,9 +44,9 @@ pub async fn validate_api_key(
         });
     }
 
-    app_log!(info, api_key = %api_key, "Validating API key");
+    app_log!(info, api_key = %api_key, expected_tenant_id = ?req.expected_tenant_id, "Validating API key");
 
-    match store.validate_api_key(&api_key).await {
+    match store.validate_api_key(&api_key, req.expected_tenant_id.as_deref()).await {
         Ok(Some((email, key_id, tenant_id, provider_tenant_id))) => {
             app_log!(info,
                 email = %email,
