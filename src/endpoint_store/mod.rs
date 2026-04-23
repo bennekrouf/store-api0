@@ -91,6 +91,16 @@ impl EndpointStore {
             app_log!(info, "Schema executed successfully");
         }
 
+        // Apply RLS policies
+        if let Err(e) = client
+            .batch_execute(include_str!("../../sql/rls.sql"))
+            .await
+        {
+            app_log!(warn, "RLS policy execution notice: {}", e);
+        } else {
+            app_log!(info, "RLS policies applied successfully");
+        }
+
         store.initialize_system_domains().await?;
         Ok(store)
     }
@@ -133,7 +143,8 @@ impl EndpointStore {
     }
 
     pub async fn get_user_preferences(&self, email: &str) -> Result<UserPreferences, StoreError> {
-        user_preferences::get_user_preferences(self, email).await
+        let client = self.get_admin_conn().await?;
+        user_preferences::get_user_preferences_with_conn(&client, email).await
     }
 
     pub async fn update_user_preferences(
@@ -141,12 +152,14 @@ impl EndpointStore {
         email: &str,
         action: &str,
         endpoint_id: &str,
-    ) -> Result<bool, StoreError> {
-        user_preferences::update_user_preferences(self, email, action, endpoint_id).await
+    ) -> Result<(), StoreError> {
+        let client = self.get_admin_conn().await?;
+        user_preferences::update_user_preferences_with_conn(&client, email, action, endpoint_id).await
     }
 
-    pub async fn reset_user_preferences(&self, email: &str) -> Result<bool, StoreError> {
-        user_preferences::reset_user_preferences(self, email).await
+    pub async fn reset_user_preferences(&self, email: &str) -> Result<(), StoreError> {
+        let client = self.get_admin_conn().await?;
+        user_preferences::reset_user_preferences_with_conn(&client, email).await
     }
 
     pub async fn get_api_groups_with_preferences(
@@ -271,7 +284,7 @@ impl EndpointStore {
     }
 
     pub async fn log_api_usage(&self, request: &LogApiUsageRequest) -> Result<String, StoreError> {
-        let client = self.get_conn().await?;
+        let client = self.get_admin_conn().await?;
         let log_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
 
@@ -407,7 +420,8 @@ impl EndpointStore {
     }
 
     pub async fn update_credit_balance(&self, tenant_id: &str, email: &str, amount: i64, action_type: &str, description: Option<&str>) -> Result<i64, StoreError> {
-        api_key_management::update_credit_balance(self, tenant_id, email, amount, action_type, description).await
+        let client = self.get_conn(Some(tenant_id)).await?;
+        api_key_management::update_credit_balance_with_conn(&client, tenant_id, email, amount, action_type, description).await
     }
 
     pub async fn get_credit_balance(&self, tenant_id: &str) -> Result<i64, StoreError> {
@@ -540,13 +554,15 @@ impl EndpointStore {
         email: &str,
         tenant_id: &str,
     ) -> Result<bool, StoreError> {
-        tenant_management::verify_tenant_access(self, email, tenant_id).await
+        let client = self.get_admin_conn().await?;
+        tenant_management::verify_tenant_access_with_conn(&client, email, tenant_id).await
     }
 
     pub async fn list_user_tenants(
         &self,
         email: &str,
     ) -> Result<Vec<Tenant>, StoreError> {
-        tenant_management::list_user_tenants(self, email).await
+        let client = self.get_admin_conn().await?;
+        tenant_management::list_user_tenants_with_conn(&client, email).await
     }
 }

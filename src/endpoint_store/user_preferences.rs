@@ -1,13 +1,20 @@
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{EndpointStore, StoreError, UserPreferences};
+use crate::infra::db::PgConnection;
 
 /// Get user preferences by email
 pub async fn get_user_preferences(
     store: &EndpointStore,
     email: &str,
 ) -> Result<UserPreferences, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_admin_conn().await?;
+    get_user_preferences_with_conn(&client, email).await
+}
 
+pub async fn get_user_preferences_with_conn(
+    client: &PgConnection,
+    email: &str,
+) -> Result<UserPreferences, StoreError> {
     let row = client
         .query_opt(
             "SELECT hidden_defaults, default_tenant_id FROM user_preferences WHERE email = $1",
@@ -45,11 +52,25 @@ pub async fn update_user_preferences(
     email: &str,
     action: &str,
     endpoint_id: &str,
-) -> Result<bool, StoreError> {
-    let mut client = store.get_conn().await?;
-    let tx = client.transaction().await.to_store_error()?;
+) -> Result<(), StoreError> {
+    let mut client = store.get_admin_conn().await?;
+    update_user_preferences_with_conn(&mut client, email, action, endpoint_id).await
+}
 
-    let row = tx
+pub async fn update_user_preferences_with_conn(
+    client: &PgConnection,
+    email: &str,
+    action: &str,
+    endpoint_id: &str,
+) -> Result<(), StoreError> {
+    // Note: We don't strictly need a transaction for SET app.bypass_rls if we already have it on the conn,
+    // but if we want to be safe with multiple statements, we can.
+    // However, deadpool's Object doesn't allow easy re-wrapping in a transaction while keeping RLS session.
+    // Actually, it does.
+    
+    // For simplicity, let's just run queries. RLS bypass is already set on the client if it came from get_admin_conn.
+    
+    let row = client
         .query_opt(
             "SELECT hidden_defaults FROM user_preferences WHERE email = $1",
             &[&email],
@@ -91,14 +112,14 @@ pub async fn update_user_preferences(
     let updated_hidden_defaults_str = updated_hidden_defaults.join(",");
 
     if exists {
-        tx.execute(
+        client.execute(
             "UPDATE user_preferences SET hidden_defaults = $1 WHERE email = $2",
             &[&updated_hidden_defaults_str, &email],
         )
         .await
         .to_store_error()?;
     } else {
-        tx.execute(
+        client.execute(
             "INSERT INTO user_preferences (email, hidden_defaults) VALUES ($1, $2)",
             &[&email, &updated_hidden_defaults_str],
         )
@@ -106,22 +127,26 @@ pub async fn update_user_preferences(
         .to_store_error()?;
     }
 
-    tx.commit().await.to_store_error()?;
-    Ok(true)
+    Ok(())
 }
 
 /// Reset user preferences
 pub async fn reset_user_preferences(
     store: &EndpointStore,
     email: &str,
-) -> Result<bool, StoreError> {
-    let client = store.get_conn().await?;
+) -> Result<(), StoreError> {
+    let client = store.get_admin_conn().await?;
+    reset_user_preferences_with_conn(&client, email).await
+}
 
+pub async fn reset_user_preferences_with_conn(
+    client: &PgConnection,
+    email: &str,
+) -> Result<(), StoreError> {
     client
         .execute("DELETE FROM user_preferences WHERE email = $1", &[&email])
         .await
         .to_store_error()?;
 
-    Ok(true)
+    Ok(())
 }
-

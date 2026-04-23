@@ -14,7 +14,7 @@ pub async fn get_api_keys_status(
     match store.get_api_keys_status(&tenant_id).await {
         Ok(key_preference) => {
             app_log!(info,
-                email = %email,
+                tenant_id = %tenant_id,
                 has_keys = key_preference.has_keys,
                 key_count = key_preference.active_key_count,
                 "Successfully retrieved API keys status"
@@ -27,7 +27,7 @@ pub async fn get_api_keys_status(
         Err(e) => {
             app_log!(error,
                 error = %e,
-                email = %email,
+                tenant_id = %tenant_id,
                 "Failed to retrieve API keys status"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({

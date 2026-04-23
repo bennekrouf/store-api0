@@ -588,7 +588,22 @@ impl EndpointService for EndpointServiceImpl {
         // Add credits to user balance (1 cent = 100 credits)
         let credits_to_add = amount * 100;
 
-        match self.store.update_credit_balance(&email, credits_to_add, "topup", None).await {
+        // Resolve tenant_id for the user
+        use crate::endpoint_store::tenant_management;
+        let tenant_id = match tenant_management::get_default_tenant(&self.store, &email).await {
+            Ok(t) => t.id,
+            Err(e) => {
+                app_log!(error, error = %e, email = %email, "Failed to resolve tenant for credit update");
+                return Ok(Response::new(ConfirmPaymentResponse {
+                    success: false,
+                    payment_verified: true,
+                    new_credit_balance: 0,
+                    message: format!("Payment verified but failed to resolve tenant: {}", e),
+                }));
+            }
+        };
+
+        match self.store.update_credit_balance(&tenant_id, &email, credits_to_add, "topup", None).await {
             Ok(new_balance) => {
                 app_log!(info, email = %email, amount = amount, credits = credits_to_add, new_balance = new_balance, "Successfully added credits");
                 Ok(Response::new(ConfirmPaymentResponse {

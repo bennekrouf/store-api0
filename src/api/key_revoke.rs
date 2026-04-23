@@ -16,7 +16,7 @@ pub async fn revoke_api_key_handler(
         Ok(revoked) => {
             if revoked {
                 app_log!(info,
-                    email = %email,
+                    tenant_id = %tenant_id,
                     "Successfully revoked API key"
                 );
                 HttpResponse::Ok().json(serde_json::json!({
@@ -25,7 +25,7 @@ pub async fn revoke_api_key_handler(
                 }))
             } else {
                 app_log!(warn,
-                    email = %email,
+                    tenant_id = %tenant_id,
                     "No API key found to revoke"
                 );
                 HttpResponse::Ok().json(serde_json::json!({
@@ -37,7 +37,7 @@ pub async fn revoke_api_key_handler(
         Err(e) => {
             app_log!(error,
                 error = %e,
-                email = %email,
+                tenant_id = %tenant_id,
                 "Failed to revoke API key"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({

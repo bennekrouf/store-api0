@@ -2,6 +2,7 @@ use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::models::{ApiKeyInfo, KeyPreference};
 use crate::endpoint_store::{EndpointStore, StoreError};
+use crate::infra::db::PgConnection;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use rand::{rng, Rng};
@@ -55,7 +56,7 @@ pub async fn get_api_keys_status(
 ) -> Result<KeyPreference, StoreError> {
     app_log!(debug, tenant_id = %tenant_id, "Checking API keys status");
 
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     // 1. Get balance and name from the tenant
     let tenant_row = client
@@ -138,7 +139,7 @@ pub async fn revoke_api_key(
     tenant_id: &str,
     key_id: &str,
 ) -> Result<bool, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     let key_exists_row = client
         .query_opt(
@@ -168,7 +169,7 @@ pub async fn revoke_all_api_keys(
     store: &EndpointStore,
     tenant_id: &str,
 ) -> Result<u64, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     let count = client
         .execute(
@@ -247,7 +248,7 @@ pub async fn get_api_key_usage(
     key_id: &str,
     tenant_id: &str,
 ) -> Result<Option<ApiKeyInfo>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     let row = client
         .query_opt(
@@ -274,13 +275,23 @@ pub async fn get_api_key_usage(
 pub async fn update_credit_balance(
     store: &EndpointStore,
     tenant_id: &str,
-    email: &str, // keep email for transaction logging
+    email: &str,
     amount: i64,
     action_type: &str,
     description: Option<&str>,
 ) -> Result<i64, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
+    update_credit_balance_with_conn(&client, tenant_id, email, amount, action_type, description).await
+}
 
+pub async fn update_credit_balance_with_conn(
+    client: &PgConnection,
+    tenant_id: &str,
+    email: &str,
+    amount: i64,
+    action_type: &str,
+    description: Option<&str>,
+) -> Result<i64, StoreError> {
     client
         .execute(
             "UPDATE tenants SET credit_balance = credit_balance + $1 WHERE id = $2",
@@ -326,7 +337,7 @@ pub async fn get_credit_transactions(
     tenant_id: &str,
     limit: i64,
 ) -> Result<Vec<crate::endpoint_store::models::CreditTransaction>, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
 
     let rows = client
         .query(
@@ -356,7 +367,7 @@ pub async fn get_credit_transactions(
 
 /// Get credit balance for a specific tenant
 pub async fn get_credit_balance(store: &EndpointStore, tenant_id: &str) -> Result<i64, StoreError> {
-    let client = store.get_conn().await?;
+    let client = store.get_conn(Some(tenant_id)).await?;
     
     let row = client
         .query_one(
@@ -397,7 +408,7 @@ pub async fn generate_api_key_with_provider(
         tenant.id
     };
 
-    let mut client = store.get_conn().await?;
+    let mut client = store.get_conn(Some(&tenant_id)).await?;
     let tx = client.transaction().await.to_store_error()?;
 
     let new_key = generate_secure_key();

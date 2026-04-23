@@ -13,7 +13,7 @@ pub async fn revoke_all_api_keys_handler(
     match store.revoke_all_api_keys(&tenant_id).await {
         Ok(count) => {
             app_log!(info,
-                email = %email,
+                tenant_id = %tenant_id,
                 count = count,
                 "Successfully revoked all API keys"
             );
@@ -26,7 +26,7 @@ pub async fn revoke_all_api_keys_handler(
         Err(e) => {
             app_log!(error,
                 error = %e,
-                email = %email,
+                tenant_id = %tenant_id,
                 "Failed to revoke all API keys"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({

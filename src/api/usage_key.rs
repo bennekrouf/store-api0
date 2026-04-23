@@ -14,7 +14,7 @@ pub async fn get_api_key_usage(
     match store.get_api_key_usage(&key_id, &tenant_id).await {
         Ok(usage) => {
             app_log!(info,
-                email = %email,
+                tenant_id = %tenant_id,
                 "Successfully retrieved API key usage"
             );
             HttpResponse::Ok().json(serde_json::json!({
@@ -25,7 +25,7 @@ pub async fn get_api_key_usage(
         Err(e) => {
             app_log!(error,
                 error = %e,
-                email = %email,
+                tenant_id = %tenant_id,
                 "Failed to retrieve API key usage"
             );
             HttpResponse::InternalServerError().json(serde_json::json!({

@@ -25,7 +25,7 @@ pub async fn get_api_usage_logs(
     match store.get_api_usage_logs(&key_id, &tenant_id, limit).await {
         Ok(logs) => {
             app_log!(info,
-                email = %email,
+                tenant_id = %tenant_id,
                 key_id = %key_id,
                 log_count = logs.len(),
                 "Successfully retrieved API usage logs with token data"
@@ -39,7 +39,7 @@ pub async fn get_api_usage_logs(
         Err(e) => {
             app_log!(error,
                 error = %e,
-                email = %email,
+                tenant_id = %tenant_id,
                 key_id = %key_id,
                 "Failed to retrieve API usage logs"
             );
