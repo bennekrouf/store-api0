@@ -106,7 +106,7 @@ impl EndpointStore {
     }
 
     pub async fn get_conn(&self, tenant_id: Option<&str>) -> Result<PgConnection, StoreError> {
-        let mut client = self.pool.get().await.to_store_error()?;
+        let client = self.pool.get().await.to_store_error()?;
         
         if let Some(tid) = tenant_id {
             // Set the tenant ID for RLS
@@ -132,7 +132,7 @@ impl EndpointStore {
 
     /// Get a connection with RLS bypass (for admin/system tasks)
     pub async fn get_admin_conn(&self) -> Result<PgConnection, StoreError> {
-        let mut client = self.pool.get().await.to_store_error()?;
+        let client = self.pool.get().await.to_store_error()?;
         client.execute("SELECT set_config('app.current_tenant_id', '', true)", &[])
             .await
             .to_store_error()?;

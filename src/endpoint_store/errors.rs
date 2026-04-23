@@ -4,10 +4,8 @@ pub enum StoreError {
     Database(String),
     #[error("Connection pool error: {0}")]
     Pool(String),
-    // #[error("Database connection timeout: {0}")]
-    // ConnectionTimeout(String),
-    // #[error("Database unavailable: {0}")]
-    // DatabaseUnavailable(String),
+    #[error("Resource not found: {0}")]
+    NotFound(String),
 }
 
 impl From<tokio_postgres::Error> for StoreError {
