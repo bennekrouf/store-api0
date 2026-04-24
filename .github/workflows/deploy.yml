@@ -98,5 +98,7 @@ jobs:
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "set -e
              sudo mv /opt/api0/bin/store.new /opt/api0/bin/store
-             sudo pm2 restart api0-store
-             sudo pm2 list"
+             pm2 restart api0-store \
+               || pm2 start /opt/api0/bin/store --name api0-store
+             pm2 save --force
+             pm2 list"
