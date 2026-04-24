@@ -9,17 +9,28 @@ use rand::{rng, RngCore};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// Generate a secure API key with the prefix "sk_live_".
+/// Algorithm version embedded in every generated key.
 ///
-/// Uses 256 bits of OS entropy (via the thread-local CSPRNG).
-/// Result: "sk_live_" + 43 base64url chars = 51 chars total.
+/// Increment to v2, v3 … whenever the key format or generation algorithm
+/// changes. Validators can inspect `parts[1]` and dispatch to the matching
+/// verification path, keeping old keys valid during a migration window.
+const KEY_VERSION: &str = "v1";
+
+/// Generate a secure API key.
+///
+/// Format:  `sk_v1_<43 base64url chars>`  (50 chars total)
+/// Entropy: 32 bytes = 256 bits from the OS CSPRNG.
+///
+/// The version segment lets us change the algorithm later without ambiguity —
+/// a future `sk_v2_…` key will be recognisably distinct from a `sk_v1_…` key,
+/// so validators can reject unsupported versions or apply per-version logic.
 pub fn generate_secure_key() -> String {
     let mut bytes = [0u8; 32]; // 256 bits
     rng().fill_bytes(&mut bytes);
-    format!("sk_live_{}", URL_SAFE_NO_PAD.encode(bytes))
+    format!("sk_{KEY_VERSION}_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// Hash the API key for secure storage
+/// Hash the API key for secure storage.
 pub fn hash_api_key(key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
@@ -27,14 +38,30 @@ pub fn hash_api_key(key: &str) -> String {
     URL_SAFE_NO_PAD.encode(result)
 }
 
-/// Extract the key prefix for display purposes
+/// Extract a short, non-sensitive display prefix from any `sk_<ver>_<payload>` key.
+///
+/// Returns the first 6 chars of the payload as `sk_XXXXXX`.  This is safe to
+/// store and show in the UI; it lets users identify a key without exposing
+/// enough entropy to assist brute-force attacks.
+///
+/// Behaviour on malformed input:
+/// - Uses `splitn(3, '_')` so it never over-splits a payload that contains `_`.
+/// - Bounds the slice with `.min(6)` — no panic, no matter how short the key.
+/// - Returns the stub `"sk_???"` for inputs that have no recognisable payload.
 pub fn extract_key_prefix(key: &str) -> String {
-    let parts: Vec<&str> = key.split('_').collect();
-    if parts.len() >= 3 {
-        format!("sk_{}", &parts[2][..6])
-    } else {
-        format!("sk_{}", &key[7..13])
+    // Expected segments: ["sk", "<version>", "<payload>"]
+    let mut iter = key.splitn(3, '_');
+    let _scheme  = iter.next().unwrap_or("");   // "sk"
+    let _version = iter.next().unwrap_or("");   // "v1" / "live" (legacy) / …
+    let payload  = iter.next().unwrap_or("");   // random payload
+
+    if payload.is_empty() {
+        // Malformed key: return a fixed stub rather than panicking.
+        return "sk_???".to_string();
     }
+
+    let end = payload.len().min(6);
+    format!("sk_{}", &payload[..end])
 }
 
 /// Get API keys status for a tenant
