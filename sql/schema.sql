@@ -322,3 +322,19 @@ BEGIN
         ALTER TABLE tenants ADD COLUMN google_client_id VARCHAR;
     END IF;
 END $$;
+
+-- ── Security hardening ────────────────────────────────────────────────────────
+
+-- Key expiration: NULL = no expiry (admin/tenant keys).
+-- Consumer keys generated via the self-service endpoint default to 1 year.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'api_keys' AND column_name = 'expires_at'
+    ) THEN
+        ALTER TABLE api_keys ADD COLUMN expires_at TIMESTAMP WITH TIME ZONE;
+        CREATE INDEX idx_api_keys_expires_at ON api_keys(expires_at)
+            WHERE expires_at IS NOT NULL;
+    END IF;
+END $$;

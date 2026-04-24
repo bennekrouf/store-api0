@@ -5,30 +5,18 @@ use crate::endpoint_store::{EndpointStore, StoreError};
 use crate::infra::db::PgConnection;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
-use rand::{rng, Rng};
+use rand::{rng, RngCore};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-/// Generate a secure API key with the prefix "sk_live_"
+
+/// Generate a secure API key with the prefix "sk_live_".
+///
+/// Uses 256 bits of OS entropy (via the thread-local CSPRNG).
+/// Result: "sk_live_" + 43 base64url chars = 51 chars total.
 pub fn generate_secure_key() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
-
-    let timestamp = duration.as_nanos().to_string();
-    let mut rng = rng();
-    let random_number: u64 = rng.random();
-    let combined = format!("{}{}", timestamp, random_number);
-
-    let mut hasher = Sha256::new();
-    hasher.update(combined.as_bytes());
-    let hash = hasher.finalize();
-
-    let base64_hash = URL_SAFE_NO_PAD.encode(hash);
-    let key = &base64_hash[0..32];
-
-    format!("sk_live_{}", key)
+    let mut bytes = [0u8; 32]; // 256 bits
+    rng().fill_bytes(&mut bytes);
+    format!("sk_live_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 /// Hash the API key for secure storage
@@ -218,7 +206,10 @@ pub async fn validate_api_key(
             .query_opt(
                 "SELECT id, email, tenant_id, provider_tenant_id
                  FROM api_keys
-                 WHERE key_hash = $1 AND tenant_id = $2 AND is_active = true",
+                 WHERE key_hash = $1
+                   AND tenant_id = $2
+                   AND is_active = true
+                   AND (expires_at IS NULL OR expires_at > NOW())",
                 &[&key_hash, &expected_id],
             )
             .await
@@ -228,7 +219,9 @@ pub async fn validate_api_key(
             .query_opt(
                 "SELECT id, email, tenant_id, provider_tenant_id
                  FROM api_keys
-                 WHERE key_hash = $1 AND is_active = true",
+                 WHERE key_hash = $1
+                   AND is_active = true
+                   AND (expires_at IS NULL OR expires_at > NOW())",
                 &[&key_hash],
             )
             .await
@@ -419,11 +412,19 @@ pub async fn generate_api_key_with_provider(
     let now = Utc::now();
     let key_id = Uuid::new_v4().to_string();
 
+    // Consumer keys (provider_tenant_id set) expire after 1 year by default;
+    // admin/tenant keys never expire (NULL) unless an explicit expires_at is desired.
+    let expires_at: Option<chrono::DateTime<chrono::Utc>> = if provider_tenant_id.is_some() {
+        Some(now + chrono::Duration::days(365))
+    } else {
+        None
+    };
+
     tx.execute(
         "INSERT INTO api_keys (
             id, email, key_hash, key_prefix, key_name,
-            generated_at, usage_count, is_active, tenant_id, provider_tenant_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7, $8)",
+            generated_at, usage_count, is_active, tenant_id, provider_tenant_id, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, 0, true, $7, $8, $9)",
         &[
             &key_id as &(dyn tokio_postgres::types::ToSql + Sync),
             &email as &(dyn tokio_postgres::types::ToSql + Sync),
@@ -433,6 +434,7 @@ pub async fn generate_api_key_with_provider(
             &now as &(dyn tokio_postgres::types::ToSql + Sync),
             &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
             &provider_tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+            &expires_at as &(dyn tokio_postgres::types::ToSql + Sync),
         ],
     )
     .await
