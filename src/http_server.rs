@@ -4,6 +4,7 @@ use crate::mcp::downstream_auth::{
     get_downstream_auth_handler, get_downstream_auth_by_id_handler, save_downstream_auth_handler,
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
+use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
 use crate::payment::admin::admin_credit_handler;
 use crate::api::key_consumer::generate_consumer_key_handler;
 use crate::api::providers::list_providers_handler;
@@ -173,6 +174,11 @@ pub async fn start_http_server(
                             .route("/payments/history/{tenant_id}", web::get().to(get_payment_history_handler))
                             // Admin endpoints (Firebase JWT, admin email only)
                             .route("/admin/credits", web::post().to(admin_credit_handler))
+                            // Admin model config (X-Internal-Secret, gateway-facing)
+                            .route("/admin/config/models", web::get().to(get_model_config))
+                            .route("/admin/config/models", web::put().to(update_model_config))
+                            // Public AI config (no auth — internal network read for ai-uploader)
+                            .route("/system/ai-config", web::get().to(get_ai_config_public))
                             // Tenant access verification
                             .route(
                                 "/tenant/verify-access/{email}/{tenant_id}",

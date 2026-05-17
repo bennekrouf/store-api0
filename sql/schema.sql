@@ -323,6 +323,20 @@ BEGIN
     END IF;
 END $$;
 
+-- ── System-wide admin configuration ─────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS system_config (
+    key        VARCHAR     PRIMARY KEY,
+    value      TEXT        NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Default AI uploader config (idempotent)
+INSERT INTO system_config (key, value) VALUES
+    ('ai_uploader.provider', 'cohere'),
+    ('ai_uploader.model',    'command-r7b-12-2024')
+ON CONFLICT (key) DO NOTHING;
+
 -- ── Security hardening ────────────────────────────────────────────────────────
 
 -- Key expiration: NULL = no expiry (admin/tenant keys).

@@ -1,4 +1,5 @@
 // src/main.rs
+mod admin;
 mod api;
 mod infra;
 mod mcp;
