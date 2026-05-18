@@ -5,7 +5,7 @@ use crate::mcp::downstream_auth::{
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
-use crate::email::{get_smtp_config_handler, send_email_handler, update_smtp_config_handler};
+use crate::email::{get_smtp_config_handler, send_email_handler, update_smtp_config_handler, broadcast_whats_new_handler};
 use crate::payment::admin::admin_credit_handler;
 use crate::api::key_consumer::generate_consumer_key_handler;
 use crate::api::providers::list_providers_handler;
@@ -178,10 +178,11 @@ pub async fn start_http_server(
                             // Admin model config (X-Internal-Secret, gateway-facing)
                             .route("/admin/config/models", web::get().to(get_model_config))
                             .route("/admin/config/models", web::put().to(update_model_config))
-                            // Email: SMTP config admin + internal send endpoint
+                            // Email: SMTP config admin + internal send endpoint + broadcast
                             .route("/admin/smtp-config", web::get().to(get_smtp_config_handler))
                             .route("/admin/smtp-config", web::put().to(update_smtp_config_handler))
                             .route("/internal/email/send", web::post().to(send_email_handler))
+                            .route("/admin/broadcast/whats-new", web::post().to(broadcast_whats_new_handler))
                             // Public AI config (no auth — internal network read for ai-uploader)
                             .route("/system/ai-config", web::get().to(get_ai_config_public))
                             // Tenant access verification

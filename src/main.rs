@@ -14,6 +14,7 @@ mod grpc_server;
 
 use infra::config::Config;
 use infra::formatter::YamlFormatter;
+use chrono;
 use graflog::app_log;
 use graflog::init_logging;
 
@@ -222,6 +223,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Wrap the store in an Arc for sharing between servers
     let store_arc = Arc::new(store);
 
+    // ── Email engagement schedulers ───────────────────────────────────────────
+    {
+        let sched_store = Arc::clone(&store_arc);
+        tokio::spawn(async move {
+            // Initial delay so DB migrations settle.
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+            loop {
+                interval.tick().await;
+                run_engagement_schedulers(&sched_store).await;
+            }
+        });
+    }
+
     // Get HTTP configuration
     let http_host = config.http_host().to_string();
     let http_port = config.http_port();
@@ -318,6 +333,115 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "Application shutting down");
     Ok(())
+}
+
+async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {
+    use crate::email::{send_async, EmailKind};
+    use chrono::Utc;
+
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => { app_log!(error, "[scheduler] DB connect failed: {}", e); return; }
+    };
+
+    // ── Nudge: signed up > 7 days ago, zero API calls, not yet nudged ────────
+    let nudge_cutoff = Utc::now() - chrono::Duration::days(7);
+    let nudge_rows = client.query(
+        r#"SELECT up.email, t.name
+           FROM user_preferences up
+           JOIN tenants t ON up.default_tenant_id = t.id
+           WHERE t.created_at < $1
+             AND t.first_call_at IS NULL
+             AND t.nudge_sent_at IS NULL
+             AND up.email IS NOT NULL"#,
+        &[&nudge_cutoff],
+    ).await.unwrap_or_default();
+
+    app_log!(info, "[scheduler] Nudge candidates: {}", nudge_rows.len());
+    for row in &nudge_rows {
+        let email: &str = row.get(0);
+        let name: &str  = row.get(1);
+        // Fetch credit balance for personalisation
+        let credits: i64 = client
+            .query_one("SELECT credit_balance FROM tenants t JOIN user_preferences up ON up.default_tenant_id = t.id WHERE up.email = $1", &[&email])
+            .await.map(|r| r.get(0)).unwrap_or(0);
+        send_async(Arc::clone(store), email.to_string(), EmailKind::Nudge {
+            name: name.to_string(),
+            credits,
+        });
+        let _ = client.execute(
+            "UPDATE tenants SET nudge_sent_at = NOW() FROM user_preferences up WHERE up.default_tenant_id = tenants.id AND up.email = $1",
+            &[&email],
+        ).await;
+    }
+
+    // ── Win-back: last call > 30 days ago (or no call + created > 30 days), not yet emailed ─
+    let wb_cutoff = Utc::now() - chrono::Duration::days(30);
+    let wb_rows = client.query(
+        r#"SELECT up.email, t.name
+           FROM user_preferences up
+           JOIN tenants t ON up.default_tenant_id = t.id
+           WHERE COALESCE(t.first_call_at, t.created_at) < $1
+             AND t.winback_sent_at IS NULL
+             AND up.email IS NOT NULL"#,
+        &[&wb_cutoff],
+    ).await.unwrap_or_default();
+
+    app_log!(info, "[scheduler] Win-back candidates: {}", wb_rows.len());
+    for row in &wb_rows {
+        let email: &str = row.get(0);
+        let name: &str  = row.get(1);
+        send_async(Arc::clone(store), email.to_string(), EmailKind::WinBack {
+            name: name.to_string(),
+        });
+        let _ = client.execute(
+            "UPDATE tenants SET winback_sent_at = NOW() FROM user_preferences up WHERE up.default_tenant_id = tenants.id AND up.email = $1",
+            &[&email],
+        ).await;
+    }
+
+    // ── Monthly digest: send on the 1st of each month ────────────────────────
+    let today = Utc::now();
+    if today.format("%d").to_string() == "01" {
+        let month_label = today.format("%B %Y").to_string();
+        let month_start = today - chrono::Duration::days(32); // safely covers last full month
+
+        let users = client.query(
+            "SELECT DISTINCT email FROM api_usage_logs WHERE timestamp > $1 AND email IS NOT NULL",
+            &[&month_start],
+        ).await.unwrap_or_default();
+
+        app_log!(info, "[scheduler] Monthly digest: {} active users for {}", users.len(), month_label);
+
+        for user_row in &users {
+            let email: &str = user_row.get(0);
+
+            let stats = client.query_one(
+                "SELECT COUNT(*)::bigint, COALESCE(SUM(total_tokens / 50), 0)::bigint FROM api_usage_logs WHERE email = $1 AND timestamp > $2",
+                &[&email, &month_start],
+            ).await;
+
+            let (total_calls, credits_spent): (i64, i64) = stats
+                .map(|r| (r.get(0), r.get(1)))
+                .unwrap_or((0, 0));
+
+            let top_rows = client.query(
+                "SELECT endpoint_path, COUNT(*) as cnt FROM api_usage_logs WHERE email = $1 AND timestamp > $2 GROUP BY endpoint_path ORDER BY cnt DESC LIMIT 3",
+                &[&email, &month_start],
+            ).await.unwrap_or_default();
+
+            let top_endpoints: Vec<String> = top_rows.iter()
+                .map(|r| r.get::<_, String>(0))
+                .collect();
+
+            send_async(Arc::clone(store), email.to_string(), EmailKind::MonthlyDigest {
+                month:          month_label.clone(),
+                total_calls,
+                credits_spent,
+                top_endpoints,
+            });
+        }
+    }
 }
 
 fn ensure_database_url() {

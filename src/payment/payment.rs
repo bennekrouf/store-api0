@@ -1,4 +1,5 @@
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::EndpointStore;
 use crate::payment::service::PaymentService;
 use actix_web::{web, HttpResponse, Responder};
@@ -110,12 +111,14 @@ pub async fn confirm_payment_handler(
                 .await
             {
                 Ok(new_balance) => {
-                    app_log!(info,
-                        email = %email,
-                        amount = amount,
-                        new_balance = new_balance,
-                        "Credits added after successful payment"
-                    );
+                    app_log!(info, email = %email, amount = amount, new_balance = new_balance, "Credits added after successful payment");
+
+                    send_async(store.as_ref().clone(), email.clone(), EmailKind::PaymentReceipt {
+                        amount_dollars: amount as f64,
+                        credits_added: amount,
+                        new_balance,
+                    });
+
                     HttpResponse::Ok().json(serde_json::json!({
                         "success": true,
                         "message": format!("Payment confirmed. {} credits added.", amount),

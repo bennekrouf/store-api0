@@ -337,6 +337,28 @@ INSERT INTO system_config (key, value) VALUES
     ('ai_uploader.model',    'command-r7b-12-2024')
 ON CONFLICT (key) DO NOTHING;
 
+-- ── Email engagement tracking ────────────────────────────────────────────────
+-- first_call_at: set on first successful API call (FirstCallMilestone + Tier-3 nudge guard)
+-- nudge_sent_at: set when 7-day nudge is sent (prevents resending)
+-- winback_sent_at: set when 30-day win-back is sent (prevents resending)
+-- welcome_sent on user_preferences: prevents duplicate welcome emails
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'first_call_at') THEN
+        ALTER TABLE tenants ADD COLUMN first_call_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'nudge_sent_at') THEN
+        ALTER TABLE tenants ADD COLUMN nudge_sent_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'winback_sent_at') THEN
+        ALTER TABLE tenants ADD COLUMN winback_sent_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_preferences' AND column_name = 'welcome_sent') THEN
+        ALTER TABLE user_preferences ADD COLUMN welcome_sent BOOLEAN NOT NULL DEFAULT false;
+    END IF;
+END $$;
+
 -- ── Security hardening ────────────────────────────────────────────────────────
 
 -- Key expiration: NULL = no expiry (admin/tenant keys).

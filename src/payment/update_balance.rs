@@ -1,7 +1,10 @@
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::{EndpointStore, UpdateCreditRequest};
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
+
+const LOW_CREDITS_THRESHOLD: i64 = 50;
 pub async fn update_credit_balance_handler(
     store: web::Data<Arc<EndpointStore>>,
     request: web::Json<UpdateCreditRequest>,
@@ -28,12 +31,13 @@ pub async fn update_credit_balance_handler(
 
     match store.update_credit_balance(&tenant_id, &email, amount, &request.action_type, request.description.as_deref()).await {
         Ok(new_balance) => {
-            app_log!(info,
-                email = %email,
-                amount = amount,
-                new_balance = new_balance,
-                "Successfully updated credit balance"
-            );
+            app_log!(info, email = %email, amount = amount, new_balance = new_balance, "Successfully updated credit balance");
+
+            // Low credits warning: only when a deduction crosses the threshold.
+            if amount < 0 && new_balance < LOW_CREDITS_THRESHOLD && (new_balance - amount) >= LOW_CREDITS_THRESHOLD {
+                send_async(store.as_ref().clone(), email.clone(), EmailKind::LowCredits { balance: new_balance });
+            }
+
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "message": format!("Credit balance updated by {}", amount),

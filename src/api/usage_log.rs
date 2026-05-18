@@ -3,6 +3,7 @@ use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
 
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::{EndpointStore, LogApiUsageRequest, LogApiUsageResponse};
 /// Handler for logging detailed API usage with token information
 pub async fn log_api_usage(
@@ -64,6 +65,34 @@ pub async fn log_api_usage(
                     }
                 }
             }
+
+            // First-call milestone: fire once per user (idempotent via first_call_at column).
+            let store2 = store.as_ref().clone();
+            let email2 = log_request.email.clone();
+            let endpoint2 = log_request.endpoint_path.clone();
+            tokio::spawn(async move {
+                if let Ok(client) = store2.get_admin_conn().await {
+                    let already: bool = client
+                        .query_one(
+                            "SELECT (first_call_at IS NOT NULL) FROM tenants t
+                             JOIN user_preferences up ON up.default_tenant_id = t.id
+                             WHERE up.email = $1",
+                            &[&email2],
+                        )
+                        .await
+                        .map(|r| r.get(0))
+                        .unwrap_or(true);
+                    if !already {
+                        let _ = client.execute(
+                            "UPDATE tenants SET first_call_at = NOW()
+                             FROM user_preferences up
+                             WHERE up.default_tenant_id = tenants.id AND up.email = $1",
+                            &[&email2],
+                        ).await;
+                        send_async(store2, email2, EmailKind::FirstCallMilestone { endpoint: endpoint2 });
+                    }
+                }
+            });
 
             HttpResponse::Ok().json(LogApiUsageResponse {
                 success: true,

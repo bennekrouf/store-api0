@@ -1,4 +1,5 @@
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Arc;
@@ -13,10 +14,8 @@ pub async fn reset_user_preferences(
 
     match store.reset_user_preferences(&email).await {
         Ok(_) => {
-            app_log!(info,
-                email = %email,
-                "Successfully reset user preferences"
-            );
+            app_log!(info, email = %email, "Successfully reset user preferences");
+            send_async(store.as_ref().clone(), email.clone(), EmailKind::AccountDeleted);
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "message": "User preferences successfully reset",

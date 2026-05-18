@@ -11,6 +11,7 @@
 
 use crate::infra::auth::AdminUser;
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
@@ -80,14 +81,13 @@ pub async fn admin_credit_handler(
         .await
     {
         Ok(new_balance) => {
-            app_log!(
-                info,
-                email = %email,
-                amount = request.amount,
-                new_balance = new_balance,
-                action = %action_type,
-                "Admin credit adjustment applied"
-            );
+            app_log!(info, email = %email, amount = request.amount, new_balance = new_balance, action = %action_type, "Admin credit adjustment applied");
+
+            send_async(store.as_ref().clone(), email.clone(), EmailKind::CreditAdjustment {
+                amount:      request.amount,
+                reason:      request.description.clone().unwrap_or_else(|| action_type.to_string()),
+                new_balance,
+            });
             HttpResponse::Ok().json(AdminCreditResponse {
                 success: true,
                 email,

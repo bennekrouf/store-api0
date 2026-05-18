@@ -3,6 +3,7 @@
 // and GET /api/tenant/downstream-auth/{tenant_id} (internal, used by gateway)
 
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::downstream_auth_management::{
     get_downstream_auth, save_downstream_auth, SaveDownstreamAuthRequest,
 };
@@ -109,10 +110,17 @@ pub async fn save_downstream_auth_handler(
     };
 
     match save_downstream_auth(&store, &tenant.id, &req).await {
-        Ok(auth) => HttpResponse::Ok().json(serde_json::json!({
-            "success": true,
-            "auth": auth
-        })),
+        Ok(auth) => {
+            // Notify user which provider they just connected (derive from target_audience or auth_mode).
+            let provider_label = body.target_audience
+                .as_deref()
+                .unwrap_or(&body.auth_mode)
+                .to_string();
+            send_async(store.as_ref().clone(), body.email.clone(), EmailKind::ProviderConnected {
+                provider: provider_label,
+            });
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "auth": auth }))
+        },
         Err(e) => {
             app_log!(error, error = %e, "save_downstream_auth: DB error");
             HttpResponse::InternalServerError()
