@@ -1,6 +1,7 @@
 // src/main.rs
 mod admin;
 mod api;
+mod email;
 mod infra;
 mod mcp;
 mod payment;
