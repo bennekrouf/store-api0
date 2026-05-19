@@ -347,7 +347,7 @@ async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {
     // ── Nudge: signed up > 7 days ago, zero API calls, not yet nudged ────────
     let nudge_cutoff = Utc::now() - chrono::Duration::days(7);
     let nudge_rows = client.query(
-        r#"SELECT up.email, t.name
+        r#"SELECT up.email, t.name, t.credit_balance
            FROM user_preferences up
            JOIN tenants t ON up.default_tenant_id = t.id
            WHERE t.created_at < $1
@@ -359,12 +359,10 @@ async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {
 
     app_log!(info, "[scheduler] Nudge candidates: {}", nudge_rows.len());
     for row in &nudge_rows {
-        let email: &str = row.get(0);
-        let name: &str  = row.get(1);
-        // Fetch credit balance for personalisation
-        let credits: i64 = client
-            .query_one("SELECT credit_balance FROM tenants t JOIN user_preferences up ON up.default_tenant_id = t.id WHERE up.email = $1", &[&email])
-            .await.map(|r| r.get(0)).unwrap_or(0);
+        let email: &str   = row.get(0);
+        let name: &str    = row.get(1);
+        let credits: i64  = row.get(2);
+        app_log!(info, "[scheduler] Nudge {} credits={}", email, credits);
         send_async(Arc::clone(store), email.to_string(), EmailKind::Nudge {
             name: name.to_string(),
             credits,

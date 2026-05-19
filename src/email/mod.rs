@@ -90,7 +90,7 @@ impl EmailKind {
             Self::FirstCallMilestone { .. }                  => "Your first API call — milestone reached!".into(),
             Self::MonthlyDigest { month, .. }                => format!("Your api0 usage summary — {}", month),
             Self::ProviderConnected { provider }             => format!("{} connected to api0", provider),
-            Self::Nudge { .. }                               => "You have credits waiting — try api0 today".into(),
+            Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
             Self::WhatsNew { feature_title, .. }             => format!("New on api0: {}", feature_title),
         }
@@ -209,16 +209,23 @@ impl EmailKind {
             ),
 
             // ── Tier 3 ───────────────────────────────────────────────────────
-            Self::Nudge { name, credits } => format!(
-                r#"<h1>Your API keys are ready, {name}</h1>
+            Self::Nudge { name, credits } => {
+                let credits_line = if *credits > 0 {
+                    format!("<p>You have <strong>{credits} credits</strong> waiting — enough for thousands of requests.</p>")
+                } else {
+                    "<p>Your first API call is just one command away.</p>".to_string()
+                };
+                format!(
+                    r#"<h1>Your API keys are ready, {name}</h1>
 <p>You signed up for api0 but haven't made your first API call yet.</p>
-<p>You have <strong>{credits} credits</strong> waiting — enough for thousands of requests.</p>
+{credits_line}
 <h2>Make your first call in 30 seconds:</h2>
 <pre style="background:#0F172A;color:#E2E8F0;padding:16px;border-radius:6px;overflow-x:auto;font-size:13px">curl https://gateway.api0.ai/api/sentence \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{{"sentence":"hello api0"}}'</pre>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Get Your API Key</a></p>"#
-            ),
+                )
+            },
 
             Self::WinBack { name } => format!(
                 r#"<h1>We miss you, {name}</h1>
