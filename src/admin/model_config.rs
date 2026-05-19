@@ -12,11 +12,18 @@ use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-const VALID_PROVIDERS: &[&str] = &["cohere"];
-const VALID_MODELS: &[&str] = &[
+const VALID_PROVIDERS: &[&str] = &["cohere", "deepseek", "claude"];
+
+const VALID_COHERE_MODELS: &[&str] = &[
     "command-r7b-12-2024",
     "command-r-08-2024",
     "command-a-03-2025",
+];
+const VALID_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"];
+const VALID_CLAUDE_MODELS: &[&str] = &[
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-4-7",
 ];
 
 fn check_internal_secret(req: &HttpRequest) -> bool {
@@ -87,7 +94,9 @@ pub async fn get_model_config(
         success: true,
         config: ModelConfigEntry { provider, model },
         available_models: serde_json::json!({
-            "cohere": VALID_MODELS,
+            "cohere": VALID_COHERE_MODELS,
+            "deepseek": VALID_DEEPSEEK_MODELS,
+            "claude": VALID_CLAUDE_MODELS,
         }),
     })
 }
@@ -139,10 +148,16 @@ pub async fn update_model_config(
     }
 
     if let Some(ref model) = body.model {
-        if !VALID_MODELS.contains(&model.as_str()) {
+        let valid_for_provider = match body.provider.as_deref() {
+            Some("deepseek") => VALID_DEEPSEEK_MODELS,
+            Some("claude") => VALID_CLAUDE_MODELS,
+            Some("cohere") => VALID_COHERE_MODELS,
+            _ => &[], // no provider in request — skip model validation
+        };
+        if !valid_for_provider.is_empty() && !valid_for_provider.contains(&model.as_str()) {
             return HttpResponse::BadRequest().json(serde_json::json!({
                 "success": false,
-                "error": format!("Invalid model '{}'. Valid: {:?}", model, VALID_MODELS),
+                "error": format!("Invalid model '{}'. Valid: {:?}", model, valid_for_provider),
             }));
         }
         if let Err(e) = client
