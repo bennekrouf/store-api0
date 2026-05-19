@@ -87,7 +87,7 @@ impl EmailKind {
                 if *amount >= 0 { format!("You received {} credits", amount) }
                 else            { format!("Credit adjustment: {} credits", amount) }
             }
-            Self::FirstCallMilestone { .. }                  => "Your first API call — milestone reached!".into(),
+            Self::FirstCallMilestone { .. }                  => "Your first tool call — you're live!".into(),
             Self::MonthlyDigest { month, .. }                => format!("Your api0 usage summary — {}", month),
             Self::ProviderConnected { provider }             => format!("{} connected to api0", provider),
             Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
@@ -101,15 +101,17 @@ impl EmailKind {
             // ── Tier 1 ───────────────────────────────────────────────────────
             Self::Welcome { name, key_prefix, credits } => format!(
                 r#"<h1>Welcome to api0, {name}!</h1>
-<p>Your account is live. Here's what you need to get started.</p>
+<p>Your account is live. api0 is an MCP gateway — it exposes your imported APIs as tools that AI assistants (Claude, Cursor, and others) can use on your behalf.</p>
 <table style="border-collapse:collapse;margin:16px 0;background:#F8FAFC;border-radius:6px;overflow:hidden">
-  <tr><td style="padding:8px 16px;font-weight:bold;color:#475569">Your first API key</td><td style="padding:8px 16px;font-family:monospace;color:#6366F1">{key_prefix}…</td></tr>
+  <tr><td style="padding:8px 16px;font-weight:bold;color:#475569">Your API key</td><td style="padding:8px 16px;font-family:monospace;color:#6366F1">{key_prefix}…</td></tr>
   <tr><td style="padding:8px 16px;font-weight:bold;color:#475569">Starting credits</td><td style="padding:8px 16px">{credits}</td></tr>
 </table>
-<h2>Quick start</h2>
-<pre style="background:#0F172A;color:#E2E8F0;padding:16px;border-radius:6px;overflow-x:auto;font-size:13px">curl https://gateway.api0.ai/api/sentence \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{{"sentence":"hello world"}}'</pre>
+<h2>Connect in 2 steps</h2>
+<ol style="padding-left:20px">
+  <li>Copy your API key from the dashboard</li>
+  <li>Paste it into your MCP client (Claude Desktop, Cursor, or any MCP-compatible tool) using the server URL <code style="background:#F1F5F9;padding:2px 4px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
+</ol>
+<p>Once connected, your AI assistant can discover and call any API you import — no manual HTTP requests needed.</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open Dashboard</a></p>"#
             ),
 
@@ -169,20 +171,20 @@ impl EmailKind {
             }
 
             Self::FirstCallMilestone { endpoint } => format!(
-                r#"<h1>First API Call — You're Live! 🎉</h1>
-<p>You just made your first successful API call to <code style="background:#F1F5F9;padding:2px 6px;border-radius:4px">{endpoint}</code>.</p>
-<p>Your integration is working. Here's what you can do next:</p>
+                r#"<h1>First tool call — you're live! 🎉</h1>
+<p>Your MCP integration just made its first successful call to <code style="background:#F1F5F9;padding:2px 6px;border-radius:4px">{endpoint}</code>.</p>
+<p>Your AI assistant can now discover and use all the APIs you import through api0. Here's what to do next:</p>
 <ul>
-  <li>Explore other endpoints in the dashboard</li>
-  <li>Check your usage logs to monitor traffic</li>
-  <li>Set up alerts for high usage or low credits</li>
+  <li>Import more APIs as MCP tools in the dashboard</li>
+  <li>Check your usage logs to monitor which tools are being called</li>
+  <li>Top up credits to keep your tools running uninterrupted</li>
 </ul>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">View Dashboard</a></p>"#
             ),
 
             Self::MonthlyDigest { month, total_calls, credits_spent, top_endpoints } => {
                 let endpoint_list = if top_endpoints.is_empty() {
-                    "<li style=\"color:#94A3B8\">No endpoints used this month</li>".to_string()
+                    "<li style=\"color:#94A3B8\">No tools called this month</li>".to_string()
                 } else {
                     top_endpoints.iter()
                         .map(|e| format!("<li><code style=\"background:#F1F5F9;padding:2px 4px;border-radius:3px;font-size:12px\">{e}</code></li>"))
@@ -192,10 +194,10 @@ impl EmailKind {
                 format!(
                     r#"<h1>Your api0 Summary — {month}</h1>
 <table style="border-collapse:collapse;margin:16px 0">
-  <tr><td style="padding:4px 12px;font-weight:bold">Total API calls</td><td style="padding:4px 12px">{total_calls}</td></tr>
+  <tr><td style="padding:4px 12px;font-weight:bold">Tool calls made</td><td style="padding:4px 12px">{total_calls}</td></tr>
   <tr><td style="padding:4px 12px;font-weight:bold">Credits spent</td><td style="padding:4px 12px">{credits_spent}</td></tr>
 </table>
-<h2>Top endpoints</h2>
+<h2>Most-used tools</h2>
 <ul style="padding-left:20px">{endpoint_list}</ul>
 <p><a href="https://app.api0.ai/?view=stats" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Full Stats</a></p>"#
                 )
@@ -204,26 +206,28 @@ impl EmailKind {
             Self::ProviderConnected { provider } => format!(
                 r#"<h1>{provider} Connected</h1>
 <p>Your <strong>{provider}</strong> account is now linked to api0.</p>
-<p>Your API keys can now access {provider}-powered endpoints.</p>
+<p>APIs authenticated via {provider} are now available as MCP tools — your AI assistant can call them on your behalf.</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">View Dashboard</a></p>"#
             ),
 
             // ── Tier 3 ───────────────────────────────────────────────────────
             Self::Nudge { name, credits } => {
                 let credits_line = if *credits > 0 {
-                    format!("<p>You have <strong>{credits} credits</strong> waiting — enough for thousands of requests.</p>")
+                    format!("<p>You have <strong>{credits} credits</strong> ready — enough for thousands of tool calls.</p>")
                 } else {
-                    "<p>Your first API call is just one command away.</p>".to_string()
+                    "<p>Connect your MCP client and your AI assistant will start using your tools immediately.</p>".to_string()
                 };
                 format!(
-                    r#"<h1>Your API keys are ready, {name}</h1>
-<p>You signed up for api0 but haven't made your first API call yet.</p>
+                    r#"<h1>Your MCP tools are ready, {name}</h1>
+<p>You signed up for api0 but haven't connected an MCP client yet.</p>
 {credits_line}
-<h2>Make your first call in 30 seconds:</h2>
-<pre style="background:#0F172A;color:#E2E8F0;padding:16px;border-radius:6px;overflow-x:auto;font-size:13px">curl https://gateway.api0.ai/api/sentence \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{{"sentence":"hello api0"}}'</pre>
-<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Get Your API Key</a></p>"#
+<h2>Connect in 2 steps:</h2>
+<ol style="padding-left:20px">
+  <li>Copy your API key from the dashboard</li>
+  <li>Add it to your MCP client (Claude Desktop, Cursor, or any MCP-compatible tool) pointing to <code style="background:#1E293B;padding:2px 6px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
+</ol>
+<p>Your AI assistant will then discover and call your imported APIs automatically.</p>
+<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open Dashboard</a></p>"#
                 )
             },
 
