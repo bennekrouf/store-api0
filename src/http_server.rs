@@ -5,6 +5,11 @@ use crate::mcp::downstream_auth::{
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
+use crate::whatsapp::channel::{
+    delete_channel, get_channel, lookup_channel_by_tenant_internal, lookup_channel_internal,
+    register_channel,
+};
+use crate::whatsapp::session::{get_session, update_session};
 use crate::email::{get_smtp_config_handler, send_email_handler, update_smtp_config_handler, broadcast_whats_new_handler};
 use crate::payment::admin::admin_credit_handler;
 use crate::api::key_consumer::generate_consumer_key_handler;
@@ -216,7 +221,16 @@ pub async fn start_http_server(
                             .route("/tenant/by-client-id/{client_id}", web::get().to(get_by_client_id_handler))
                             .route("/user/mcp-client-id", web::put().to(set_client_id_handler))
                             // Governance / stats: all MCP requests for the tenant
-                            .route("/tenant/stats/{email}", web::get().to(get_tenant_stats)),
+                            .route("/tenant/stats/{email}", web::get().to(get_tenant_stats))
+                            // WhatsApp channel management (gateway-proxied, no re-auth)
+                            .route("/whatsapp/channel", web::post().to(register_channel))
+                            .route("/whatsapp/channel/{email}", web::get().to(get_channel))
+                            .route("/whatsapp/channel/{email}", web::delete().to(delete_channel))
+                            // WhatsApp bridge internal (X-Internal-Secret)
+                            .route("/internal/whatsapp/channel/{phone_number_id}", web::get().to(lookup_channel_internal))
+                            .route("/internal/whatsapp/channel/by-tenant/{tenant_id}", web::get().to(lookup_channel_by_tenant_internal))
+                            .route("/internal/whatsapp/session/{tenant_id}/{customer_phone}", web::get().to(get_session))
+                            .route("/internal/whatsapp/session/{tenant_id}/{customer_phone}", web::put().to(update_session)),
                     )
             })
             .bind(addr)?

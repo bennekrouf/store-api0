@@ -323,6 +323,31 @@ BEGIN
     END IF;
 END $$;
 
+-- ── WhatsApp bridge ──────────────────────────────────────────────────────────
+
+-- One row per tenant WhatsApp Business Account
+CREATE TABLE IF NOT EXISTS whatsapp_channels (
+    phone_number_id  VARCHAR     PRIMARY KEY,   -- Meta phone number ID
+    tenant_id        VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    wa_token         TEXT        NOT NULL,       -- Meta permanent token
+    verify_token     VARCHAR     NOT NULL,       -- webhook verify token
+    system_prompt    TEXT        NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id)
+);
+
+-- Conversation history per (tenant, customer phone)
+CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+    tenant_id       VARCHAR     NOT NULL,
+    customer_phone  VARCHAR     NOT NULL,
+    history         JSONB       NOT NULL DEFAULT '[]',
+    last_active     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, customer_phone)
+);
+
+CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_tenant ON whatsapp_sessions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_channels_tenant ON whatsapp_channels(tenant_id);
+
 -- ── System-wide admin configuration ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS system_config (
