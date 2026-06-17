@@ -348,6 +348,20 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
 CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_tenant ON whatsapp_sessions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_channels_tenant ON whatsapp_channels(tenant_id);
 
+-- Failed message dead-letter queue (for debugging and replay)
+CREATE TABLE IF NOT EXISTS whatsapp_failed_messages (
+    id              BIGSERIAL   PRIMARY KEY,
+    tenant_id       VARCHAR     NOT NULL,
+    customer_phone  VARCHAR     NOT NULL,
+    message_text    TEXT        NOT NULL DEFAULT '',
+    error_type      VARCHAR     NOT NULL,     -- e.g. "ClaudeApi", "StoreNetwork"
+    error_detail    TEXT        NOT NULL DEFAULT '',
+    payload         JSONB,                    -- original WA message payload
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_whatsapp_failed_tenant ON whatsapp_failed_messages(tenant_id, created_at DESC);
+
 -- ── System-wide admin configuration ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS system_config (
@@ -361,6 +375,23 @@ INSERT INTO system_config (key, value) VALUES
     ('ai_uploader.provider', 'cohere'),
     ('ai_uploader.model',    'command-r7b-12-2024')
 ON CONFLICT (key) DO NOTHING;
+
+-- ── Platform-level user roles ───────────────────────────────────────────────
+-- Roles: super_admin, admin, user (default)
+-- super_admin can manage other admins; admin can access admin panel.
+-- Users without a row are regular users.
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    email       VARCHAR     PRIMARY KEY,
+    role        VARCHAR     NOT NULL DEFAULT 'user',
+    granted_by  VARCHAR,
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed the initial super admin (idempotent)
+INSERT INTO user_roles (email, role, granted_by) VALUES
+    ('mohamed.bennekrouf@gmail.com', 'super_admin', 'system')
+ON CONFLICT (email) DO NOTHING;
 
 -- ── Email engagement tracking ────────────────────────────────────────────────
 -- first_call_at: set on first successful API call (FirstCallMilestone + Tier-3 nudge guard)

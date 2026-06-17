@@ -5,11 +5,13 @@ use crate::mcp::downstream_auth::{
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
+use crate::admin::user_roles::{delete_user_role, get_user_role, list_user_roles, set_user_role};
 use crate::whatsapp::channel::{
     delete_channel, get_channel, lookup_channel_by_tenant_internal, lookup_channel_internal,
     register_channel,
 };
-use crate::whatsapp::session::{get_session, update_session};
+use crate::whatsapp::dead_letter::{insert_failed_message, list_failed_messages};
+use crate::whatsapp::session::{cleanup_stale_sessions, get_session, update_session};
 use crate::email::{get_smtp_config_handler, send_email_handler, update_smtp_config_handler, broadcast_whats_new_handler};
 use crate::payment::admin::admin_credit_handler;
 use crate::api::key_consumer::generate_consumer_key_handler;
@@ -230,7 +232,16 @@ pub async fn start_http_server(
                             .route("/internal/whatsapp/channel/{phone_number_id}", web::get().to(lookup_channel_internal))
                             .route("/internal/whatsapp/channel/by-tenant/{tenant_id}", web::get().to(lookup_channel_by_tenant_internal))
                             .route("/internal/whatsapp/session/{tenant_id}/{customer_phone}", web::get().to(get_session))
-                            .route("/internal/whatsapp/session/{tenant_id}/{customer_phone}", web::put().to(update_session)),
+                            .route("/internal/whatsapp/session/{tenant_id}/{customer_phone}", web::put().to(update_session))
+                            .route("/internal/whatsapp/sessions/stale", web::delete().to(cleanup_stale_sessions))
+                            // WhatsApp dead-letter queue
+                            .route("/internal/whatsapp/failed-messages", web::post().to(insert_failed_message))
+                            .route("/internal/whatsapp/failed-messages/{tenant_id}", web::get().to(list_failed_messages))
+                            // User roles (X-Internal-Secret)
+                            .route("/internal/user-role/{email}", web::get().to(get_user_role))
+                            .route("/internal/user-role", web::put().to(set_user_role))
+                            .route("/internal/user-roles", web::get().to(list_user_roles))
+                            .route("/internal/user-role/{email}", web::delete().to(delete_user_role)),
                     )
             })
             .bind(addr)?

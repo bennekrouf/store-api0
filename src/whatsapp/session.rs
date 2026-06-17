@@ -114,6 +114,49 @@ pub async fn update_session(
     }
 }
 
+// DELETE /api/internal/whatsapp/sessions/stale?days=30
+#[derive(Deserialize)]
+pub struct StaleQuery {
+    pub days: Option<i64>,
+}
+
+pub async fn cleanup_stale_sessions(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    query: web::Query<StaleQuery>,
+) -> impl Responder {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+
+    let days = query.days.unwrap_or(30).max(1); // minimum 1 day
+
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::InternalServerError()
+            .json(serde_json::json!({"success": false, "error": "DB error"})),
+    };
+
+    match client.execute(
+        "DELETE FROM whatsapp_sessions WHERE last_active < NOW() - ($1 || ' days')::interval",
+        &[&days.to_string()],
+    ).await {
+        Ok(count) => {
+            app_log!(info, days = %days, deleted = %count, "Cleaned up stale WA sessions");
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "deleted": count,
+            }))
+        }
+        Err(e) => {
+            app_log!(error, error = %e, "Failed to cleanup stale WA sessions");
+            HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": e.to_string()}))
+        }
+    }
+}
+
 fn trim_history(history: &serde_json::Value, max: usize) -> serde_json::Value {
     if let Some(arr) = history.as_array() {
         if arr.len() > max {
