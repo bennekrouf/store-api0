@@ -23,6 +23,7 @@ impl PaymentService {
         let currency_enum = match currency.to_lowercase().as_str() {
             "usd" => Currency::USD,
             "eur" => Currency::EUR,
+            "chf" => Currency::CHF,
             _ => Currency::USD, // Default
         };
 
