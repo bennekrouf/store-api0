@@ -1,95 +1,12 @@
-use crate::endpoint_store::ApiGroupWithEndpoints;
-use serde::{Deserialize, Serialize};
+// src/infra/models.rs
+//
+// Re-exports of the shared request/response payloads from `api0-types`.
+// `UploadResponse` is the store's own upload shape (import counts); the
+// gateway's differently-shaped public response is `api0_types::UploadResponse`.
 
-// use crate::endpoint_store::Endpoint;
-// Request and Response models for API key validation
-#[derive(Debug, Deserialize)]
-pub struct ValidateKeyRequest {
-    pub api_key: String,
-    pub expected_tenant_id: Option<String>,
-}
-
-// #[derive(Debug, Clone, Deserialize)]
-// pub struct ManageEndpointRequest {
-//     pub email: String,
-//     pub group_id: String,
-//     pub endpoint: Endpoint,
-// }
-
-#[derive(Debug, Serialize)]
-pub struct ValidateKeyResponse {
-    pub valid: bool,
-    pub email: Option<String>,
-    pub key_id: Option<String>,
-    /// The tenant that owns this API key (used for credit deduction).
-    pub tenant_id: Option<String>,
-    /// If set, this is a consumer key: tools come from this provider tenant,
-    /// but credits are deducted from the consumer's tenant (tenant_id above).
-    pub provider_tenant_id: Option<String>,
-    pub message: String,
-}
-
-// Response model for API key usage
-// #[derive(Debug, Serialize)]
-// pub struct RecordUsageResponse {
-//     pub success: bool,
-//     pub message: String,
-// }
-
-// Request and Response models
-#[derive(Debug, Clone, Deserialize)]
-pub struct UploadRequest {
-    pub email: String,
-    pub file_name: String,
-    pub file_content: String, // Base64 encoded
-}
-
-#[derive(Debug, Serialize)]
-pub struct UploadResponse {
-    pub success: bool,
-    pub message: String,
-    pub imported_count: i32,
-    pub group_count: i32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AddApiGroupRequest {
-    pub email: String,
-    pub api_group: ApiGroupWithEndpoints,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct UpdateApiGroupRequest {
-    pub email: String,
-    pub group_id: String,
-    pub api_group: ApiGroupWithEndpoints,
-}
-
-// Handler for recording API key usage
-// #[derive(Debug, Deserialize)]
-// pub struct RecordUsageRequest {
-//     pub key_id: String,
-// }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReferenceData {
-    pub id: String,
-    pub email: String,
-    pub name: String,
-    pub data: serde_json::Value,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct UploadReferenceDataRequest {
-    pub email: String,
-    pub file_name: String,
-    pub file_content: String, // Base64 encoded
-}
-
-#[derive(Debug, Serialize)]
-pub struct UploadReferenceDataResponse {
-    pub success: bool,
-    pub message: String,
-    pub data: Option<ReferenceData>,
-}
+pub use api0_types::catalog::{AddApiGroupRequest, UpdateApiGroupRequest};
+pub use api0_types::keys::{ValidateKeyRequest, ValidateKeyResponse};
+pub use api0_types::upload::{
+    ReferenceData, StoreUploadResponse as UploadResponse, UploadReferenceDataRequest,
+    UploadReferenceDataResponse, UploadRequest,
+};
