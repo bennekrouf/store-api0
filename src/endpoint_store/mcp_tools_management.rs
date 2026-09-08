@@ -28,6 +28,19 @@ pub struct McpTool {
     /// When Some("GET"|"POST"|…) the gateway does REST passthrough.
     /// When None the backend is expected to speak native MCP format.
     pub http_verb: Option<String>,
+    // ── Request shaping ──────────────────────────────────────────────────────
+    // What a tool needs to front an API that does not accept the MCP arguments
+    // object as-is — a third-party cloud API, most of the time.
+    /// Request Content-Type. None → application/json.
+    pub content_type: Option<String>,
+    /// JSON template rendered against the call arguments. None → send the
+    /// arguments verbatim.
+    pub body_template: Option<String>,
+    /// Constant headers for this tool, as a JSON object.
+    pub static_headers: Option<serde_json::Value>,
+    /// Whether api0's identity headers travel with the call. False for tools
+    /// pointed at a third-party API.
+    pub forward_identity: bool,
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -43,6 +56,14 @@ pub struct UpsertMcpToolRequest {
     pub timeout_ms: Option<i32>,
     /// REST verb for endpoint-imported tools. None = native MCP backend.
     pub http_verb: Option<String>,
+    /// Request Content-Type. Omitted → application/json.
+    pub content_type: Option<String>,
+    /// JSON body template. Omitted → the arguments are sent verbatim.
+    pub body_template: Option<String>,
+    /// Constant headers, as a JSON object.
+    pub static_headers: Option<serde_json::Value>,
+    /// Omitted → true, which keeps every existing first-party tool unchanged.
+    pub forward_identity: Option<bool>,
 }
 
 pub async fn upsert_mcp_tool(
@@ -64,26 +85,45 @@ pub async fn upsert_mcp_tool(
 
     // INSERT ... ON CONFLICT(tenant_id, tool_name) DO UPDATE
     let http_verb = req.http_verb.as_deref().map(|v| v.to_uppercase());
+    let forward_identity = req.forward_identity.unwrap_or(true);
+
+    // A body template that is not valid JSON would only fail later, inside the
+    // gateway, on a call the caller can no longer connect to this write.
+    if let Some(raw) = req.body_template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(raw) {
+            return Err(StoreError::InvalidInput(format!(
+                "body_template is not valid JSON: {}",
+                e
+            )));
+        }
+    }
 
     let row = client
         .query_one(
             "INSERT INTO mcp_tools
                 (id, tenant_id, tool_name, backend_url, description,
-                 input_schema, cost_credits, timeout_ms, http_verb, is_active,
-                 created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
+                 input_schema, cost_credits, timeout_ms, http_verb,
+                 content_type, body_template, static_headers, forward_identity,
+                 is_active, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                     true, $14, $14)
              ON CONFLICT (tenant_id, tool_name) DO UPDATE SET
-                backend_url  = EXCLUDED.backend_url,
-                description  = EXCLUDED.description,
-                input_schema = EXCLUDED.input_schema,
-                cost_credits = EXCLUDED.cost_credits,
-                timeout_ms   = EXCLUDED.timeout_ms,
-                http_verb    = EXCLUDED.http_verb,
-                is_active    = true,
-                updated_at   = EXCLUDED.updated_at
+                backend_url      = EXCLUDED.backend_url,
+                description      = EXCLUDED.description,
+                input_schema     = EXCLUDED.input_schema,
+                cost_credits     = EXCLUDED.cost_credits,
+                timeout_ms       = EXCLUDED.timeout_ms,
+                http_verb        = EXCLUDED.http_verb,
+                content_type     = EXCLUDED.content_type,
+                body_template    = EXCLUDED.body_template,
+                static_headers   = EXCLUDED.static_headers,
+                forward_identity = EXCLUDED.forward_identity,
+                is_active        = true,
+                updated_at       = EXCLUDED.updated_at
              RETURNING id, tenant_id, tool_name, backend_url, description,
                        input_schema, cost_credits, timeout_ms, http_verb,
-                       is_active, created_at, updated_at",
+                       content_type, body_template, static_headers,
+                       forward_identity, is_active, created_at, updated_at",
             &[
                 &id as &(dyn tokio_postgres::types::ToSql + Sync),
                 &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
@@ -94,6 +134,10 @@ pub async fn upsert_mcp_tool(
                 &cost_credits as &(dyn tokio_postgres::types::ToSql + Sync),
                 &timeout_ms as &(dyn tokio_postgres::types::ToSql + Sync),
                 &http_verb as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.content_type as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.body_template as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.static_headers as &(dyn tokio_postgres::types::ToSql + Sync),
+                &forward_identity as &(dyn tokio_postgres::types::ToSql + Sync),
                 &now as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
@@ -122,7 +166,8 @@ pub async fn list_mcp_tools(
         .query(
             "SELECT id, tenant_id, tool_name, backend_url, description,
                     input_schema, cost_credits, timeout_ms, http_verb,
-                    is_active, created_at, updated_at
+                    content_type, body_template, static_headers,
+                    forward_identity, is_active, created_at, updated_at
              FROM mcp_tools
              WHERE tenant_id = $1 AND is_active = true
              ORDER BY tool_name",
@@ -216,6 +261,12 @@ pub async fn list_mcp_tools(
             cost_credits: None,
             timeout_ms: 30000,
             http_verb: Some(verb.to_uppercase()),
+            // Endpoint-imported tools front first-party backends: arguments go
+            // over as-is, and the identity headers travel with them.
+            content_type: None,
+            body_template: None,
+            static_headers: None,
+            forward_identity: true,
             is_active: true,
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
@@ -238,7 +289,8 @@ pub async fn get_mcp_tool(
         .query_opt(
             "SELECT id, tenant_id, tool_name, backend_url, description,
                     input_schema, cost_credits, timeout_ms, http_verb,
-                    is_active, created_at, updated_at
+                    content_type, body_template, static_headers,
+                    forward_identity, is_active, created_at, updated_at
              FROM mcp_tools
              WHERE tenant_id = $1 AND tool_name = $2 AND is_active = true",
             &[&tenant_id, &tool_name],
@@ -321,6 +373,10 @@ pub async fn get_mcp_tool(
                 cost_credits: None,
                 timeout_ms: 30000,
                 http_verb: Some(verb.to_uppercase()),
+                content_type: None,
+                body_template: None,
+                static_headers: None,
+                forward_identity: true,
                 is_active: true,
                 created_at: Utc::now().to_rfc3339(),
                 updated_at: Utc::now().to_rfc3339(),
@@ -414,6 +470,10 @@ pub async fn sync_endpoints_as_mcp_tools(
                 cost_credits: None,
                 timeout_ms: Some(30_000),
                 http_verb: Some(endpoint.verb.to_uppercase()),
+                content_type: None,
+                body_template: None,
+                static_headers: None,
+                forward_identity: Some(true),
             };
 
             match upsert_mcp_tool(store, tenant_id, &req).await {
@@ -502,17 +562,21 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
     // "external provider" (None, only possible for virtual/endpoint-based tools).
     let cost_credits_raw: i64 = row.get(6);
     McpTool {
-        id:           row.get(0),
-        tenant_id:    row.get(1),
-        tool_name:    row.get(2),
-        backend_url:  row.get(3),
-        description:  row.get(4),
-        input_schema: row.get(5),
-        cost_credits: Some(cost_credits_raw),
-        timeout_ms:   row.get(7),
-        http_verb:    row.get(8),
-        is_active:    row.get(9),
-        created_at:   row.get::<_, chrono::DateTime<Utc>>(10).to_rfc3339(),
-        updated_at:   row.get::<_, chrono::DateTime<Utc>>(11).to_rfc3339(),
+        id:               row.get(0),
+        tenant_id:        row.get(1),
+        tool_name:        row.get(2),
+        backend_url:      row.get(3),
+        description:      row.get(4),
+        input_schema:     row.get(5),
+        cost_credits:     Some(cost_credits_raw),
+        timeout_ms:       row.get(7),
+        http_verb:        row.get(8),
+        content_type:     row.get(9),
+        body_template:    row.get(10),
+        static_headers:   row.get(11),
+        forward_identity: row.get(12),
+        is_active:        row.get(13),
+        created_at:       row.get::<_, chrono::DateTime<Utc>>(14).to_rfc3339(),
+        updated_at:       row.get::<_, chrono::DateTime<Utc>>(15).to_rfc3339(),
     }
 }

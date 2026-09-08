@@ -6,6 +6,8 @@ pub enum StoreError {
     Pool(String),
     #[error("Resource not found: {0}")]
     NotFound(String),
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl From<tokio_postgres::Error> for StoreError {
