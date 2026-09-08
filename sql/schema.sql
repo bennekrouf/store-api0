@@ -453,3 +453,38 @@ BEGIN
             WHERE expires_at IS NOT NULL;
     END IF;
 END $$;
+
+-- ── Per-user downstream credentials ──────────────────────────────────────────
+-- One credential per (tenant, user), so a tool call to a third-party API acts as
+-- the person who made it rather than as one shared service identity. The secret
+-- is sealed by infra::secret_box (AES-256-GCM); the plaintext never reaches this
+-- table, and nothing but the gateway ever reads it back.
+--
+--   kind = 'pat'            an API token the user pasted (Azure DevOps, GitHub…)
+--   kind = 'entra_refresh'  an OAuth refresh token, once federation exists
+CREATE TABLE IF NOT EXISTS user_downstream_credentials (
+    tenant_id   VARCHAR NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_email  VARCHAR NOT NULL,
+    kind        VARCHAR NOT NULL DEFAULT 'pat',
+    secret      BYTEA   NOT NULL,
+    -- What the user called it, so a dashboard can show which token this is
+    -- without ever decrypting it.
+    label       VARCHAR NOT NULL DEFAULT '',
+    -- The expiry the user told us about. Advisory only — we cannot verify it,
+    -- and the provider is the authority — but it is what lets us warn before a
+    -- token dies rather than after.
+    expires_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, user_email, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_downstream_credentials_tenant
+    ON user_downstream_credentials(tenant_id);
+
+-- Per-user auth needs the tenant to say how a secret becomes a header. Azure
+-- DevOps wants HTTP Basic with an empty username; most APIs want a bearer.
+--   per_user_scheme = 'basic_pat' | 'bearer' | 'raw'
+--   per_user_header = header name, defaults to Authorization
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_scheme VARCHAR;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_header VARCHAR;

@@ -1,0 +1,190 @@
+// src/endpoint_store/user_credentials.rs
+//
+// CRUD for user_downstream_credentials — the per-user secret a tool call
+// authenticates with, so Azure DevOps records the person who asked rather than
+// whoever owns a shared token.
+//
+// Everything here goes through infra::secret_box. A plaintext secret exists in
+// this module only between the argument and the INSERT, and between the SELECT
+// and the return value; it is never logged and never stored.
+
+use crate::app_log;
+use crate::endpoint_store::db_helpers::ResultExt;
+use crate::endpoint_store::{EndpointStore, StoreError};
+use crate::infra::secret_box::{self, SecretContext};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// What a credential is, without what it *is*. This is the shape the dashboard
+/// gets back: enough to manage a token, never enough to use one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSummary {
+    pub tenant_id: String,
+    pub user_email: String,
+    pub kind: String,
+    pub label: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveCredentialRequest {
+    /// 'pat' today; 'entra_refresh' when federation lands.
+    pub kind: Option<String>,
+    pub secret: String,
+    pub label: Option<String>,
+    /// RFC 3339. Advisory — what the user says the provider will enforce.
+    pub expires_at: Option<String>,
+}
+
+pub async fn save_credential(
+    store: &EndpointStore,
+    tenant_id: &str,
+    user_email: &str,
+    req: &SaveCredentialRequest,
+) -> Result<CredentialSummary, StoreError> {
+    let kind = req.kind.as_deref().unwrap_or("pat").to_string();
+    let secret = req.secret.trim();
+    if secret.is_empty() {
+        return Err(StoreError::InvalidInput("secret must not be empty".into()));
+    }
+
+    let sealed = secret_box::seal(secret, &SecretContext { tenant_id, purpose: &kind })
+        .map_err(|e| {
+            // The message names the failure, never the secret.
+            app_log!(error, tenant_id = %tenant_id, error = %e, "Could not seal a user credential");
+            StoreError::InvalidInput(format!("could not store the credential: {}", e))
+        })?;
+
+    let expires_at = match req.expires_at.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => Some(
+            DateTime::parse_from_rfc3339(raw)
+                .map_err(|e| StoreError::InvalidInput(format!("expires_at is not RFC 3339: {}", e)))?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+
+    let label = req.label.as_deref().unwrap_or("").to_string();
+    let user_email = user_email.to_lowercase();
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let row = client
+        .query_one(
+            "INSERT INTO user_downstream_credentials
+                (tenant_id, user_email, kind, secret, label, expires_at, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+             ON CONFLICT (tenant_id, user_email, kind) DO UPDATE SET
+                secret     = EXCLUDED.secret,
+                label      = EXCLUDED.label,
+                expires_at = EXCLUDED.expires_at,
+                updated_at = NOW()
+             RETURNING tenant_id, user_email, kind, label, expires_at, created_at, updated_at",
+            &[
+                &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &user_email as &(dyn tokio_postgres::types::ToSql + Sync),
+                &kind as &(dyn tokio_postgres::types::ToSql + Sync),
+                &sealed as &(dyn tokio_postgres::types::ToSql + Sync),
+                &label as &(dyn tokio_postgres::types::ToSql + Sync),
+                &expires_at as &(dyn tokio_postgres::types::ToSql + Sync),
+            ],
+        )
+        .await
+        .to_store_error()?;
+
+    app_log!(info, tenant_id = %tenant_id, kind = %kind, "Stored a per-user downstream credential");
+    Ok(row_to_summary(row))
+}
+
+/// The credential itself, decrypted. The gateway is the only caller.
+pub async fn get_secret(
+    store: &EndpointStore,
+    tenant_id: &str,
+    user_email: &str,
+    kind: &str,
+) -> Result<Option<String>, StoreError> {
+    let user_email = user_email.to_lowercase();
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let row = client
+        .query_opt(
+            "SELECT secret FROM user_downstream_credentials
+             WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
+            &[&tenant_id, &user_email, &kind],
+        )
+        .await
+        .to_store_error()?;
+
+    let sealed: Vec<u8> = match row {
+        Some(r) => r.get(0),
+        None => return Ok(None),
+    };
+
+    // A record that will not open is not a missing record: someone rotated the
+    // key or altered the row, and saying "not found" would send the user off to
+    // paste a new token that would fail the same way.
+    secret_box::open(&sealed, &SecretContext { tenant_id, purpose: kind })
+        .map(Some)
+        .map_err(|e| {
+            app_log!(error, tenant_id = %tenant_id, kind = %kind, error = %e, "Stored credential would not open");
+            StoreError::Database(format!("stored credential could not be read: {}", e))
+        })
+}
+
+pub async fn list_credentials(
+    store: &EndpointStore,
+    tenant_id: &str,
+    user_email: &str,
+) -> Result<Vec<CredentialSummary>, StoreError> {
+    let user_email = user_email.to_lowercase();
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let rows = client
+        .query(
+            "SELECT tenant_id, user_email, kind, label, expires_at, created_at, updated_at
+             FROM user_downstream_credentials
+             WHERE tenant_id = $1 AND user_email = $2
+             ORDER BY kind",
+            &[&tenant_id, &user_email],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(rows.into_iter().map(row_to_summary).collect())
+}
+
+pub async fn delete_credential(
+    store: &EndpointStore,
+    tenant_id: &str,
+    user_email: &str,
+    kind: &str,
+) -> Result<bool, StoreError> {
+    let user_email = user_email.to_lowercase();
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let n = client
+        .execute(
+            "DELETE FROM user_downstream_credentials
+             WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
+            &[&tenant_id, &user_email, &kind],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(n > 0)
+}
+
+fn row_to_summary(row: tokio_postgres::Row) -> CredentialSummary {
+    CredentialSummary {
+        tenant_id:  row.get(0),
+        user_email: row.get(1),
+        kind:       row.get(2),
+        label:      row.get(3),
+        expires_at: row
+            .get::<_, Option<DateTime<Utc>>>(4)
+            .map(|t| t.to_rfc3339()),
+        created_at: row.get::<_, DateTime<Utc>>(5).to_rfc3339(),
+        updated_at: row.get::<_, DateTime<Utc>>(6).to_rfc3339(),
+    }
+}

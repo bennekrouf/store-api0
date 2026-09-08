@@ -32,3 +32,9 @@ CREATE POLICY mcp_tool_isolation ON mcp_tools
 -- 6. Tenant User Membership Isolation
 CREATE POLICY tenant_user_isolation ON tenant_users
     USING (current_setting('app.bypass_rls', true) = 'true' OR tenant_id = current_setting('app.current_tenant_id', true));
+
+-- 7. Per-user downstream credential isolation
+ALTER TABLE user_downstream_credentials ENABLE ROW LEVEL SECURITY;
+CREATE POLICY user_downstream_credential_isolation ON user_downstream_credentials
+    USING (current_setting('app.bypass_rls', true) = 'true'
+           OR tenant_id = current_setting('app.current_tenant_id', true));
