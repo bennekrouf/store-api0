@@ -20,8 +20,9 @@ use crate::api::key_consumer_self_service::{
     generate_self_service_key, list_self_service_keys,
 };
 use crate::mcp::tools::{
-    delete_mcp_tool_handler, get_mcp_tool_handler, list_mcp_tools_handler,
-    upsert_mcp_tool_handler,
+    delete_mcp_tool_handler, delete_my_mcp_tool_handler, get_mcp_tool_handler,
+    list_mcp_tools_handler, list_my_mcp_tools_handler, upsert_mcp_tool_handler,
+    upsert_my_mcp_tool_handler,
 };
 use crate::app_log;
 use crate::api::group_delete::delete_api_group;
@@ -206,6 +207,10 @@ pub async fn start_http_server(
                             .route("/mcp-tools/{tenant_id}", web::get().to(list_mcp_tools_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::get().to(get_mcp_tool_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::delete().to(delete_mcp_tool_handler))
+                            // Tenant-facing registry (email-keyed; proxied by the gateway)
+                            .route("/user/mcp-tools", web::get().to(list_my_mcp_tools_handler))
+                            .route("/user/mcp-tools", web::put().to(upsert_my_mcp_tool_handler))
+                            .route("/user/mcp-tools/{tool_name}", web::delete().to(delete_my_mcp_tool_handler))
                             // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)
                             .route("/consumer-keys", web::post().to(generate_consumer_key_handler))
                             // Self-service consumer keys (end-users, Firebase JWT auth)

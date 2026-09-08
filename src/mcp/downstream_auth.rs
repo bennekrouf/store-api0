@@ -9,7 +9,8 @@ use crate::endpoint_store::downstream_auth_management::{
 };
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::EndpointStore;
-use actix_web::{web, HttpResponse, Responder};
+use crate::middleware::internal_secret::require_internal_secret;
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -29,9 +30,16 @@ pub struct SaveAuthBody {
 }
 
 pub async fn get_downstream_auth_handler(
+    req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     query: web::Query<EmailQuery>,
 ) -> impl Responder {
+    // This response carries the tenant's bearer token, custom headers and
+    // service-account JSON. An email in a query string is not authentication.
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
     let tenant = match get_default_tenant(&store, &query.email).await {
         Ok(t) => t,
         Err(e) => {
@@ -89,9 +97,16 @@ pub async fn get_downstream_auth_handler(
 }
 
 pub async fn save_downstream_auth_handler(
+    req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     body: web::Json<SaveAuthBody>,
 ) -> impl Responder {
+    // Writing here decides what credential every one of the tenant's tool calls
+    // carries. The gateway binds the email to a verified user before proxying.
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
     let tenant = match get_default_tenant(&store, &body.email).await {
         Ok(t) => t,
         Err(e) => {
@@ -132,9 +147,16 @@ pub async fn save_downstream_auth_handler(
 /// Internal handler — called by the gateway with a direct tenant_id
 /// (avoids going through the email→tenant lookup).
 pub async fn get_downstream_auth_by_id_handler(
+    req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     path: web::Path<String>,
 ) -> impl Responder {
+    // Credentials keyed by tenant id alone — the most sensitive read in the
+    // store, and the one with the least to go on.
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
     let tenant_id = path.into_inner();
     match get_downstream_auth(&store, &tenant_id).await {
         Ok(Some(auth)) => HttpResponse::Ok().json(serde_json::json!({

@@ -243,6 +243,23 @@ CREATE TABLE IF NOT EXISTS mcp_tools (
     -- plain REST request instead of the MCP { tool, arguments } envelope.
     -- NULL means the backend speaks MCP format natively.
     http_verb       VARCHAR         DEFAULT NULL,
+    -- ── Request shaping: what lets a tool front a third-party cloud API ───────
+    -- Request Content-Type. NULL → application/json. Azure DevOps work items
+    -- need application/json-patch+json.
+    content_type    VARCHAR         DEFAULT NULL,
+    -- JSON template rendered against the call arguments, for APIs whose request
+    -- body is not the MCP arguments object. NULL → send the arguments verbatim.
+    -- Placeholders are {arg}; an array element that cannot render completely is
+    -- dropped, an object entry that cannot render is omitted.
+    body_template   TEXT            DEFAULT NULL,
+    -- Constant headers for this tool (JSON object). Applied under the tenant's
+    -- downstream auth, so auth always wins a collision.
+    static_headers  JSONB           DEFAULT NULL,
+    -- Whether to forward api0's identity headers — X-Internal-Secret,
+    -- X-User-Email, X-Tenant-Id, X-Provider-Tenant-Id. TRUE for first-party
+    -- backends; set FALSE on tools pointed at a third-party API so no internal
+    -- secret or end-user email leaves the platform.
+    forward_identity BOOLEAN        NOT NULL DEFAULT TRUE,
     is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
@@ -259,6 +276,12 @@ BEGIN
         ALTER TABLE mcp_tools ADD COLUMN http_verb VARCHAR DEFAULT NULL;
     END IF;
 END $$;
+
+-- Idempotent backfill: request-shaping columns on tables from an earlier deploy.
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS content_type     VARCHAR DEFAULT NULL;
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS body_template    TEXT    DEFAULT NULL;
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS static_headers   JSONB   DEFAULT NULL;
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS forward_identity BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_lookup
     ON mcp_tools(tenant_id, tool_name, is_active);
