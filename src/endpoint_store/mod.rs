@@ -97,7 +97,10 @@ impl EndpointStore {
             .batch_execute(include_str!("../../sql/rls.sql"))
             .await
         {
-            app_log!(warn, "RLS policy execution notice: {}", e);
+            // Not a notice. This file is the tenant isolation policy, and the
+            // whole batch is one transaction: if it fails, some or all policies
+            // are missing and every table it covers is unprotected.
+            app_log!(error, "RLS policies FAILED to apply — tenant isolation is not in place: {}", e);
         } else {
             app_log!(info, "RLS policies applied successfully");
         }

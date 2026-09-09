@@ -154,6 +154,29 @@ pub async fn list_credentials(
     Ok(rows.into_iter().map(row_to_summary).collect())
 }
 
+/// How many people in this tenant have added a credential.
+///
+/// A count, deliberately — not a list. An owner needs to know whether their
+/// workspace is set up; they do not need to see who has and has not, and that
+/// distinction is somebody's business but not this screen's.
+pub async fn count_credentials(
+    store: &EndpointStore,
+    tenant_id: &str,
+) -> Result<i64, StoreError> {
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(DISTINCT user_email) FROM user_downstream_credentials
+             WHERE tenant_id = $1",
+            &[&tenant_id],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(row.get(0))
+}
+
 pub async fn delete_credential(
     store: &EndpointStore,
     tenant_id: &str,

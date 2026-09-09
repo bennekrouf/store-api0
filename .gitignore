@@ -1,3 +1,8 @@
 /target
 db
 test/node_modules
+
+# Local environment. Never committed: secrets belong in the server env files
+# (/opt/api0/*.env, mode 600), not in the repository. See .env.example.
+.env
+.env.local

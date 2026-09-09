@@ -15,7 +15,8 @@
 use crate::app_log;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::user_credentials::{
-    delete_credential, get_secret, list_credentials, save_credential, SaveCredentialRequest,
+    count_credentials, delete_credential, get_secret, list_credentials, save_credential,
+    SaveCredentialRequest,
 };
 use crate::endpoint_store::{EndpointStore, StoreError};
 use crate::infra::secret_box;
@@ -63,14 +64,22 @@ pub async fn list_credentials_handler(
         Err(e) => return store_error_response(e),
     };
 
-    match list_credentials(&store, &tenant.id, &query.email).await {
-        Ok(credentials) => HttpResponse::Ok().json(serde_json::json!({
-            "success": true,
-            "tenant_id": tenant.id,
-            "credentials": credentials
-        })),
-        Err(e) => store_error_response(e),
-    }
+    let credentials = match list_credentials(&store, &tenant.id, &query.email).await {
+        Ok(c) => c,
+        Err(e) => return store_error_response(e),
+    };
+
+    // How many people are set up, so an owner can tell whether the workspace is
+    // ready without being shown who is and is not.
+    let people_configured = count_credentials(&store, &tenant.id).await.unwrap_or(0);
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "tenant_id": tenant.id,
+        "tenant_name": tenant.name,
+        "credentials": credentials,
+        "people_configured": people_configured
+    }))
 }
 
 pub async fn save_credential_handler(
