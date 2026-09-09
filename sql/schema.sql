@@ -526,3 +526,62 @@ ALTER TABLE mcp_tools              ADD COLUMN IF NOT EXISTS static_headers_enc  
 -- has no token of their own and can do nothing — and a poor idea for one with a
 -- shared downstream credential, where connecting would borrow it.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS allow_api0_signin BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ── Verifying a per-user credential on save ──────────────────────────────────
+-- A pasted token is a bearer credential: whoever holds it acts as its owner, and
+-- nothing about storing it proves it belongs to the person who pasted it. If one
+-- person stores another's token, every action they take is attributed to that
+-- other person, silently.
+--
+-- So a tenant can name a read-only endpoint that answers "who is this token?".
+-- On save the gateway calls it with the token and records the answer, which
+-- turns an assumption into something displayed next to the token — and rejects
+-- a token that does not authenticate at all, at paste time rather than at the
+-- first tool call.
+--
+--   per_user_verify_url      GET endpoint, called with the user's credential
+--   per_user_identity_pointer  RFC 6901 JSON pointer into its response
+--
+-- Azure DevOps, for example:
+--   url      https://dev.azure.com/<org>/_apis/connectionData?api-version=7.1
+--   pointer  /authenticatedUser/properties/Account/$value
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_verify_url       VARCHAR;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_identity_pointer VARCHAR;
+
+-- Who the stored token turned out to be. NULL when the tenant configured no
+-- verification, or when it was stored before verification existed.
+ALTER TABLE user_downstream_credentials ADD COLUMN IF NOT EXISTS verified_identity VARCHAR;
+
+-- ── Inbound identity: how a tenant's people prove who they are to api0 ───────
+-- Modelled as protocol + issuer rather than a list of vendor names. With OIDC
+-- discovery the endpoints and signing keys are fetched from the issuer at run
+-- time, so Entra, Okta, Auth0 and Google are configuration rather than code.
+--
+--   idp_issuer         e.g. https://login.microsoftonline.com/<directory>/v2.0
+--   idp_client_id      the app registration's client id
+--   idp_client_secret  sealed by infra::secret_box — never leaves the server
+--
+-- A tenant with an issuer set signs its people in there. Without one it falls
+-- back to google_client_id, or to api0's own sign-in when allow_api0_signin.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS idp_issuer        VARCHAR;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS idp_client_id     VARCHAR;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS idp_client_secret BYTEA;
+
+-- One row per in-flight sign-in, holding the PKCE verifier.
+--
+-- In Postgres rather than memory on purpose: the authorize leg and the callback
+-- are separate requests, and both processes run single-instance today. An
+-- in-memory map would work now and start failing on a fraction of logins the
+-- day someone sets instances > 1 — intermittently, with an error that looks
+-- like the identity provider's fault.
+--
+-- Deleted on use, so it is also replay protection for the authorization code.
+CREATE TABLE IF NOT EXISTS idp_auth_requests (
+    state_nonce VARCHAR     PRIMARY KEY,
+    tenant_id   VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    verifier    VARCHAR     NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_idp_auth_requests_created
+    ON idp_auth_requests(created_at);
