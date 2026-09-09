@@ -510,3 +510,19 @@ ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS bearer_token_enc    
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS custom_headers_enc       BYTEA;
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS service_account_json_enc BYTEA;
 ALTER TABLE mcp_tools              ADD COLUMN IF NOT EXISTS static_headers_enc       BYTEA;
+
+-- ── How a tenant's people sign in ────────────────────────────────────────────
+-- A tenant registered as an OAuth client (mcp_client_id) must say how its users
+-- authenticate, or the consent flow refuses it — a tenant that is registered but
+-- not configured must fail, never fall through to a broader identity pool.
+--
+-- Two ways to be configured:
+--   google_client_id set   → users sign in through that Google workspace
+--   allow_api0_signin true → users sign in with their own api0 account
+--
+-- The second is deliberately opt-in and defaults to false, because it means
+-- *any* api0 account may connect to this workspace. That is reasonable for a
+-- tenant whose tools use per-user credentials — a stranger who connects still
+-- has no token of their own and can do nothing — and a poor idea for one with a
+-- shared downstream credential, where connecting would borrow it.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS allow_api0_signin BOOLEAN NOT NULL DEFAULT FALSE;
