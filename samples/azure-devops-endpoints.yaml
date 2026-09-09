@@ -1,0 +1,220 @@
+# Azure DevOps endpoints for upload through the dashboard (My Endpoints → upload).
+#
+# Every endpoint here becomes an MCP tool automatically, named
+# slug("<group name> <text>") — so "query work items" below arrives in Claude as
+# `azure-devops-work-items-query-work-items`.
+#
+# ── What is NOT here, and why ────────────────────────────────────────────────
+# Creating and updating work items are missing on purpose. Azure DevOps takes
+# both as a JSON *Patch* array with Content-Type application/json-patch+json,
+# and an uploaded endpoint can express neither: it always sends the arguments
+# object as-is, as application/json. Those two live in the tool registry instead
+# (mcp_tools), where content_type and body_template exist. `create_work_item` is
+# already registered on this tenant.
+#
+# ── Before uploading, read this ──────────────────────────────────────────────
+# An uploaded endpoint currently forwards api0's identity headers —
+# X-Internal-Secret, X-User-Email, X-Tenant-Id — to whatever host it points at.
+# That is right for your own backend and wrong for dev.azure.com, which has no
+# use for them and will log them. Until endpoints can carry forward_identity,
+# treat these as read-only conveniences rather than the permanent home.
+#
+# Replace `oryxenergies` below if you point this at another organisation.
+
+api_groups:
+
+  # ── Work items ──────────────────────────────────────────────────────────────
+  - name: "Azure DevOps Work Items"
+    description: "Find, read and comment on Azure DevOps work items"
+    base: "https://dev.azure.com/oryxenergies"
+    endpoints:
+
+      - text: "query work items"
+        description: >-
+          Find work items with a WIQL query. WIQL is SQL-like, e.g.
+          SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = 'Task'
+          AND [System.State] <> 'Closed' AND [System.AssignedTo] = @Me
+          ORDER BY [System.ChangedDate] DESC.
+          Returns matching ids only — follow with "get work items batch" to read
+          their fields.
+        verb: "POST"
+        path: "/{project}/_apis/wit/wiql?api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name. Spaces are fine."
+            required: "true"
+            alternatives: ["project_name", "team_project"]
+          - name: "query"
+            description: "The WIQL statement."
+            required: "true"
+            alternatives: ["wiql", "sql"]
+
+      - text: "get work items batch"
+        description: >-
+          Read many work items at once by id, optionally limited to named fields.
+          Up to 200 ids per call. Pairs with "query work items", which returns ids.
+        verb: "POST"
+        path: "/_apis/wit/workitemsbatch?api-version=7.1"
+        parameters:
+          - name: "ids"
+            description: "Array of work item ids, e.g. [1204, 1205]."
+            required: "true"
+            alternatives: ["work_item_ids", "identifiers"]
+          - name: "fields"
+            description: >-
+              Optional array of field names, e.g.
+              ["System.Id","System.Title","System.State","System.AssignedTo"].
+            required: "false"
+            alternatives: ["columns", "field_names"]
+
+      - text: "list work item comments"
+        description: "Read the discussion on one work item."
+        verb: "GET"
+        path: "/{project}/_apis/wit/workItems/{id}/comments?api-version=7.1-preview.4"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+          - name: "id"
+            description: "Work item id."
+            required: "true"
+            alternatives: ["work_item_id", "item_id"]
+
+      - text: "add work item comment"
+        description: "Post a comment on a work item."
+        verb: "POST"
+        path: "/{project}/_apis/wit/workItems/{id}/comments?api-version=7.1-preview.4"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+          - name: "id"
+            description: "Work item id."
+            required: "true"
+            alternatives: ["work_item_id", "item_id"]
+          - name: "text"
+            description: "Comment body. HTML is allowed."
+            required: "true"
+            alternatives: ["comment", "body", "message"]
+
+  # ── Project structure ───────────────────────────────────────────────────────
+  # What the model needs before it can create or file anything correctly:
+  # which projects exist, which sprints, which teams.
+  - name: "Azure DevOps Projects"
+    description: "Projects, iterations and teams in Azure DevOps"
+    base: "https://dev.azure.com/oryxenergies"
+    endpoints:
+
+      - text: "list projects"
+        description: "List the projects in the organisation."
+        verb: "GET"
+        path: "/_apis/projects?api-version=7.1"
+        parameters: []
+
+      - text: "get current iteration"
+        description: >-
+          The sprint a team is in right now, with its path. Use the returned
+          path as System.IterationPath in a WIQL query or when creating a work
+          item. This is the reliable way to answer "the current sprint" — the
+          WIQL @CurrentIteration macro only resolves when the query itself is
+          scoped to a team, which this avoids.
+        verb: "GET"
+        path: "/{project}/{team}/_apis/work/teamsettings/iterations?$timeframe=current&api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+          - name: "team"
+            description: >-
+              Team name. Defaults are usually "<Project> Team"; get exact names
+              from "list teams".
+            required: "true"
+            alternatives: ["team_name"]
+
+      - text: "list iterations"
+        description: >-
+          List the iteration (sprint) tree for a project. Use the returned paths
+          as System.IterationPath when creating or updating a work item.
+        verb: "GET"
+        path: "/{project}/_apis/wit/classificationnodes/iterations?$depth=3&api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+
+      - text: "list areas"
+        description: >-
+          List the area path tree for a project. Use the returned paths as
+          System.AreaPath.
+        verb: "GET"
+        path: "/{project}/_apis/wit/classificationnodes/areas?$depth=3&api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+
+      - text: "list teams"
+        description: "List the teams in a project, for assignment and sprint queries."
+        verb: "GET"
+        path: "/_apis/projects/{project}/teams?api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name or id."
+            required: "true"
+            alternatives: ["project_name"]
+
+  # ── Code and pipelines ──────────────────────────────────────────────────────
+  # Optional. Delete this group if you only care about work items.
+  - name: "Azure DevOps Code"
+    description: "Repositories, pull requests and builds"
+    base: "https://dev.azure.com/oryxenergies"
+    endpoints:
+
+      - text: "list repositories"
+        description: "List the Git repositories in a project."
+        verb: "GET"
+        path: "/{project}/_apis/git/repositories?api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+
+      - text: "list pull requests"
+        description: >-
+          List pull requests in a repository. Add searchCriteria.status=active,
+          completed or abandoned to filter.
+        verb: "GET"
+        path: "/{project}/_apis/git/repositories/{repository}/pullrequests?api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+          - name: "repository"
+            description: "Repository name or id."
+            required: "true"
+            alternatives: ["repo", "repository_name"]
+          - name: "searchCriteria.status"
+            description: "active, completed, abandoned or all."
+            required: "false"
+            alternatives: ["status", "state"]
+
+      - text: "list builds"
+        description: "List recent pipeline runs in a project."
+        verb: "GET"
+        path: "/{project}/_apis/build/builds?api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name"]
+          - name: "$top"
+            description: "How many builds to return, e.g. 20."
+            required: "false"
+            alternatives: ["limit", "count"]

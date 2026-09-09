@@ -24,6 +24,10 @@ pub struct TenantDownstreamAuth {
     //   scheme "raw"       → <header>: <secret>
     pub per_user_scheme: Option<String>,
     pub per_user_header: Option<String>,
+    /// Read-only endpoint that answers "who is this token?" — see schema.sql.
+    pub per_user_verify_url: Option<String>,
+    /// JSON pointer into that endpoint's response.
+    pub per_user_identity_pointer: Option<String>,
     pub updated_at: String,
 }
 
@@ -36,6 +40,8 @@ pub struct SaveDownstreamAuthRequest {
     pub custom_headers: Option<Value>,
     pub per_user_scheme: Option<String>,
     pub per_user_header: Option<String>,
+    pub per_user_verify_url: Option<String>,
+    pub per_user_identity_pointer: Option<String>,
 }
 
 /// Open a sealed column, falling back to the plaintext one for rows the backfill
@@ -85,7 +91,8 @@ pub async fn get_downstream_auth(
             "SELECT tenant_id, auth_mode, service_account_json, target_audience,
                     bearer_token, custom_headers, per_user_scheme, per_user_header,
                     updated_at, bearer_token_enc, custom_headers_enc,
-                    service_account_json_enc
+                    service_account_json_enc, per_user_verify_url,
+                    per_user_identity_pointer
              FROM tenant_downstream_auth WHERE tenant_id = $1",
             &[&tenant_id],
         )
@@ -111,6 +118,8 @@ pub async fn get_downstream_auth(
             custom_headers,
             per_user_scheme:      r.get(6),
             per_user_header:      r.get(7),
+            per_user_verify_url:  r.get(12),
+            per_user_identity_pointer: r.get(13),
             updated_at:           r.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
         }
     }))
@@ -148,8 +157,9 @@ pub async fn save_downstream_auth(
                 (tenant_id, auth_mode, service_account_json, target_audience,
                  bearer_token, custom_headers, per_user_scheme, per_user_header,
                  updated_at, bearer_token_enc, service_account_json_enc,
-                 custom_headers_enc)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 custom_headers_enc, per_user_verify_url,
+                 per_user_identity_pointer)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              ON CONFLICT (tenant_id) DO UPDATE SET
                 auth_mode                = EXCLUDED.auth_mode,
                 service_account_json     = EXCLUDED.service_account_json,
@@ -158,6 +168,8 @@ pub async fn save_downstream_auth(
                 custom_headers           = EXCLUDED.custom_headers,
                 per_user_scheme          = EXCLUDED.per_user_scheme,
                 per_user_header          = EXCLUDED.per_user_header,
+                per_user_verify_url      = EXCLUDED.per_user_verify_url,
+                per_user_identity_pointer = EXCLUDED.per_user_identity_pointer,
                 updated_at               = EXCLUDED.updated_at,
                 bearer_token_enc         = EXCLUDED.bearer_token_enc,
                 service_account_json_enc = EXCLUDED.service_account_json_enc,
@@ -178,6 +190,8 @@ pub async fn save_downstream_auth(
                 &bearer_enc as &(dyn tokio_postgres::types::ToSql + Sync),
                 &sa_enc as &(dyn tokio_postgres::types::ToSql + Sync),
                 &headers_enc as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.per_user_verify_url as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.per_user_identity_pointer as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -196,6 +210,8 @@ pub async fn save_downstream_auth(
         custom_headers:       req.custom_headers.clone(),
         per_user_scheme:      row.get(6),
         per_user_header:      row.get(7),
+        per_user_verify_url:  req.per_user_verify_url.clone(),
+        per_user_identity_pointer: req.per_user_identity_pointer.clone(),
         updated_at:           row.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
     })
 }

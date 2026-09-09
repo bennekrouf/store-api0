@@ -24,6 +24,10 @@ pub struct CredentialSummary {
     pub kind: String,
     pub label: String,
     pub expires_at: Option<String>,
+    /// Who the token turned out to be, when the tenant configured verification.
+    /// This is the difference between "a token is stored" and "this token acts
+    /// as mohamed.bennekrouf@cgi.com".
+    pub verified_identity: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -36,6 +40,10 @@ pub struct SaveCredentialRequest {
     pub label: Option<String>,
     /// RFC 3339. Advisory — what the user says the provider will enforce.
     pub expires_at: Option<String>,
+    /// Resolved by the gateway before this reaches the store. Never supplied by
+    /// a browser: the point is that it comes from the downstream service, not
+    /// from whoever is pasting.
+    pub verified_identity: Option<String>,
 }
 
 pub async fn save_credential(
@@ -73,14 +81,17 @@ pub async fn save_credential(
     let row = client
         .query_one(
             "INSERT INTO user_downstream_credentials
-                (tenant_id, user_email, kind, secret, label, expires_at, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+                (tenant_id, user_email, kind, secret, label, expires_at,
+                 verified_identity, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
              ON CONFLICT (tenant_id, user_email, kind) DO UPDATE SET
-                secret     = EXCLUDED.secret,
-                label      = EXCLUDED.label,
-                expires_at = EXCLUDED.expires_at,
-                updated_at = NOW()
-             RETURNING tenant_id, user_email, kind, label, expires_at, created_at, updated_at",
+                secret            = EXCLUDED.secret,
+                label             = EXCLUDED.label,
+                expires_at        = EXCLUDED.expires_at,
+                verified_identity = EXCLUDED.verified_identity,
+                updated_at        = NOW()
+             RETURNING tenant_id, user_email, kind, label, expires_at,
+                       verified_identity, created_at, updated_at",
             &[
                 &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
                 &user_email as &(dyn tokio_postgres::types::ToSql + Sync),
@@ -88,6 +99,7 @@ pub async fn save_credential(
                 &sealed as &(dyn tokio_postgres::types::ToSql + Sync),
                 &label as &(dyn tokio_postgres::types::ToSql + Sync),
                 &expires_at as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.verified_identity as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -142,7 +154,8 @@ pub async fn list_credentials(
 
     let rows = client
         .query(
-            "SELECT tenant_id, user_email, kind, label, expires_at, created_at, updated_at
+            "SELECT tenant_id, user_email, kind, label, expires_at,
+                    verified_identity, created_at, updated_at
              FROM user_downstream_credentials
              WHERE tenant_id = $1 AND user_email = $2
              ORDER BY kind",
@@ -248,7 +261,8 @@ pub async fn credential_slots(
 
         let credential = client
             .query_opt(
-                "SELECT tenant_id, user_email, kind, label, expires_at, created_at, updated_at
+                "SELECT tenant_id, user_email, kind, label, expires_at,
+                        verified_identity, created_at, updated_at
                  FROM user_downstream_credentials
                  WHERE tenant_id = $1 AND user_email = $2",
                 &[&tenant_id, &email],
@@ -316,7 +330,8 @@ fn row_to_summary(row: tokio_postgres::Row) -> CredentialSummary {
         expires_at: row
             .get::<_, Option<DateTime<Utc>>>(4)
             .map(|t| t.to_rfc3339()),
-        created_at: row.get::<_, DateTime<Utc>>(5).to_rfc3339(),
-        updated_at: row.get::<_, DateTime<Utc>>(6).to_rfc3339(),
+        verified_identity: row.get(5),
+        created_at: row.get::<_, DateTime<Utc>>(6).to_rfc3339(),
+        updated_at: row.get::<_, DateTime<Utc>>(7).to_rfc3339(),
     }
 }
