@@ -54,6 +54,7 @@ async fn fetch_custom_groups_with_endpoints(
             description: row.get(2),
             base: row.get(3),
             tenant_id: row.get::<_, Option<String>>(4).unwrap_or_default(),
+            forward_identity: None,
         };
 
         let endpoints = fetch_custom_endpoints(client, email, &group.id).await?;
@@ -80,7 +81,8 @@ async fn fetch_custom_endpoints(
         SELECT 
             e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
             p.name, p.description, p.required, 
-            string_agg(pa.alternative, ',') as alternatives
+            string_agg(pa.alternative, ',') as alternatives,
+            e.content_type, e.body_template, e.forward_identity
         FROM endpoints e
         INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
@@ -88,6 +90,7 @@ async fn fetch_custom_endpoints(
         WHERE ue.email = $1 AND e.group_id = $2
         GROUP BY 
             e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
+            e.content_type, e.body_template, e.forward_identity,
             p.name, p.description, p.required
     "#;
 
@@ -116,6 +119,9 @@ async fn fetch_custom_endpoints(
         let param_desc: Option<String> = row.get(8);
         let required: Option<bool> = row.get(9);
         let alternatives_str: Option<String> = row.get(10);
+        let content_type: Option<String> = row.get(11);
+        let body_template: Option<String> = row.get(12);
+        let forward_identity: Option<bool> = row.get(13);
 
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
             app_log!(debug,
@@ -134,6 +140,9 @@ async fn fetch_custom_endpoints(
                 suggested_sentence,
                 parameters: Vec::new(),
                 group_id: group_id.to_string(),
+                content_type,
+                body_template,
+                forward_identity,
             }
         });
 

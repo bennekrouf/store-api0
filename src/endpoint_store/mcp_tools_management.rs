@@ -210,7 +210,8 @@ pub async fn list_mcp_tools(
     // groups is a question for that tenant, not for the namespace boundary.
     let endpoint_rows = client
         .query(
-            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
+            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id,
+                    e.content_type, e.body_template, e.forward_identity
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
@@ -231,7 +232,10 @@ pub async fn list_mcp_tools(
         let g_base: String = row.get(6);
         let path: String = row.get(7);
         let endpoint_id: String = row.get(8);
-        
+        let content_type: Option<String> = row.get(9);
+        let body_template: Option<String> = row.get(10);
+        let forward_identity: Option<bool> = row.get(11);
+
         let raw_name = format!("{} {}", group_name, endpoint_text);
         let tool_name = slugify(&raw_name);
         if tool_name.is_empty() { continue; }
@@ -282,12 +286,13 @@ pub async fn list_mcp_tools(
             cost_credits: None,
             timeout_ms: 30000,
             http_verb: Some(verb.to_uppercase()),
-            // Endpoint-imported tools front first-party backends: arguments go
-            // over as-is, and the identity headers travel with them.
-            content_type: None,
-            body_template: None,
+            // Arguments go over as-is unless the endpoint declared a body
+            // template, and the identity headers travel only when the endpoint
+            // did not opt out. NULL means true, as it always did.
+            content_type,
+            body_template,
             static_headers: None,
-            forward_identity: true,
+            forward_identity: forward_identity.unwrap_or(true),
             is_active: true,
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
@@ -341,7 +346,8 @@ pub async fn get_mcp_tool(
     // groups is a question for that tenant, not for the namespace boundary.
     let endpoint_rows = client
         .query(
-            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
+            "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id,
+                    e.content_type, e.body_template, e.forward_identity
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
@@ -363,6 +369,9 @@ pub async fn get_mcp_tool(
             let g_base: String = row.get(6);
             let path: String = row.get(7);
             let endpoint_id: String = row.get(8);
+            let content_type: Option<String> = row.get(9);
+            let body_template: Option<String> = row.get(10);
+            let forward_identity: Option<bool> = row.get(11);
 
             let base = if e_base.is_empty() { &g_base } else { &e_base };
             let backend_url = format!("{}{}", base.trim_end_matches('/'), path);
@@ -401,10 +410,10 @@ pub async fn get_mcp_tool(
                 cost_credits: None,
                 timeout_ms: 30000,
                 http_verb: Some(verb.to_uppercase()),
-                content_type: None,
-                body_template: None,
+                content_type,
+                body_template,
                 static_headers: None,
-                forward_identity: true,
+                forward_identity: forward_identity.unwrap_or(true),
                 is_active: true,
                 created_at: Utc::now().to_rfc3339(),
                 updated_at: Utc::now().to_rfc3339(),
@@ -498,10 +507,13 @@ pub async fn sync_endpoints_as_mcp_tools(
                 cost_credits: None,
                 timeout_ms: Some(30_000),
                 http_verb: Some(endpoint.verb.to_uppercase()),
-                content_type: None,
-                body_template: None,
+                // Carried from the uploaded endpoint: this is what lets a spec
+                // describe a JSON Patch body rather than a flat JSON object.
+                content_type: endpoint.content_type.clone(),
+                body_template: endpoint.body_template.clone(),
                 static_headers: None,
-                forward_identity: Some(true),
+                // NULL means true — the historical behaviour for first-party backends.
+                forward_identity: Some(endpoint.forward_identity.unwrap_or(true)),
             };
 
             match upsert_mcp_tool(store, tenant_id, &req).await {

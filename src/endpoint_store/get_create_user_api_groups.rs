@@ -37,6 +37,7 @@ pub async fn get_or_create_user_api_groups(
         description: "Your default API group".to_string(),
         base: "https://api.example.com".to_string(),
         tenant_id: tenant_id.clone(),
+        forward_identity: None,
     };
 
     // Create a sample endpoint for the default group
@@ -50,6 +51,9 @@ pub async fn get_or_create_user_api_groups(
         suggested_sentence: "Get the sample resource".to_string(),
         group_id: default_group_id.clone(),
         parameters: vec![],
+        content_type: None,
+        body_template: None,
+        forward_identity: None,
     };
 
     // Insert the default group
