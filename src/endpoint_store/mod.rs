@@ -1,4 +1,5 @@
 mod add_user_api_group;
+pub mod encrypt_legacy;
 pub mod user_credentials;
 pub mod api_key_management;
 pub mod mcp_tools_management;

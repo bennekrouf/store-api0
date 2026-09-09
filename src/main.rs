@@ -49,14 +49,30 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     let log_path = env::var("LOG_PATH_API0").unwrap_or_else(|_| "/var/log/api0.log".to_string());
+
+    // Verbosity is a deployment decision, not a compile-time one. This used to be
+    // hardcoded to Debug with `store=trace`, which meant production logged every
+    // prepared SQL statement — including the whole schema on each restart — into
+    // an unrotated file. Debug is what you want while working on the store, and
+    // the wrong default for a service holding credentials.
+    //
+    //   API0_LOG_LEVEL = trace | debug | info (default) | warn | error
+    let level = env::var("API0_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+    let (level_option, crate_filter) = match level.trim().to_lowercase().as_str() {
+        "trace" => (LogOption::Trace, "h2=info,store=trace"),
+        "debug" => (LogOption::Debug, "h2=info,store=debug"),
+        "warn" => (LogOption::Warn, "h2=warn,store=warn"),
+        "error" => (LogOption::Error, "h2=error,store=error"),
+        // Anything unrecognised lands here too: a typo should make the service
+        // quieter, never more verbose.
+        _ => (LogOption::Info, "h2=info,store=info,tokio_postgres=warn"),
+    };
+
     init_logging!(
         &log_path,
         "api0",
         "store",
-        &[
-            LogOption::Debug,
-            LogOption::Custom("h2=info,store=trace".to_string())
-        ]
+        &[level_option, LogOption::Custom(crate_filter.to_string())]
     );
     ensure_database_url();
 

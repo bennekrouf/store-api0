@@ -6,6 +6,7 @@
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{ApiGroupWithEndpoints, EndpointStore, StoreError};
+use crate::infra::secret_box::{self, SecretContext};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use slug::slugify;
@@ -87,6 +88,17 @@ pub async fn upsert_mcp_tool(
     let http_verb = req.http_verb.as_deref().map(|v| v.to_uppercase());
     let forward_identity = req.forward_identity.unwrap_or(true);
 
+    // static_headers can carry an API key, so it is sealed like any other
+    // secret. The plaintext column stays NULL from here on.
+    let static_headers_enc = match req.static_headers.as_ref().filter(|v| !v.is_null()) {
+        Some(v) => Some(
+            secret_box::seal(&v.to_string(), &SecretContext { tenant_id, purpose: "static_headers" })
+                .map_err(|e| StoreError::InvalidInput(format!("could not store static_headers: {}", e)))?,
+        ),
+        None => None,
+    };
+    let no_headers: Option<serde_json::Value> = None;
+
     // A body template that is not valid JSON would only fail later, inside the
     // gateway, on a call the caller can no longer connect to this write.
     if let Some(raw) = req.body_template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -104,9 +116,9 @@ pub async fn upsert_mcp_tool(
                 (id, tenant_id, tool_name, backend_url, description,
                  input_schema, cost_credits, timeout_ms, http_verb,
                  content_type, body_template, static_headers, forward_identity,
-                 is_active, created_at, updated_at)
+                 is_active, created_at, updated_at, static_headers_enc)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                     true, $14, $14)
+                     true, $14, $14, $15)
              ON CONFLICT (tenant_id, tool_name) DO UPDATE SET
                 backend_url      = EXCLUDED.backend_url,
                 description      = EXCLUDED.description,
@@ -116,7 +128,8 @@ pub async fn upsert_mcp_tool(
                 http_verb        = EXCLUDED.http_verb,
                 content_type     = EXCLUDED.content_type,
                 body_template    = EXCLUDED.body_template,
-                static_headers   = EXCLUDED.static_headers,
+                static_headers     = EXCLUDED.static_headers,
+                static_headers_enc = EXCLUDED.static_headers_enc,
                 forward_identity = EXCLUDED.forward_identity,
                 is_active        = true,
                 updated_at       = EXCLUDED.updated_at
@@ -136,9 +149,10 @@ pub async fn upsert_mcp_tool(
                 &http_verb as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.content_type as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.body_template as &(dyn tokio_postgres::types::ToSql + Sync),
-                &req.static_headers as &(dyn tokio_postgres::types::ToSql + Sync),
+                &no_headers as &(dyn tokio_postgres::types::ToSql + Sync),
                 &forward_identity as &(dyn tokio_postgres::types::ToSql + Sync),
                 &now as &(dyn tokio_postgres::types::ToSql + Sync),
+                &static_headers_enc as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -151,7 +165,10 @@ pub async fn upsert_mcp_tool(
         "Upserted MCP tool"
     );
 
-    Ok(row_to_tool(row))
+    // The row holds a NULL plaintext column now; echo back what was submitted.
+    let mut tool = row_to_tool(row);
+    tool.static_headers = req.static_headers.clone();
+    Ok(tool)
 }
 
 pub async fn list_mcp_tools(
@@ -167,7 +184,8 @@ pub async fn list_mcp_tools(
             "SELECT id, tenant_id, tool_name, backend_url, description,
                     input_schema, cost_credits, timeout_ms, http_verb,
                     content_type, body_template, static_headers,
-                    forward_identity, is_active, created_at, updated_at
+                    forward_identity, is_active, created_at, updated_at,
+                    static_headers_enc
              FROM mcp_tools
              WHERE tenant_id = $1 AND is_active = true
              ORDER BY tool_name",
@@ -290,7 +308,8 @@ pub async fn get_mcp_tool(
             "SELECT id, tenant_id, tool_name, backend_url, description,
                     input_schema, cost_credits, timeout_ms, http_verb,
                     content_type, body_template, static_headers,
-                    forward_identity, is_active, created_at, updated_at
+                    forward_identity, is_active, created_at, updated_at,
+                    static_headers_enc
              FROM mcp_tools
              WHERE tenant_id = $1 AND tool_name = $2 AND is_active = true",
             &[&tenant_id, &tool_name],
@@ -573,7 +592,17 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
         http_verb:        row.get(8),
         content_type:     row.get(9),
         body_template:    row.get(10),
-        static_headers:   row.get(11),
+        // Sealed value wins; the plaintext column is the pre-migration fallback.
+        static_headers:   row
+            .try_get::<_, Option<Vec<u8>>>(16)
+            .ok()
+            .flatten()
+            .and_then(|bytes| {
+                let tenant: String = row.get(1);
+                secret_box::open(&bytes, &SecretContext { tenant_id: &tenant, purpose: "static_headers" }).ok()
+            })
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .or_else(|| row.get::<_, Option<serde_json::Value>>(11)),
         forward_identity: row.get(12),
         is_active:        row.get(13),
         created_at:       row.get::<_, chrono::DateTime<Utc>>(14).to_rfc3339(),

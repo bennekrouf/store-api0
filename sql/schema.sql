@@ -488,3 +488,25 @@ CREATE INDEX IF NOT EXISTS idx_user_downstream_credentials_tenant
 --   per_user_header = header name, defaults to Authorization
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_scheme VARCHAR;
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_header VARCHAR;
+
+-- ── Encryption of the legacy secret columns ──────────────────────────────────
+-- These columns predate infra::secret_box and hold plaintext. Rather than
+-- change their types in place — which would break any running instance mid
+-- deploy — each gets a BYTEA sibling holding the sealed value.
+--
+-- Reads prefer the sealed column and fall back to the plaintext one, so a row
+-- that has not been migrated yet still works. Writes only ever populate the
+-- sealed column and NULL the plaintext one, so anything written after this
+-- deploy is encrypted with no migration needed at all.
+--
+-- The backfill of existing rows is deliberately NOT automatic: it is a one-shot
+-- rewrite of live credentials and wants a database backup taken first. Run it
+-- with POST /api/internal/encrypt-legacy-secrets. It is re-runnable and skips
+-- rows that are already sealed.
+--
+-- Once the backfill has run and been verified, the plaintext columns can be
+-- dropped in a later release.
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS bearer_token_enc         BYTEA;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS custom_headers_enc       BYTEA;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS service_account_json_enc BYTEA;
+ALTER TABLE mcp_tools              ADD COLUMN IF NOT EXISTS static_headers_enc       BYTEA;
