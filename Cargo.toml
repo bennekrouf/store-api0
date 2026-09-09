@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-api0-types = { git = "https://github.com/bennekrouf/api0-types", rev = "31592d3f3fa3da724cd9af2e15db807bfcb1f524" }
+api0-types = { git = "https://github.com/bennekrouf/api0-types", rev = "162c934c98272d24cf1091b90df3beab146ed559" }
 chrono = { version = "0.4.39", features = ["serde"] }
 futures = "0.3.31"
 prost = "0.13.4"
@@ -50,8 +50,3 @@ name = "store"
 path = "src/main.rs"
 
 
-# TEMPORARY — local build only. api0-types gained `content_type` / `body_template`
-# on Endpoint; this points at the working copy so the change compiles before it is
-# pushed. REMOVE THIS BLOCK and bump the `rev` above once api0-types is pushed.
-[patch."https://github.com/bennekrouf/api0-types"]
-api0-types = { path = "../api0-types" }
