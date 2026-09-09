@@ -73,6 +73,9 @@ pub struct ModelConfigResponse {
     pub success: bool,
     pub config: ModelConfigEntry,
     pub available_models: serde_json::Value,
+    /// Providers this server has an API key for. `null` when the uploader could
+    /// not be reached — which the dashboard must treat as "unknown", not "none".
+    pub usable_providers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -90,6 +93,9 @@ pub async fn get_model_config(
             .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
     }
     let (provider, model) = read_ai_config(&store).await;
+    // None when the uploader could not be reached; the panel then shows every
+    // provider rather than wrongly claiming none work.
+    let usable = usable_providers().await;
     HttpResponse::Ok().json(ModelConfigResponse {
         success: true,
         config: ModelConfigEntry { provider, model },
@@ -98,6 +104,7 @@ pub async fn get_model_config(
             "deepseek": VALID_DEEPSEEK_MODELS,
             "claude": VALID_CLAUDE_MODELS,
         }),
+        usable_providers: usable,
     })
 }
 
@@ -105,6 +112,38 @@ pub async fn get_model_config(
 pub struct UpdateModelConfigRequest {
     pub provider: Option<String>,
     pub model: Option<String>,
+}
+
+/// Which providers the uploader can actually serve on this deployment.
+///
+/// The API keys are in the uploader's environment and nowhere else, so it is the
+/// only component that can answer. A failure to reach it returns None, and the
+/// caller treats that as "cannot verify" rather than "cannot use" — a health
+/// blip should not block an administrator from changing a setting.
+async fn usable_providers() -> Option<Vec<String>> {
+    let url = std::env::var("AI_UPLOADER_URL").ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+
+    let body: serde_json::Value = client
+        .get(format!("{}/providers", url.trim_end_matches('/')))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    Some(
+        body["providers"]
+            .as_array()?
+            .iter()
+            .filter(|p| p["configured"].as_bool().unwrap_or(false))
+            .filter_map(|p| p["provider"].as_str().map(str::to_string))
+            .collect(),
+    )
 }
 
 pub async fn update_model_config(
@@ -132,6 +171,24 @@ pub async fn update_model_config(
                 "success": false,
                 "error": format!("Invalid provider '{}'. Valid: {:?}", provider, VALID_PROVIDERS),
             }));
+        }
+
+        // Being in VALID_PROVIDERS says the uploader has code for it. It does not
+        // say this machine has a key. Saving one without a key is how the whole
+        // AI import path came to be broken since July with nothing on screen to
+        // say so, so it is refused here rather than discovered in a log.
+        if let Some(usable) = usable_providers().await {
+            if !usable.iter().any(|p| p == provider) {
+                app_log!(warn, provider = %provider, "Refused a provider with no API key configured");
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "success": false,
+                    "error": format!(
+                        "'{}' has no API key on this server. Set its key in the uploader's environment first. Available now: {}",
+                        provider,
+                        if usable.is_empty() { "none".to_string() } else { usable.join(", ") }
+                    ),
+                }));
+            }
         }
         if let Err(e) = client
             .execute(
@@ -185,6 +242,9 @@ pub async fn update_model_config(
 // Public read-only endpoint for internal services (ai-uploader, no auth).
 pub async fn get_ai_config_public(store: web::Data<Arc<EndpointStore>>) -> impl Responder {
     let (provider, model) = read_ai_config(&store).await;
+    // None when the uploader could not be reached; the panel then shows every
+    // provider rather than wrongly claiming none work.
+    let usable = usable_providers().await;
     HttpResponse::Ok().json(serde_json::json!({
         "provider": provider,
         "model": model,
