@@ -1,4 +1,5 @@
 mod add_user_api_group;
+pub mod encrypt_legacy;
 pub mod user_credentials;
 pub mod api_key_management;
 pub mod mcp_tools_management;
@@ -540,7 +541,7 @@ impl EndpointStore {
     pub async fn get_tenant_by_mcp_client_id(
         &self,
         mcp_client_id: &str,
-    ) -> Result<Option<(models::Tenant, Option<String>)>, StoreError> {
+    ) -> Result<Option<(models::Tenant, Option<String>, bool)>, StoreError> {
         tenant_management::get_tenant_by_mcp_client_id(self, mcp_client_id).await
     }
 

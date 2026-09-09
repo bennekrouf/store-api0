@@ -15,8 +15,8 @@
 use crate::app_log;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::user_credentials::{
-    count_credentials, delete_credential, get_secret, list_credentials, save_credential,
-    SaveCredentialRequest,
+    count_credentials, credential_slots, delete_credential, get_secret, require_tenant_access,
+    save_credential, SaveCredentialRequest,
 };
 use crate::endpoint_store::{EndpointStore, StoreError};
 use crate::infra::secret_box;
@@ -28,13 +28,41 @@ use std::sync::Arc;
 #[derive(Deserialize)]
 pub struct EmailQuery {
     pub email: String,
+    /// Which workspace the credential belongs to. Omitted → the caller's own.
+    ///
+    /// This is the whole point of the parameter: a consumer's credential must
+    /// live in the *provider's* tenant, because that is where the gateway looks
+    /// for it when their tools run. Defaulting to the caller's own tenant is
+    /// right only for someone whose own tenant owns the tools.
+    pub tenant_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct SaveForCallerRequest {
     pub email: String,
+    /// See EmailQuery::tenant_id.
+    pub tenant_id: Option<String>,
     #[serde(flatten)]
     pub credential: SaveCredentialRequest,
+}
+
+/// The tenant a credential operation targets: the one asked for, once the
+/// caller is shown to have access to it, or their own by default.
+async fn target_tenant(
+    store: &Arc<EndpointStore>,
+    email: &str,
+    requested: Option<&str>,
+) -> Result<String, HttpResponse> {
+    match requested.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(tenant_id) => match require_tenant_access(store, email, tenant_id).await {
+            Ok(()) => Ok(tenant_id.to_string()),
+            Err(e) => Err(store_error_response(e)),
+        },
+        None => match get_default_tenant(store, email).await {
+            Ok(t) => Ok(t.id),
+            Err(e) => Err(store_error_response(e)),
+        },
+    }
 }
 
 fn store_error_response(e: StoreError) -> HttpResponse {
@@ -64,10 +92,19 @@ pub async fn list_credentials_handler(
         Err(e) => return store_error_response(e),
     };
 
-    let credentials = match list_credentials(&store, &tenant.id, &query.email).await {
-        Ok(c) => c,
+    // One row per workspace the caller can reach, so somebody who belongs to a
+    // provider's tenant can see — and fill — the slot that actually matters.
+    let slots = match credential_slots(&store, &query.email).await {
+        Ok(s) => s,
         Err(e) => return store_error_response(e),
     };
+
+    // Kept for callers that only want their own credentials, unchanged in shape.
+    let credentials: Vec<_> = slots
+        .iter()
+        .filter(|s| s.tenant_id == tenant.id)
+        .filter_map(|s| s.credential.clone())
+        .collect();
 
     // How many people are set up, so an owner can tell whether the workspace is
     // ready without being shown who is and is not.
@@ -78,6 +115,7 @@ pub async fn list_credentials_handler(
         "tenant_id": tenant.id,
         "tenant_name": tenant.name,
         "credentials": credentials,
+        "workspaces": slots,
         "people_configured": people_configured
     }))
 }
@@ -101,12 +139,12 @@ pub async fn save_credential_handler(
         }));
     }
 
-    let tenant = match get_default_tenant(&store, &body.email).await {
-        Ok(t) => t,
-        Err(e) => return store_error_response(e),
+    let tenant_id = match target_tenant(&store, &body.email, body.tenant_id.as_deref()).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
     };
 
-    match save_credential(&store, &tenant.id, &body.email, &body.credential).await {
+    match save_credential(&store, &tenant_id, &body.email, &body.credential).await {
         Ok(summary) => HttpResponse::Ok()
             .json(serde_json::json!({"success": true, "credential": summary})),
         Err(e) => store_error_response(e),
@@ -123,13 +161,13 @@ pub async fn delete_credential_handler(
         return deny;
     }
 
-    let tenant = match get_default_tenant(&store, &query.email).await {
-        Ok(t) => t,
-        Err(e) => return store_error_response(e),
+    let tenant_id = match target_tenant(&store, &query.email, query.tenant_id.as_deref()).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
     };
     let kind = path.into_inner();
 
-    match delete_credential(&store, &tenant.id, &query.email, &kind).await {
+    match delete_credential(&store, &tenant_id, &query.email, &kind).await {
         Ok(true) => HttpResponse::Ok().json(serde_json::json!({"success": true})),
         Ok(false) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "No such credential"})),
@@ -160,6 +198,30 @@ pub async fn get_credential_secret_handler(
         }
         Ok(None) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "No credential for this user"})),
+        Err(e) => store_error_response(e),
+    }
+}
+
+// ── POST /api/internal/encrypt-legacy-secrets ────────────────────────────────
+//
+// The one-shot backfill. Not wired into startup on purpose: it rewrites live
+// credentials, so it runs when a human decides it should, after a backup.
+
+pub async fn encrypt_legacy_secrets_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
+    app_log!(warn, "Starting the legacy secret encryption backfill");
+
+    match crate::endpoint_store::encrypt_legacy::encrypt_legacy_secrets(&store).await {
+        Ok(report) => HttpResponse::Ok().json(serde_json::json!({
+            "success": report.failures.is_empty(),
+            "report": report
+        })),
         Err(e) => store_error_response(e),
     }
 }

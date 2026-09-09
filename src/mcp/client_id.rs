@@ -17,12 +17,15 @@ pub async fn get_by_client_id_handler(
 ) -> impl Responder {
     let client_id = path.into_inner();
     match get_tenant_by_mcp_client_id(&store, &client_id).await {
-        Ok(Some((tenant, google_client_id))) => {
+        Ok(Some((tenant, google_client_id, allow_api0_signin))) => {
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "tenant_id": tenant.id,
                 "name": tenant.name,
                 "google_client_id": google_client_id,
+                // How this tenant's people sign in. The gateway refuses the
+                // consent flow when neither is configured.
+                "allow_api0_signin": allow_api0_signin,
             }))
         }
         Ok(None) => HttpResponse::NotFound().json(serde_json::json!({

@@ -118,14 +118,17 @@ pub async fn get_default_tenant(
     get_or_create_personal_tenant(store, &email).await
 }
 
+/// The tenant behind an OAuth client id, with how its users sign in:
+/// `(tenant, google_client_id, allow_api0_signin)`.
 pub async fn get_tenant_by_mcp_client_id(
     store: &EndpointStore,
     mcp_client_id: &str,
-) -> Result<Option<(Tenant, Option<String>)>, StoreError> {
+) -> Result<Option<(Tenant, Option<String>, bool)>, StoreError> {
     let client = store.get_admin_conn().await?;
     let row = client
         .query_opt(
-            "SELECT id, name, credit_balance, created_at, google_client_id
+            "SELECT id, name, credit_balance, created_at, google_client_id,
+                    allow_api0_signin
              FROM tenants WHERE mcp_client_id = $1",
             &[&mcp_client_id],
         )
@@ -140,7 +143,8 @@ pub async fn get_tenant_by_mcp_client_id(
             created_at:     r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
         };
         let google_client_id: Option<String> = r.get(4);
-        (tenant, google_client_id)
+        let allow_api0_signin: bool = r.get(5);
+        (tenant, google_client_id, allow_api0_signin)
     }))
 }
 

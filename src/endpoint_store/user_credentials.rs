@@ -154,6 +154,115 @@ pub async fn list_credentials(
     Ok(rows.into_iter().map(row_to_summary).collect())
 }
 
+/// A tenant this user may hold a credential in, and whether they hold one.
+#[derive(Debug, Clone, Serialize)]
+pub struct TenantCredentialSlot {
+    pub tenant_id: String,
+    pub tenant_name: String,
+    /// True when the tenant authenticates as each user — the only case where a
+    /// personal credential is used at all.
+    pub per_user: bool,
+    pub credential: Option<CredentialSummary>,
+}
+
+/// The tenants whose tools this user can call, and therefore the tenants they
+/// may store a credential in.
+///
+/// Three ways to qualify, and a consumer reaches a provider's tenant only by
+/// the third:
+///   1. it is their own default tenant
+///   2. they are a member of it
+///   3. they hold an active API key pinned to it — which is what the OAuth
+///      consent flow issues, and is the proof that the tenant let them in
+pub async fn accessible_tenants(
+    store: &EndpointStore,
+    user_email: &str,
+) -> Result<Vec<(String, String)>, StoreError> {
+    let email = user_email.to_lowercase();
+    let client = store.get_admin_conn().await?;
+
+    let rows = client
+        .query(
+            "SELECT DISTINCT t.id, t.name
+             FROM tenants t
+             WHERE t.id IN (
+                 SELECT up.default_tenant_id FROM user_preferences up
+                  WHERE LOWER(up.email) = $1 AND up.default_tenant_id IS NOT NULL
+                 UNION
+                 SELECT tu.tenant_id FROM tenant_users tu WHERE LOWER(tu.email) = $1
+                 UNION
+                 SELECT k.tenant_id FROM api_keys k
+                  WHERE LOWER(k.email) = $1 AND k.is_active AND k.tenant_id IS NOT NULL
+                 UNION
+                 SELECT k.provider_tenant_id FROM api_keys k
+                  WHERE LOWER(k.email) = $1 AND k.is_active AND k.provider_tenant_id IS NOT NULL
+             )
+             ORDER BY t.name",
+            &[&email],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
+}
+
+/// Reject a credential written for a tenant the user has no relationship with.
+/// Without this, an email in a request body would be enough to plant a
+/// credential in somebody else's workspace.
+pub async fn require_tenant_access(
+    store: &EndpointStore,
+    user_email: &str,
+    tenant_id: &str,
+) -> Result<(), StoreError> {
+    let allowed = accessible_tenants(store, user_email).await?;
+    if allowed.iter().any(|(id, _)| id == tenant_id) {
+        Ok(())
+    } else {
+        app_log!(warn, tenant_id = %tenant_id, "Rejected a credential for an inaccessible tenant");
+        Err(StoreError::InvalidInput(
+            "You do not have access to that workspace".into(),
+        ))
+    }
+}
+
+/// Every tenant the user can reach, with the credential they hold in it.
+pub async fn credential_slots(
+    store: &EndpointStore,
+    user_email: &str,
+) -> Result<Vec<TenantCredentialSlot>, StoreError> {
+    let email = user_email.to_lowercase();
+    let tenants = accessible_tenants(store, &email).await?;
+    let client = store.get_admin_conn().await?;
+    let mut slots = Vec::with_capacity(tenants.len());
+
+    for (tenant_id, tenant_name) in tenants {
+        let per_user = client
+            .query_opt(
+                "SELECT auth_mode FROM tenant_downstream_auth WHERE tenant_id = $1",
+                &[&tenant_id],
+            )
+            .await
+            .to_store_error()?
+            .map(|r| r.get::<_, String>(0) == "per_user")
+            .unwrap_or(false);
+
+        let credential = client
+            .query_opt(
+                "SELECT tenant_id, user_email, kind, label, expires_at, created_at, updated_at
+                 FROM user_downstream_credentials
+                 WHERE tenant_id = $1 AND user_email = $2",
+                &[&tenant_id, &email],
+            )
+            .await
+            .to_store_error()?
+            .map(row_to_summary);
+
+        slots.push(TenantCredentialSlot { tenant_id, tenant_name, per_user, credential });
+    }
+
+    Ok(slots)
+}
+
 /// How many people in this tenant have added a credential.
 ///
 /// A count, deliberately — not a list. An owner needs to know whether their

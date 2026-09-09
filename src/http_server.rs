@@ -20,8 +20,8 @@ use crate::api::key_consumer_self_service::{
     generate_self_service_key, list_self_service_keys,
 };
 use crate::mcp::user_credentials::{
-    delete_credential_handler, get_credential_secret_handler, list_credentials_handler,
-    save_credential_handler,
+    delete_credential_handler, encrypt_legacy_secrets_handler, get_credential_secret_handler,
+    list_credentials_handler, save_credential_handler,
 };
 use crate::mcp::tools::{
     delete_mcp_tool_handler, delete_my_mcp_tool_handler, get_mcp_tool_handler,
@@ -220,6 +220,8 @@ pub async fn start_http_server(
                             .route("/user/downstream-credentials", web::put().to(save_credential_handler))
                             .route("/user/downstream-credentials/{kind}", web::delete().to(delete_credential_handler))
                             .route("/internal/downstream-credential/{tenant_id}/{kind}", web::get().to(get_credential_secret_handler))
+                            // One-shot: seal secrets written before secret_box existed
+                            .route("/internal/encrypt-legacy-secrets", web::post().to(encrypt_legacy_secrets_handler))
                             // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)
                             .route("/consumer-keys", web::post().to(generate_consumer_key_handler))
                             // Self-service consumer keys (end-users, Firebase JWT auth)
