@@ -11,11 +11,18 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TenantDownstreamAuth {
     pub tenant_id: String,
-    pub auth_mode: String, // "none" | "google_sa" | "static_bearer" | "header_injection"
+    // "none" | "google_sa" | "static_bearer" | "header_injection" | "per_user"
+    pub auth_mode: String,
     pub service_account_json: Option<String>,
     pub target_audience: Option<String>,
     pub bearer_token: Option<String>,
     pub custom_headers: Option<Value>, // JSONB: {"Header-Name": "value"}
+    // per_user: how each user's own secret becomes a header.
+    //   scheme "basic_pat" → Authorization: Basic base64(":" + secret)  (Azure DevOps)
+    //   scheme "bearer"    → Authorization: Bearer <secret>
+    //   scheme "raw"       → <header>: <secret>
+    pub per_user_scheme: Option<String>,
+    pub per_user_header: Option<String>,
     pub updated_at: String,
 }
 
@@ -26,6 +33,8 @@ pub struct SaveDownstreamAuthRequest {
     pub target_audience: Option<String>,
     pub bearer_token: Option<String>,
     pub custom_headers: Option<Value>,
+    pub per_user_scheme: Option<String>,
+    pub per_user_header: Option<String>,
 }
 
 pub async fn get_downstream_auth(
@@ -37,7 +46,8 @@ pub async fn get_downstream_auth(
     let row = client
         .query_opt(
             "SELECT tenant_id, auth_mode, service_account_json, target_audience,
-                    bearer_token, custom_headers, updated_at
+                    bearer_token, custom_headers, per_user_scheme, per_user_header,
+                    updated_at
              FROM tenant_downstream_auth WHERE tenant_id = $1",
             &[&tenant_id],
         )
@@ -51,7 +61,9 @@ pub async fn get_downstream_auth(
         target_audience:      r.get(3),
         bearer_token:         r.get(4),
         custom_headers:       r.get(5),
-        updated_at:           r.get::<_, chrono::DateTime<Utc>>(6).to_rfc3339(),
+        per_user_scheme:      r.get(6),
+        per_user_header:      r.get(7),
+        updated_at:           r.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
     }))
 }
 
@@ -67,17 +79,21 @@ pub async fn save_downstream_auth(
         .query_one(
             "INSERT INTO tenant_downstream_auth
                 (tenant_id, auth_mode, service_account_json, target_audience,
-                 bearer_token, custom_headers, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 bearer_token, custom_headers, per_user_scheme, per_user_header,
+                 updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT (tenant_id) DO UPDATE SET
                 auth_mode            = EXCLUDED.auth_mode,
                 service_account_json = EXCLUDED.service_account_json,
                 target_audience      = EXCLUDED.target_audience,
                 bearer_token         = EXCLUDED.bearer_token,
                 custom_headers       = EXCLUDED.custom_headers,
+                per_user_scheme      = EXCLUDED.per_user_scheme,
+                per_user_header      = EXCLUDED.per_user_header,
                 updated_at           = EXCLUDED.updated_at
              RETURNING tenant_id, auth_mode, service_account_json, target_audience,
-                       bearer_token, custom_headers, updated_at",
+                       bearer_token, custom_headers, per_user_scheme,
+                       per_user_header, updated_at",
             &[
                 &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.auth_mode as &(dyn tokio_postgres::types::ToSql + Sync),
@@ -85,6 +101,8 @@ pub async fn save_downstream_auth(
                 &req.target_audience as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.bearer_token as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.custom_headers as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.per_user_scheme as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.per_user_header as &(dyn tokio_postgres::types::ToSql + Sync),
                 &now as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
@@ -100,6 +118,8 @@ pub async fn save_downstream_auth(
         target_audience:      row.get(3),
         bearer_token:         row.get(4),
         custom_headers:       row.get(5),
-        updated_at:           row.get::<_, chrono::DateTime<Utc>>(6).to_rfc3339(),
+        per_user_scheme:      row.get(6),
+        per_user_header:      row.get(7),
+        updated_at:           row.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
     })
 }

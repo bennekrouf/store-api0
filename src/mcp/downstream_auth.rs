@@ -27,6 +27,8 @@ pub struct SaveAuthBody {
     pub target_audience: Option<String>,
     pub bearer_token: Option<String>,
     pub custom_headers: Option<serde_json::Value>,
+    pub per_user_scheme: Option<String>,
+    pub per_user_header: Option<String>,
 }
 
 pub async fn get_downstream_auth_handler(
@@ -82,6 +84,8 @@ pub async fn get_downstream_auth_handler(
                 "target_audience": null,
                 "bearer_token": null,
                 "custom_headers": null,
+                "per_user_scheme": null,
+                "per_user_header": null,
                 "updated_at": null
             },
             "tenant_name": tenant.name,
@@ -122,6 +126,8 @@ pub async fn save_downstream_auth_handler(
         target_audience:      body.target_audience.clone(),
         bearer_token:         body.bearer_token.clone(),
         custom_headers:       body.custom_headers.clone(),
+        per_user_scheme:      body.per_user_scheme.clone(),
+        per_user_header:      body.per_user_header.clone(),
     };
 
     match save_downstream_auth(&store, &tenant.id, &req).await {
