@@ -82,6 +82,19 @@ fn decode_content(content: &str) -> Result<Vec<u8>, String> {
 }
 
 // Handler for uploading API configuration
+/// Does this file already carry an api0 config, i.e. a top-level `api_groups`?
+///
+/// Checked structurally rather than by matching an `api_groups:` prefix: a leading
+/// comment block or `---` defeats a prefix test, and hand-written api0 specs
+/// usually open with comments. serde_yaml parses JSON too, so this covers both
+/// upload formats.
+fn is_already_api0_format(content: &str) -> bool {
+    serde_yaml::from_str::<serde_yaml::Value>(content)
+        .ok()
+        .and_then(|value| value.get("api_groups").cloned())
+        .is_some()
+}
+
 pub async fn upload_api_config(
     store: web::Data<Arc<EndpointStore>>,
     formatter: web::Data<Arc<YamlFormatter>>,
@@ -148,10 +161,10 @@ pub async fn upload_api_config(
     };
 
     // Format the content if it's YAML and formatter is available.
-    // Skip AI formatting when the YAML is already in api0 format (starts with `api_groups:`),
-    // because the Cohere model has a limited output-token budget and will truncate large specs,
+    // Skip AI formatting when the content is already in api0 format, because the
+    // Cohere model has a limited output-token budget and will truncate large specs,
     // leaving only a partial set of endpoints in the database.
-    let already_in_api0_format = file_content.trim_start().starts_with("api_groups:");
+    let already_in_api0_format = is_already_api0_format(&file_content);
 
     let processed_content =
         if !already_in_api0_format
