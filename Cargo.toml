@@ -49,3 +49,9 @@ tonic-build = "0.12.3"
 name = "store"
 path = "src/main.rs"
 
+
+# TEMPORARY — local build only. api0-types gained `content_type` / `body_template`
+# on Endpoint; this points at the working copy so the change compiles before it is
+# pushed. REMOVE THIS BLOCK and bump the `rev` above once api0-types is pushed.
+[patch."https://github.com/bennekrouf/api0-types"]
+api0-types = { path = "../api0-types" }

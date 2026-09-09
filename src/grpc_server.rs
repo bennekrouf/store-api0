@@ -294,6 +294,7 @@ impl EndpointService for EndpointServiceImpl {
                     description: group.group.description.clone(),
                     base: group.group.base.clone(),
                     tenant_id: tenant_id.clone(),
+                    forward_identity: None,
                 },
                 endpoints: processed_endpoints,
             };

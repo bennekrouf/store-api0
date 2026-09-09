@@ -216,6 +216,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             description: format!("APIs for {}", domain),
                             base,
                             tenant_id: "".to_string(),
+                            forward_identity: None,
                         };
 
                         api_groups.push(ApiGroupWithEndpoints {

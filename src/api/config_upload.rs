@@ -293,6 +293,13 @@ pub async fn upload_api_config(
                 endpoint.base = group.group.base.clone();
             }
 
+            // Same inheritance for identity forwarding, so a group pointed at a
+            // third-party API can say `forward_identity: false` once instead of
+            // repeating it on every endpoint.
+            if endpoint.forward_identity.is_none() {
+                endpoint.forward_identity = group.group.forward_identity;
+            }
+
             endpoint.group_id = group.group.id.clone();
             processed_endpoints.push(endpoint);
         }

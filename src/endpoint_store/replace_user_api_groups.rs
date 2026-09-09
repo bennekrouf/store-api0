@@ -102,8 +102,8 @@ pub async fn replace_user_api_groups(
             if endpoint_exists_row.is_none() {
                 app_log!(debug, endpoint_id = %endpoint_id, "Creating new endpoint");
                 tx.execute(
-                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, suggested_sentence) 
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, suggested_sentence, content_type, body_template, forward_identity) 
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                     &[
                         &endpoint_id,
                         &endpoint.text,
@@ -113,6 +113,9 @@ pub async fn replace_user_api_groups(
                         &endpoint.path,
                         &group_id,
                         &endpoint.suggested_sentence,
+                        &endpoint.content_type,
+                        &endpoint.body_template,
+                        &endpoint.forward_identity,
                     ],
                 )
                 .await

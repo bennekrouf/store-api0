@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS endpoints (
     path VARCHAR NOT NULL DEFAULT '',
     suggested_sentence VARCHAR NOT NULL DEFAULT '',
     group_id VARCHAR,
+    content_type VARCHAR DEFAULT NULL,
+    body_template TEXT DEFAULT NULL,
+    forward_identity BOOLEAN DEFAULT NULL,
     FOREIGN KEY (group_id) REFERENCES api_groups(id)
 );
 
@@ -282,6 +285,16 @@ ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS content_type     VARCHAR DEFAULT 
 ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS body_template    TEXT    DEFAULT NULL;
 ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS static_headers   JSONB   DEFAULT NULL;
 ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS forward_identity BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Same request-shaping pair on endpoints, so an uploaded endpoint can describe a
+-- body that is not a flat JSON object (a JSON Patch array, say). NULL keeps the
+-- old behaviour: send the arguments as-is as application/json.
+ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS content_type  VARCHAR DEFAULT NULL;
+ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS body_template TEXT    DEFAULT NULL;
+
+-- NULL means true: api0's identity headers travel with the call, as they always
+-- have. Set false on anything pointed at a third-party API.
+ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS forward_identity BOOLEAN DEFAULT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_lookup
     ON mcp_tools(tenant_id, tool_name, is_active);

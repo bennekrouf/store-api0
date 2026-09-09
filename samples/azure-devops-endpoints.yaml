@@ -4,20 +4,20 @@
 # slug("<group name> <text>") — so "query work items" below arrives in Claude as
 # `azure-devops-work-items-query-work-items`.
 #
-# ── What is NOT here, and why ────────────────────────────────────────────────
-# Creating and updating work items are missing on purpose. Azure DevOps takes
-# both as a JSON *Patch* array with Content-Type application/json-patch+json,
-# and an uploaded endpoint can express neither: it always sends the arguments
-# object as-is, as application/json. Those two live in the tool registry instead
-# (mcp_tools), where content_type and body_template exist. `create_work_item` is
-# already registered on this tenant.
+# ── Shaping a non-JSON body ──────────────────────────────────────────────────
+# Azure DevOps takes work item creation as a JSON *Patch* array, not a flat
+# object. An endpoint expresses that with `content_type` and `body_template`:
+# the template is JSON with {param} placeholders, and any array element or
+# object entry whose placeholder has no matching argument is dropped before the
+# request goes out — so optional fields can simply be omitted from a call.
+# See "create task in user story" below.
 #
-# ── Before uploading, read this ──────────────────────────────────────────────
-# An uploaded endpoint currently forwards api0's identity headers —
-# X-Internal-Secret, X-User-Email, X-Tenant-Id — to whatever host it points at.
-# That is right for your own backend and wrong for dev.azure.com, which has no
-# use for them and will log them. Until endpoints can carry forward_identity,
-# treat these as read-only conveniences rather than the permanent home.
+# ── Identity headers ─────────────────────────────────────────────────────────
+# api0's identity headers — X-Internal-Secret, X-User-Email, X-Tenant-Id —
+# identify the caller to a *first-party* backend and carry the internal secret.
+# dev.azure.com has no use for them and would log them, so every group below
+# sets `forward_identity: false`. It is declared once per group and inherited by
+# each endpoint; an endpoint may override it.
 #
 # Replace `oryxenergies` below if you point this at another organisation.
 
@@ -27,6 +27,7 @@ api_groups:
   - name: "Azure DevOps Work Items"
     description: "Find, read and comment on Azure DevOps work items"
     base: "https://dev.azure.com/oryxenergies"
+    forward_identity: false
     endpoints:
 
       - text: "query work items"
@@ -67,6 +68,71 @@ api_groups:
             required: "false"
             alternatives: ["columns", "field_names"]
 
+      - text: "list user stories in sprint"
+        description: >-
+          List the User Stories in one sprint. Pass the iteration path from
+          "get current iteration" to scope it to the sprint in progress.
+          Returns ids only — follow with "get work items batch" to read titles,
+          state and assignee.
+        verb: "POST"
+        path: "/{project}/_apis/wit/wiql?api-version=7.1"
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name", "team_project"]
+          - name: "query"
+            description: >-
+              The WIQL statement. For the current sprint use:
+              SELECT [System.Id] FROM WorkItems
+              WHERE [System.WorkItemType] = 'User Story'
+              AND [System.IterationPath] = '<path from get current iteration>'
+              ORDER BY [System.ChangedDate] DESC
+            required: "true"
+            alternatives: ["wiql", "sql"]
+
+      - text: "create task in user story"
+        description: >-
+          Create a Task as a child of an existing User Story. parent_id is the
+          story's work item id. Omit iteration_path to let the task inherit the
+          story's sprint; omit description for a title-only task.
+        verb: "POST"
+        path: "/{project}/_apis/wit/workitems/$Task?api-version=7.1"
+        content_type: "application/json-patch+json"
+        body_template: |
+          [
+            {"op": "add", "path": "/fields/System.Title", "value": "{title}"},
+            {"op": "add", "path": "/fields/System.Description", "value": "{description}"},
+            {"op": "add", "path": "/fields/System.IterationPath", "value": "{iteration_path}"},
+            {"op": "add", "path": "/relations/-", "value": {
+              "rel": "System.LinkTypes.Hierarchy-Reverse",
+              "url": "https://dev.azure.com/oryxenergies/_apis/wit/workItems/{parent_id}"
+            }}
+          ]
+        parameters:
+          - name: "project"
+            description: "Azure DevOps project name."
+            required: "true"
+            alternatives: ["project_name", "team_project"]
+          - name: "title"
+            description: "Task title."
+            required: "true"
+            alternatives: ["name", "summary"]
+          - name: "parent_id"
+            description: "Work item id of the User Story this task belongs to."
+            required: "true"
+            alternatives: ["story_id", "user_story_id", "parent"]
+          - name: "description"
+            description: "Task description. HTML is allowed. Optional."
+            required: "false"
+            alternatives: ["details", "body"]
+          - name: "iteration_path"
+            description: >-
+              Sprint path, e.g. "Project\\Sprint 12". Optional — defaults to the
+              parent story's sprint.
+            required: "false"
+            alternatives: ["sprint", "sprint_path"]
+
       - text: "list work item comments"
         description: "Read the discussion on one work item."
         verb: "GET"
@@ -105,6 +171,7 @@ api_groups:
   - name: "Azure DevOps Projects"
     description: "Projects, iterations and teams in Azure DevOps"
     base: "https://dev.azure.com/oryxenergies"
+    forward_identity: false
     endpoints:
 
       - text: "list projects"
@@ -173,6 +240,7 @@ api_groups:
   - name: "Azure DevOps Code"
     description: "Repositories, pull requests and builds"
     base: "https://dev.azure.com/oryxenergies"
+    forward_identity: false
     endpoints:
 
       - text: "list repositories"
