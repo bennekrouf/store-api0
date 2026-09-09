@@ -196,25 +196,28 @@ pub async fn list_mcp_tools(
 
     let mut all_tools: Vec<McpTool> = explicit_rows.into_iter().map(row_to_tool).collect();
 
-    // 2. Fetch all endpoints for this tenant OR for this email
-    let endpoint_rows = if let Some(email) = user_email {
-        client.query(
-            "SELECT DISTINCT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
-             FROM api_groups g
-             JOIN endpoints e ON g.id = e.group_id
-             LEFT JOIN user_groups ug ON g.id = ug.group_id
-             WHERE g.tenant_id = $1 OR ug.email = $2",
-            &[&tenant_id, &email],
-        ).await.to_store_error()?
-    } else {
-        client.query(
+    // 2. Endpoint-derived tools for this tenant
+    // Endpoint groups belonging to *this* tenant, and only this tenant.
+    //
+    // This used to be `WHERE g.tenant_id = $1 OR ug.email = $2`, so any group
+    // ever shared with the caller appeared in every namespace they connected
+    // through. Someone belonging to two tenants saw both tenants' tools in
+    // whichever connector they opened — and worse, calling one of the strays ran
+    // it under *this* namespace's downstream auth, which for a per-user tenant
+    // means sending their personal token to a service it was never issued for.
+    //
+    // Visibility is the tenant, full stop. Who may see which of a tenant's own
+    // groups is a question for that tenant, not for the namespace boundary.
+    let endpoint_rows = client
+        .query(
             "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
             &[&tenant_id],
-        ).await.to_store_error()?
-    };
+        )
+        .await
+        .to_store_error()?;
 
     app_log!(debug, tenant_id = %tenant_id, user_email = ?user_email, endpoint_count = endpoint_rows.len(), "Fetched endpoints for MCP tool mapping");
 
@@ -298,8 +301,11 @@ pub async fn get_mcp_tool(
     store: &EndpointStore,
     tenant_id: &str,
     tool_name: &str,
+    // Retained for logging and for callers' signatures. It deliberately does not
+    // widen what is visible: see the note on the endpoint query below.
     user_email: Option<&str>,
 ) -> Result<Option<McpTool>, StoreError> {
+    let _ = user_email;
     let client = store.get_conn(Some(tenant_id)).await?;
 
     // 1. Check explicit tools
@@ -322,24 +328,27 @@ pub async fn get_mcp_tool(
     }
 
     // 2. Check virtual tools (endpoints)
-    let endpoint_rows = if let Some(email) = user_email {
-        client.query(
-            "SELECT DISTINCT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
-             FROM api_groups g
-             JOIN endpoints e ON g.id = e.group_id
-             LEFT JOIN user_groups ug ON g.id = ug.group_id
-             WHERE g.tenant_id = $1 OR ug.email = $2",
-            &[&tenant_id, &email],
-        ).await.to_store_error()?
-    } else {
-        client.query(
+    // Endpoint groups belonging to *this* tenant, and only this tenant.
+    //
+    // This used to be `WHERE g.tenant_id = $1 OR ug.email = $2`, so any group
+    // ever shared with the caller appeared in every namespace they connected
+    // through. Someone belonging to two tenants saw both tenants' tools in
+    // whichever connector they opened — and worse, calling one of the strays ran
+    // it under *this* namespace's downstream auth, which for a per-user tenant
+    // means sending their personal token to a service it was never issued for.
+    //
+    // Visibility is the tenant, full stop. Who may see which of a tenant's own
+    // groups is a question for that tenant, not for the namespace boundary.
+    let endpoint_rows = client
+        .query(
             "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
             &[&tenant_id],
-        ).await.to_store_error()?
-    };
+        )
+        .await
+        .to_store_error()?;
 
     for row in endpoint_rows {
         let group_name: String = row.get(0);
