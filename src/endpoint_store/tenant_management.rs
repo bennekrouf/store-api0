@@ -148,11 +148,18 @@ pub async fn get_tenant_by_mcp_client_id(
     }))
 }
 
+/// Set how a tenant's people sign in.
+///
+/// `allow_api0_signin` is `Option` rather than `bool` so a caller that only means
+/// to change a client id leaves the opt-in alone: `None` keeps the stored value.
+/// It is the sharper of the two settings — turning it on lets *any* api0 account
+/// connect to this workspace — so it must never move as a side effect.
 pub async fn set_mcp_client_id(
     store: &EndpointStore,
     email: &str,
     mcp_client_id: Option<&str>,
     google_client_id: Option<&str>,
+    allow_api0_signin: Option<bool>,
 ) -> Result<(), StoreError> {
     let tenant = get_default_tenant(store, email).await?;
     let client = store.get_admin_conn().await?;
@@ -160,10 +167,16 @@ pub async fn set_mcp_client_id(
     client
         .execute(
             "UPDATE tenants
-             SET mcp_client_id    = $1,
-                 google_client_id = $2
-             WHERE id = $3",
-            &[&mcp_client_id, &google_client_id, &tenant.id],
+             SET mcp_client_id     = $1,
+                 google_client_id  = $2,
+                 allow_api0_signin = COALESCE($3, allow_api0_signin)
+             WHERE id = $4",
+            &[
+                &mcp_client_id,
+                &google_client_id,
+                &allow_api0_signin,
+                &tenant.id,
+            ],
         )
         .await
         .to_store_error()?;

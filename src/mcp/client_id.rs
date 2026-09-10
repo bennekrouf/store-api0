@@ -46,6 +46,9 @@ pub struct SetClientIdBody {
     /// Google OAuth 2.0 Web Client ID — used by the api0 authorize page to sign in
     /// end-users via Google Identity Services (not Firebase-specific).
     pub google_client_id: Option<String>,
+    /// Let people sign in with their own api0 account. Omitted leaves it as it is —
+    /// saving a client id must not silently widen who can reach this workspace.
+    pub allow_api0_signin: Option<bool>,
 }
 
 /// Dashboard calls PUT /api/user/mcp-client-id
@@ -59,6 +62,7 @@ pub async fn set_client_id_handler(
         &body.email,
         id_ref,
         body.google_client_id.as_deref(),
+        body.allow_api0_signin,
     )
     .await
     {
@@ -68,7 +72,8 @@ pub async fn set_client_id_handler(
                 email = %body.email,
                 mcp_client_id = ?body.mcp_client_id,
                 google_client_id = ?body.google_client_id,
-                "mcp_client_id + Google client_id updated"
+                allow_api0_signin = ?body.allow_api0_signin,
+                "tenant sign-in configuration updated"
             );
             HttpResponse::Ok().json(serde_json::json!({ "success": true }))
         }
