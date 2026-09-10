@@ -5,7 +5,7 @@ use crate::mcp::downstream_auth::{
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
-use crate::admin::tenant_overview::tenants_overview;
+use crate::admin::tenant_overview::{tenants_overview, update_tenant_config};
 use crate::admin::user_roles::{delete_user_role, get_user_role, list_user_roles, set_user_role};
 use crate::whatsapp::channel::{
     delete_channel, get_channel, lookup_channel_by_tenant_internal, lookup_channel_internal,
@@ -271,6 +271,10 @@ pub async fn start_http_server(
                             .route(
                                 "/internal/tenants/overview",
                                 web::get().to(tenants_overview),
+                            )
+                            .route(
+                                "/internal/tenants/{tenant_id}/config",
+                                web::put().to(update_tenant_config),
                             )
                             .route("/internal/user-role/{email}", web::delete().to(delete_user_role)),
                     )
