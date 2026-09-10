@@ -13,11 +13,20 @@ pub async fn get_credit_transactions_handler(
     // If tenant_id looks like an email, resolve it to the actual tenant ID
     if tenant_id.contains('@') {
         use crate::endpoint_store::tenant_management;
-        match tenant_management::get_default_tenant(&store, &tenant_id).await {
-            Ok(t) => {
+        // find_ rather than get_: listing transactions must not create an account.
+        match tenant_management::find_default_tenant(&store, &tenant_id).await {
+            Ok(Some(t)) => {
                 app_log!(info, email = %tenant_id, resolved_tenant_id = %t.id, "Resolved email to tenant ID");
                 tenant_id = t.id;
-            },
+            }
+            // No account means no transactions — an empty list, same shape.
+            Ok(None) => {
+                app_log!(info, email = %tenant_id, "No tenant for this email; reporting no transactions");
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "transactions": []
+                }));
+            }
             Err(e) => {
                 app_log!(error, email = %tenant_id, error = %e, "Failed to resolve tenant for transactions lookup");
                 return HttpResponse::InternalServerError().json(serde_json::json!({

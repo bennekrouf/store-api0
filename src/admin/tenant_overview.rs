@@ -66,7 +66,8 @@ pub async fn tenants_overview(
                  t.mcp_client_id,
                  t.google_client_id,
                  t.allow_api0_signin,
-                 (SELECT count(*) FROM tenant_users tu WHERE tu.tenant_id = t.id),
+                 (SELECT count(*) FROM tenant_users tu
+                   WHERE tu.tenant_id = t.id AND tu.role <> 'consumer'),
                  (SELECT count(*) FROM api_groups g WHERE g.tenant_id = t.id),
                  (SELECT count(*) FROM endpoints e
                     JOIN api_groups g2 ON e.group_id = g2.id
@@ -93,7 +94,11 @@ pub async fn tenants_overview(
                      json_agg(json_build_object('email', tu3.email, 'role', tu3.role)
                               ORDER BY tu3.role, tu3.email),
                      '[]'::json)
-                    FROM tenant_users tu3 WHERE tu3.tenant_id = t.id)
+                    FROM tenant_users tu3 WHERE tu3.tenant_id = t.id),
+                 -- Consumers reach this tenant's tools through a connector but
+                 -- have no authority over it, so they are counted separately.
+                 (SELECT count(*) FROM tenant_users tu4
+                   WHERE tu4.tenant_id = t.id AND tu4.role = 'consumer')
              FROM tenants t
              ORDER BY t.created_at ASC",
             &[],
@@ -155,6 +160,7 @@ pub async fn tenants_overview(
                     .get::<_, Option<chrono::DateTime<chrono::Utc>>>(21)
                     .map(|t| t.to_rfc3339()),
                 "members": r.get::<_, serde_json::Value>(22),
+                "consumer_count": r.get::<_, i64>(23),
             })
         })
         .collect();

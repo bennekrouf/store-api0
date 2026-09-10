@@ -598,3 +598,23 @@ CREATE TABLE IF NOT EXISTS idp_auth_requests (
 
 CREATE INDEX IF NOT EXISTS idx_idp_auth_requests_created
     ON idp_auth_requests(created_at);
+
+
+-- ── Consumer memberships ─────────────────────────────────────────────────────
+-- A consumer key (one carrying provider_tenant_id) records that somebody reaches
+-- a provider's tools through a connector. Until now that relationship lived only
+-- on api_keys, so a provider tenant showed one member — its owner — no matter how
+-- many people used it.
+--
+-- The role is 'consumer', which grants nothing: verify_tenant_access and the
+-- tenant picker both exclude it. It is a relationship, not a permission.
+--
+-- Idempotent backfill for keys issued before the link was written at issue time.
+INSERT INTO tenant_users (tenant_id, email, role)
+SELECT DISTINCT k.provider_tenant_id, LOWER(k.email), 'consumer'
+  FROM api_keys k
+ WHERE k.provider_tenant_id IS NOT NULL
+   AND k.email IS NOT NULL
+   AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = k.provider_tenant_id)
+   AND EXISTS (SELECT 1 FROM user_preferences up WHERE LOWER(up.email) = LOWER(k.email))
+ON CONFLICT (tenant_id, email) DO NOTHING;
