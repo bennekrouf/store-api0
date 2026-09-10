@@ -25,6 +25,14 @@ pub fn is_valid_tenant_name(name: &str) -> bool {
     !trimmed.is_empty() && !trimmed.contains('@')
 }
 
+/// Roles that grant authority over a tenant.
+///
+/// `consumer` is deliberately absent. A consumer row records that someone uses a
+/// provider's tools through a connector — it is a relationship, not a permission.
+/// Treating it as membership would let any cvenom end-user upload endpoints into
+/// cvenom's namespace or read its settings.
+pub const MEMBER_ROLES: &[&str] = &["owner", "member", "admin"];
+
 pub async fn get_or_create_personal_tenant(
     store: &EndpointStore,
     email: &str,
@@ -133,6 +141,36 @@ pub async fn get_or_create_personal_tenant_with_conn(
     })
 }
 
+/// The caller's tenant, or `None` — never creating one.
+///
+/// [`get_default_tenant`] creates a tenant when none exists, which is right when
+/// somebody is signing up and wrong everywhere else: reading a credit balance
+/// should not bring an account into being.
+pub async fn find_default_tenant(
+    store: &EndpointStore,
+    email: &str,
+) -> Result<Option<Tenant>, StoreError> {
+    let email = email.to_lowercase();
+    let client = store.get_admin_conn().await?;
+    let row = client
+        .query_opt(
+            "SELECT t.id, t.name, t.credit_balance, t.created_at
+             FROM user_preferences up
+             JOIN tenants t ON up.default_tenant_id = t.id
+             WHERE LOWER(up.email) = LOWER($1)",
+            &[&email],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(row.map(|r| Tenant {
+        id: r.get(0),
+        name: r.get(1),
+        credit_balance: r.get(2),
+        created_at: r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+    }))
+}
+
 pub async fn get_default_tenant(
     store: &EndpointStore,
     email: &str,
@@ -207,6 +245,30 @@ pub async fn set_mcp_client_id(
     Ok(())
 }
 
+/// Record that `email` reaches `tenant_id`'s tools through a connector.
+///
+/// Written when a consumer key is issued, so a provider can see who uses it.
+/// The role is `consumer`, which grants nothing — see [`MEMBER_ROLES`]. An
+/// existing row is left alone so this never demotes a real owner or member.
+pub async fn link_consumer_to_tenant(
+    store: &EndpointStore,
+    email: &str,
+    tenant_id: &str,
+) -> Result<(), StoreError> {
+    let email = email.to_lowercase();
+    let client = store.get_admin_conn().await?;
+    client
+        .execute(
+            "INSERT INTO tenant_users (tenant_id, email, role)
+             VALUES ($1, $2, 'consumer')
+             ON CONFLICT (tenant_id, email) DO NOTHING",
+            &[&tenant_id, &email],
+        )
+        .await
+        .to_store_error()?;
+    Ok(())
+}
+
 pub async fn update_tenant_name(
     store: &EndpointStore,
     email: &str,
@@ -244,7 +306,9 @@ pub async fn verify_tenant_access_with_conn(
     let email = email.to_lowercase();
     let row = client
         .query_opt(
-            "SELECT 1 FROM tenant_users WHERE tenant_id = $1 AND LOWER(email) = LOWER($2)",
+            "SELECT 1 FROM tenant_users
+              WHERE tenant_id = $1 AND LOWER(email) = LOWER($2)
+                AND role <> 'consumer'",
             &[&tenant_id, &email],
         )
         .await
@@ -272,7 +336,7 @@ pub async fn list_user_tenants_with_conn(
             "SELECT t.id, t.name, t.credit_balance, t.created_at
              FROM tenants t
              JOIN tenant_users tu ON t.id = tu.tenant_id
-             WHERE LOWER(tu.email) = LOWER($1)
+             WHERE LOWER(tu.email) = LOWER($1) AND tu.role <> 'consumer'
              ORDER BY t.created_at ASC",
             &[&email],
         )

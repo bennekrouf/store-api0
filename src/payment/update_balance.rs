@@ -10,6 +10,16 @@ pub async fn update_credit_balance_handler(
     request: web::Json<UpdateCreditRequest>,
 ) -> impl Responder {
     let email = request.email.to_lowercase();
+
+    // A tenant id in the email field would create a tenant named after a UUID —
+    // which is exactly how one of those appeared. Refuse rather than invent.
+    if !email.contains('@') {
+        app_log!(warn, value = %email, "Rejected a credit update whose 'email' is not an address");
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "'email' must be an email address. Pass 'tenant_id' to target a tenant directly."
+        }));
+    }
     let amount = request.amount;
 
     // Resolve tenant_id: use explicit one if provided, otherwise fallback to default for email.

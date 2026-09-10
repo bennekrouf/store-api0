@@ -469,5 +469,20 @@ pub async fn generate_api_key_with_provider(
 
     tx.commit().await.to_store_error()?;
 
+    // Record the consumer relationship so a provider can see who reaches its
+    // tools. After the commit, and on its own connection: the key is the thing
+    // that had to be atomic, and a missing link costs visibility, not access.
+    if let Some(ptid) = provider_tenant_id {
+        if let Err(e) = tenant_management::link_consumer_to_tenant(store, email, ptid).await {
+            app_log!(
+                warn,
+                email = %email,
+                provider_tenant_id = %ptid,
+                error = %e,
+                "Could not link consumer to provider tenant (non-fatal)"
+            );
+        }
+    }
+
     Ok((new_key, key_prefix, key_id))
 }

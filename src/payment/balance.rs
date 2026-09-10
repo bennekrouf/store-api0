@@ -14,11 +14,24 @@ pub async fn get_credit_balance_handler(
     // If tenant_id looks like an email, resolve it to the actual tenant ID
     if tenant_id.contains('@') {
         use crate::endpoint_store::tenant_management;
-        match tenant_management::get_default_tenant(&store, &tenant_id).await {
-            Ok(t) => {
+        // find_ rather than get_: reading a balance must never bring an account
+        // into being. This path is called by partner backends polling balances.
+        match tenant_management::find_default_tenant(&store, &tenant_id).await {
+            Ok(Some(t)) => {
                 app_log!(info, email = %tenant_id, resolved_tenant_id = %t.id, "Resolved email to tenant ID");
                 tenant_id = t.id;
-            },
+            }
+            // No account yet is a real answer — zero — not a reason to create one.
+            Ok(None) => {
+                app_log!(info, email = %tenant_id, "No tenant for this email; reporting a zero balance");
+                // Same shape as the found case — a caller must not have to
+                // branch on which of two response bodies it got.
+                return HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "balance": 0,
+                    "message": "Credit balance retrieved successfully",
+                }));
+            }
             Err(e) => {
                 app_log!(error, email = %tenant_id, error = %e, "Failed to resolve tenant for balance lookup");
                 return HttpResponse::InternalServerError().json(serde_json::json!({
