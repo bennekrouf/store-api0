@@ -6,6 +6,25 @@ use crate::infra::db::PgConnection;
 use uuid::Uuid;
 use chrono::Utc;
 
+/// A readable default name for a personal tenant, e.g. `bob.smith@x.com` →
+/// `Personal — bob.smith`. Never contains `@`, so it cannot be mistaken for the
+/// owner's address.
+pub fn personal_tenant_name(email: &str) -> String {
+    let local = email.split('@').next().unwrap_or(email).trim();
+    if local.is_empty() {
+        "Personal workspace".to_string()
+    } else {
+        format!("Personal — {}", local)
+    }
+}
+
+/// Is this a name a person chose, rather than an address that leaked into the
+/// name column? Used to reject renames that would reintroduce the confusion.
+pub fn is_valid_tenant_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty() && !trimmed.contains('@')
+}
+
 pub async fn get_or_create_personal_tenant(
     store: &EndpointStore,
     email: &str,
@@ -44,7 +63,11 @@ pub async fn get_or_create_personal_tenant_with_conn(
 
     let tenant_id = Uuid::new_v4().to_string();
     let now = Utc::now();
-    let name = email.to_string(); // Personal tenant name is email
+    // A tenant name is a label people read in a connector list and a dashboard
+    // header, so it must not be an email address: seeing "someone@example.com"
+    // where a workspace name belongs makes every screen ambiguous about whether
+    // it is naming a person or a workspace. Derive something readable instead.
+    let name = personal_tenant_name(&email);
 
     // Note: We are using a client that likely has bypass_rls = true (from get_admin_conn)
     
