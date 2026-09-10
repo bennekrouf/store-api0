@@ -307,7 +307,7 @@ impl EndpointService for EndpointServiceImpl {
         // Replace user API groups
         match self
             .store
-            .replace_user_api_groups(&email, processed_groups)
+            .replace_user_api_groups(&email, processed_groups, None)
             .await
         {
             Ok(endpoint_count) => {

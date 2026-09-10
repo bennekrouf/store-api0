@@ -50,3 +50,9 @@ name = "store"
 path = "src/main.rs"
 
 
+
+# TEMPORARY — local build only, REMOVE BEFORE PUSHING.
+# api0-types gained `UploadRequest.tenant_id`; this points at the working copy
+# until that is pushed, at which point bump the `rev` above instead.
+[patch."https://github.com/bennekrouf/api0-types"]
+api0-types = { path = "../api0-types" }

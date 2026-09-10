@@ -312,7 +312,11 @@ pub async fn upload_api_config(
 
     // Save to database
     match store
-        .replace_user_api_groups(&upload_data.email, processed_groups.clone())
+        .replace_user_api_groups(
+            &upload_data.email,
+            processed_groups.clone(),
+            upload_data.tenant_id.as_deref(),
+        )
         .await
     {
         Ok(endpoint_count) => {
@@ -326,9 +330,18 @@ pub async fn upload_api_config(
             // ── Sync to MCP tools ─────────────────────────────────────────────
             // Resolve the tenant for this user so we have a tenant_id to attach
             // the tools to. Non-fatal: import is already committed above.
-            let synced = match get_default_tenant(&store, &upload_data.email).await {
-                Ok(tenant) => {
-                    match sync_endpoints_as_mcp_tools(&store, &tenant.id, &processed_groups).await {
+            let sync_tenant = match upload_data.tenant_id.clone() {
+                // Membership was already verified by replace_user_api_groups above,
+                // which refuses a tenant the caller does not belong to.
+                Some(explicit) => Ok(explicit),
+                None => get_default_tenant(&store, &upload_data.email)
+                    .await
+                    .map(|tenant| tenant.id),
+            };
+
+            let synced = match sync_tenant {
+                Ok(tenant_id) => {
+                    match sync_endpoints_as_mcp_tools(&store, &tenant_id, &processed_groups).await {
                         Ok(n) => n,
                         Err(e) => {
                             app_log!(warn,

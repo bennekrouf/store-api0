@@ -3,11 +3,18 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroupWithEndpoints, EndpointStore, StoreError,
 };
-/// Replaces all API groups and endpoints for a user
+/// Replaces all API groups and endpoints for a user.
+///
+/// `tenant_id` names the tenant the groups belong to. `None` means the caller's
+/// default tenant, which is what every caller did before this was a choice. It
+/// decides MCP visibility: `list_mcp_tools` matches on `api_groups.tenant_id`,
+/// so importing into the wrong tenant leaves the tools invisible to the
+/// connector the user actually opens.
 pub async fn replace_user_api_groups(
     store: &EndpointStore,
     email: &str,
     api_groups: Vec<ApiGroupWithEndpoints>,
+    tenant_id: Option<&str>,
 ) -> Result<usize, StoreError> {
     app_log!(info, email = %email, "Starting complete API group replacement");
 
@@ -37,8 +44,30 @@ pub async fn replace_user_api_groups(
     }
 
     // Add new groups and endpoints
-    let tenant = crate::endpoint_store::tenant_management::get_default_tenant(store, email).await?;
-    let tenant_id = tenant.id;
+    let tenant_id = match tenant_id {
+        // A named tenant must be one the caller actually belongs to, or an
+        // import becomes a way to write into someone else's namespace.
+        Some(requested) => {
+            let client = store.get_admin_conn().await?;
+            let allowed = crate::endpoint_store::tenant_management::verify_tenant_access_with_conn(
+                &client, email, requested,
+            )
+            .await?;
+            if !allowed {
+                app_log!(warn, email = %email, tenant_id = %requested, "Rejected import into a tenant the caller does not belong to");
+                return Err(StoreError::InvalidInput(format!(
+                    "You do not belong to tenant '{}'",
+                    requested
+                )));
+            }
+            requested.to_string()
+        }
+        None => {
+            crate::endpoint_store::tenant_management::get_default_tenant(store, email)
+                .await?
+                .id
+        }
+    };
 
     let mut imported_count = 0;
     let mut client = store.get_admin_conn().await?;
