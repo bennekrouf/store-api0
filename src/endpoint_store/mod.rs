@@ -204,8 +204,9 @@ impl EndpointStore {
         &self,
         email: &str,
         api_groups: Vec<ApiGroupWithEndpoints>,
+        tenant_id: Option<&str>,
     ) -> Result<usize, StoreError> {
-        replace_user_api_groups::replace_user_api_groups(self, email, api_groups).await
+        replace_user_api_groups::replace_user_api_groups(self, email, api_groups, tenant_id).await
     }
 
     pub async fn add_user_api_group(
