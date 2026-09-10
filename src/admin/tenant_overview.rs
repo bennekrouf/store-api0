@@ -77,7 +77,23 @@ pub async fn tenants_overview(
                  EXISTS (SELECT 1 FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
                  (SELECT string_agg(tu2.email, ', ' ORDER BY tu2.email)
                     FROM tenant_users tu2
-                   WHERE tu2.tenant_id = t.id AND tu2.role = 'owner')
+                   WHERE tu2.tenant_id = t.id AND tu2.role = 'owner'),
+                 -- Security profile. Never the credential itself, only its shape:
+                 -- which mode, and whether the pieces that mode needs are present.
+                 (SELECT d.auth_mode FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.per_user_scheme FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.per_user_header FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.per_user_verify_url FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.bearer_token IS NOT NULL FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.service_account_json IS NOT NULL FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.custom_headers IS NOT NULL FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 (SELECT d.updated_at FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 -- Members, as a JSON array so roles survive the trip.
+                 (SELECT COALESCE(
+                     json_agg(json_build_object('email', tu3.email, 'role', tu3.role)
+                              ORDER BY tu3.role, tu3.email),
+                     '[]'::json)
+                    FROM tenant_users tu3 WHERE tu3.tenant_id = t.id)
              FROM tenants t
              ORDER BY t.created_at ASC",
             &[],
@@ -126,6 +142,19 @@ pub async fn tenants_overview(
                 // Whether a shared downstream credential exists — never its value.
                 "has_downstream_auth": r.get::<_, bool>(12),
                 "owners": r.get::<_, Option<String>>(13),
+                // 'none' when the tenant has no row at all, which is what the
+                // gateway falls back to anyway.
+                "auth_mode": r.get::<_, Option<String>>(14).unwrap_or_else(|| "none".to_string()),
+                "per_user_scheme": r.get::<_, Option<String>>(15),
+                "per_user_header": r.get::<_, Option<String>>(16),
+                "per_user_verify_url": r.get::<_, Option<String>>(17),
+                "has_bearer_token": r.get::<_, Option<bool>>(18).unwrap_or(false),
+                "has_service_account": r.get::<_, Option<bool>>(19).unwrap_or(false),
+                "has_custom_headers": r.get::<_, Option<bool>>(20).unwrap_or(false),
+                "auth_updated_at": r
+                    .get::<_, Option<chrono::DateTime<chrono::Utc>>>(21)
+                    .map(|t| t.to_rfc3339()),
+                "members": r.get::<_, serde_json::Value>(22),
             })
         })
         .collect();
@@ -136,4 +165,109 @@ pub async fn tenants_overview(
         "success": true,
         "tenants": tenants,
     }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateTenantConfig {
+    /// `None` leaves the field alone; `Some(None)` clears it. Distinguishing the
+    /// two matters: a panel that edits one field must not blank the others.
+    #[serde(default, deserialize_with = "double_option")]
+    pub mcp_client_id: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub google_client_id: Option<Option<String>>,
+    pub allow_api0_signin: Option<bool>,
+    pub name: Option<String>,
+}
+
+fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
+}
+
+/// PUT /api/internal/tenants/{tenant_id}/config
+///
+/// The admin counterpart to `set_mcp_client_id`. That one resolves its target as
+/// the caller's *default* tenant, which is right for a tenant editing itself and
+/// useless for an operator fixing someone else's — so this one takes the tenant
+/// id explicitly and touches only the fields present in the body.
+pub async fn update_tenant_config(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    path: web::Path<String>,
+    body: web::Json<UpdateTenantConfig>,
+) -> impl Responder {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+
+    let tenant_id = path.into_inner();
+
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, "update_tenant_config: no connection");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    // Empty string means "clear it", so a blanked input does not store "".
+    let blank_to_null = |v: Option<Option<String>>| -> Option<Option<String>> {
+        v.map(|inner| inner.filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string()))
+    };
+
+    let mcp = blank_to_null(body.mcp_client_id.clone());
+    let google = blank_to_null(body.google_client_id.clone());
+
+    let result = client
+        .execute(
+            "UPDATE tenants
+                SET mcp_client_id     = CASE WHEN $2 THEN $3 ELSE mcp_client_id END,
+                    google_client_id  = CASE WHEN $4 THEN $5 ELSE google_client_id END,
+                    allow_api0_signin = COALESCE($6, allow_api0_signin),
+                    name              = COALESCE($7, name)
+              WHERE id = $1",
+            &[
+                &tenant_id,
+                &mcp.is_some(),
+                &mcp.clone().flatten(),
+                &google.is_some(),
+                &google.clone().flatten(),
+                &body.allow_api0_signin,
+                &body.name,
+            ],
+        )
+        .await
+        .to_store_error();
+
+    match result {
+        Ok(0) => HttpResponse::NotFound()
+            .json(serde_json::json!({"success": false, "error": "No such tenant"})),
+        Ok(_) => {
+            app_log!(
+                info,
+                tenant_id = %tenant_id,
+                allow_api0_signin = ?body.allow_api0_signin,
+                "Admin updated tenant configuration"
+            );
+            HttpResponse::Ok().json(serde_json::json!({"success": true}))
+        }
+        Err(e) => {
+            // A duplicate mcp_client_id is the caller's mistake, not a server fault:
+            // the column is UNIQUE because it must resolve to exactly one tenant.
+            let msg = e.to_string();
+            if msg.contains("duplicate") || msg.contains("unique") {
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "success": false,
+                    "error": "That Client ID is already taken by another tenant"
+                }));
+            }
+            app_log!(error, error = %e, tenant_id = %tenant_id, "update_tenant_config failed");
+            HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}))
+        }
+    }
 }
