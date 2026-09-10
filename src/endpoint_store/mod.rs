@@ -553,8 +553,16 @@ impl EndpointStore {
         email: &str,
         mcp_client_id: Option<&str>,
         google_client_id: Option<&str>,
+        allow_api0_signin: Option<bool>,
     ) -> Result<(), StoreError> {
-        tenant_management::set_mcp_client_id(self, email, mcp_client_id, google_client_id).await
+        tenant_management::set_mcp_client_id(
+            self,
+            email,
+            mcp_client_id,
+            google_client_id,
+            allow_api0_signin,
+        )
+        .await
     }
 
     pub async fn verify_tenant_access(

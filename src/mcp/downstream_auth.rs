@@ -54,20 +54,24 @@ pub async fn get_downstream_auth_handler(
     };
 
     // Also surface the tenant's OAuth client IDs so the dashboard can display them.
-    let (mcp_client_id, google_client_id): (Option<String>, Option<String>) =
-        match store.get_conn(Some(&tenant.id)).await {
-            Ok(client) => client
-                .query_opt(
-                    "SELECT mcp_client_id, google_client_id FROM tenants WHERE id = $1",
-                    &[&tenant.id],
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|row| (row.get(0), row.get(1)))
-                .unwrap_or((None, None)),
-            Err(_) => (None, None),
-        };
+    let (mcp_client_id, google_client_id, allow_api0_signin): (
+        Option<String>,
+        Option<String>,
+        bool,
+    ) = match store.get_conn(Some(&tenant.id)).await {
+        Ok(client) => client
+            .query_opt(
+                "SELECT mcp_client_id, google_client_id, allow_api0_signin
+                 FROM tenants WHERE id = $1",
+                &[&tenant.id],
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .unwrap_or((None, None, false)),
+        Err(_) => (None, None, false),
+    };
 
     match get_downstream_auth(&store, &tenant.id).await {
         Ok(Some(auth)) => HttpResponse::Ok().json(serde_json::json!({
@@ -75,7 +79,8 @@ pub async fn get_downstream_auth_handler(
             "auth": auth,
             "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
-            "google_client_id": google_client_id
+            "google_client_id": google_client_id,
+            "allow_api0_signin": allow_api0_signin
         })),
         Ok(None) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
@@ -94,7 +99,8 @@ pub async fn get_downstream_auth_handler(
             },
             "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
-            "google_client_id": google_client_id
+            "google_client_id": google_client_id,
+            "allow_api0_signin": allow_api0_signin
         })),
         Err(e) => {
             app_log!(error, error = %e, "get_downstream_auth: DB error");
