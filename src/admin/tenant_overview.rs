@@ -444,3 +444,126 @@ pub async fn delete_tenant(
         "removed": removed,
     }))
 }
+
+#[derive(serde::Deserialize)]
+pub struct AddConsumersBody {
+    pub emails: Vec<String>,
+}
+
+/// POST /api/internal/tenants/{tenant_id}/consumers
+///
+/// Record that these people reach this tenant's tools, without giving them any
+/// authority over it — the role is `consumer`, which every authorization path
+/// excludes.
+///
+/// It exists because a provider's relationship with its users is not always
+/// visible to api0. A partner whose users hold consumer API keys is linked
+/// automatically at key issue; one that uses api0 only as a credit ledger — its
+/// users never holding a key — leaves no trace to derive the link from. This is
+/// how those get attached.
+pub async fn add_consumers(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    path: web::Path<String>,
+    body: web::Json<AddConsumersBody>,
+) -> impl Responder {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+
+    let tenant_id = path.into_inner();
+
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, "add_consumers: no connection");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    match client
+        .query_opt("SELECT 1 FROM tenants WHERE id = $1", &[&tenant_id])
+        .await
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({"success": false, "error": "No such tenant"}))
+        }
+        Err(e) => {
+            app_log!(error, error = %e, "add_consumers: tenant lookup failed");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    }
+
+    let mut linked: Vec<String> = Vec::new();
+    let mut skipped: Vec<serde_json::Value> = Vec::new();
+
+    for raw in &body.emails {
+        let email = raw.trim().to_lowercase();
+        if email.is_empty() {
+            continue;
+        }
+        if !email.contains('@') {
+            skipped.push(serde_json::json!({"email": email, "reason": "not an email address"}));
+            continue;
+        }
+
+        // tenant_users.email is a foreign key into user_preferences, so someone
+        // api0 has never seen cannot be linked. Say so rather than failing the
+        // whole batch on one unknown address.
+        let known = client
+            .query_opt(
+                "SELECT 1 FROM user_preferences WHERE LOWER(email) = LOWER($1)",
+                &[&email],
+            )
+            .await;
+
+        match known {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                skipped.push(serde_json::json!({
+                    "email": email,
+                    "reason": "unknown to api0 — no account with that address"
+                }));
+                continue;
+            }
+            Err(e) => {
+                skipped.push(serde_json::json!({"email": email, "reason": e.to_string()}));
+                continue;
+            }
+        }
+
+        match client
+            .execute(
+                "INSERT INTO tenant_users (tenant_id, email, role)
+                 VALUES ($1, $2, 'consumer')
+                 ON CONFLICT (tenant_id, email) DO NOTHING",
+                &[&tenant_id, &email],
+            )
+            .await
+        {
+            Ok(_) => linked.push(email),
+            Err(e) => {
+                skipped.push(serde_json::json!({"email": email, "reason": e.to_string()}));
+            }
+        }
+    }
+
+    app_log!(
+        info,
+        tenant_id = %tenant_id,
+        linked = linked.len(),
+        skipped = skipped.len(),
+        "Linked consumers to a tenant"
+    );
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "linked": linked,
+        "skipped": skipped,
+    }))
+}
