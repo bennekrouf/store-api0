@@ -205,6 +205,17 @@ pub async fn update_tenant_config(
 
     let tenant_id = path.into_inner();
 
+    // A rename must produce a real name. Empty is meaningless, and an address is
+    // the confusion this validation exists to stop.
+    if let Some(new_name) = body.name.as_deref() {
+        if !crate::endpoint_store::tenant_management::is_valid_tenant_name(new_name) {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "success": false,
+                "error": "A tenant name is required, and cannot be an email address"
+            }));
+        }
+    }
+
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(e) => {
@@ -228,7 +239,7 @@ pub async fn update_tenant_config(
                 SET mcp_client_id     = CASE WHEN $2 THEN $3 ELSE mcp_client_id END,
                     google_client_id  = CASE WHEN $4 THEN $5 ELSE google_client_id END,
                     allow_api0_signin = COALESCE($6, allow_api0_signin),
-                    name              = COALESCE($7, name)
+                    name              = COALESCE(NULLIF(btrim($7), ''), name)
               WHERE id = $1",
             &[
                 &tenant_id,
@@ -270,4 +281,160 @@ pub async fn update_tenant_config(
                 .json(serde_json::json!({"success": false, "error": "DB error"}))
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeleteTenantBody {
+    /// The tenant's exact name, retyped. Deleting a tenant destroys its groups,
+    /// endpoints and keys, and there is no undo — so the caller has to name the
+    /// thing they mean, not just click the row they happened to have open.
+    pub confirm_name: String,
+}
+
+/// DELETE /api/internal/tenants/{tenant_id}
+///
+/// Removing a tenant is not one statement. Some children cascade
+/// (`mcp_tools`, `tenant_downstream_auth`, `whatsapp_channels`,
+/// `user_downstream_credentials`, `idp_auth_requests`); `tenant_users` and
+/// `api_keys.provider_tenant_id` hold foreign keys *without* cascade and would
+/// block the delete; and `api_groups.tenant_id` has no foreign key at all, so a
+/// plain delete would silently orphan its groups, endpoints and parameters.
+///
+/// Hence the explicit order below, in one transaction: either the tenant and
+/// everything under it goes, or nothing does.
+///
+/// `api_usage_logs` and `credit_transactions` are deliberately left in place.
+/// They are financial and audit history; losing them to a tidy-up would be worse
+/// than carrying rows that point at a tenant that no longer exists.
+pub async fn delete_tenant(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    path: web::Path<String>,
+    body: web::Json<DeleteTenantBody>,
+) -> impl Responder {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+
+    let tenant_id = path.into_inner();
+
+    let mut client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, "delete_tenant: no connection");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    let name: String = match client
+        .query_opt("SELECT name FROM tenants WHERE id = $1", &[&tenant_id])
+        .await
+    {
+        Ok(Some(row)) => row.get(0),
+        Ok(None) => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({"success": false, "error": "No such tenant"}))
+        }
+        Err(e) => {
+            app_log!(error, error = %e, "delete_tenant: lookup failed");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    if body.confirm_name.trim() != name.trim() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": "Confirmation does not match the tenant name"
+        }));
+    }
+
+    let tx = match client.transaction().await {
+        Ok(t) => t,
+        Err(e) => {
+            app_log!(error, error = %e, "delete_tenant: could not open transaction");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    // Endpoints of this tenant's groups, named once and reused: every child of an
+    // endpoint has to go before the endpoint itself.
+    const OWNED_ENDPOINTS: &str =
+        "SELECT e.id FROM endpoints e JOIN api_groups g ON e.group_id = g.id
+          WHERE g.tenant_id = $1";
+
+    let steps: Vec<(&str, String)> = vec![
+        // Anyone defaulting to this tenant falls back to a fresh personal one.
+        (
+            "user_preferences.default_tenant_id",
+            "UPDATE user_preferences SET default_tenant_id = NULL WHERE default_tenant_id = $1"
+                .to_string(),
+        ),
+        (
+            "parameter_alternatives",
+            format!("DELETE FROM parameter_alternatives WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
+        ),
+        (
+            "parameters",
+            format!("DELETE FROM parameters WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
+        ),
+        (
+            "user_endpoints",
+            format!("DELETE FROM user_endpoints WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
+        ),
+        (
+            "endpoints",
+            "DELETE FROM endpoints WHERE group_id IN (SELECT id FROM api_groups WHERE tenant_id = $1)"
+                .to_string(),
+        ),
+        (
+            "user_groups",
+            "DELETE FROM user_groups WHERE group_id IN (SELECT id FROM api_groups WHERE tenant_id = $1)"
+                .to_string(),
+        ),
+        ("api_groups", "DELETE FROM api_groups WHERE tenant_id = $1".to_string()),
+        (
+            "api_keys",
+            "DELETE FROM api_keys WHERE tenant_id = $1 OR provider_tenant_id = $1".to_string(),
+        ),
+        ("tenant_users", "DELETE FROM tenant_users WHERE tenant_id = $1".to_string()),
+        // Last: takes mcp_tools, downstream auth, whatsapp channels, per-user
+        // credentials and idp requests with it by cascade.
+        ("tenants", "DELETE FROM tenants WHERE id = $1".to_string()),
+    ];
+
+    let mut removed = serde_json::Map::new();
+    for (label, sql) in &steps {
+        match tx.execute(sql.as_str(), &[&tenant_id]).await {
+            Ok(n) => {
+                removed.insert((*label).to_string(), serde_json::json!(n));
+            }
+            Err(e) => {
+                app_log!(error, error = %e, tenant_id = %tenant_id, step = %label,
+                    "delete_tenant: step failed, rolling back");
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed while clearing {}: {}", label, e)
+                }));
+            }
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        app_log!(error, error = %e, tenant_id = %tenant_id, "delete_tenant: commit failed");
+        return HttpResponse::InternalServerError()
+            .json(serde_json::json!({"success": false, "error": "Commit failed"}));
+    }
+
+    app_log!(warn, tenant_id = %tenant_id, tenant_name = %name, removed = ?removed,
+        "Tenant deleted by an administrator");
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "deleted": name,
+        "removed": removed,
+    }))
 }
