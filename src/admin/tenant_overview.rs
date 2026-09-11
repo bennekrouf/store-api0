@@ -297,6 +297,61 @@ pub struct DeleteTenantBody {
     pub confirm_name: String,
 }
 
+/// The ordered statements that remove a tenant and everything under it.
+///
+/// Shared by the single delete and the bulk prune so the two can never disagree
+/// about what "delete a tenant" means. Order matters: some children cascade,
+/// `tenant_users` and `api_keys.provider_tenant_id` hold foreign keys that would
+/// block, and `api_groups.tenant_id` has no foreign key at all and would be
+/// orphaned silently. Every statement takes the tenant id as `$1`.
+fn cascade_steps() -> Vec<(&'static str, String)> {
+    // Endpoints of this tenant's groups, named once and reused: every child of an
+    // endpoint has to go before the endpoint itself.
+    const OWNED_ENDPOINTS: &str =
+        "SELECT e.id FROM endpoints e JOIN api_groups g ON e.group_id = g.id
+          WHERE g.tenant_id = $1";
+
+    vec![
+        // Anyone defaulting to this tenant falls back to a fresh personal one.
+        (
+            "user_preferences.default_tenant_id",
+            "UPDATE user_preferences SET default_tenant_id = NULL WHERE default_tenant_id = $1"
+                .to_string(),
+        ),
+        (
+            "parameter_alternatives",
+            format!("DELETE FROM parameter_alternatives WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
+        ),
+        (
+            "parameters",
+            format!("DELETE FROM parameters WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
+        ),
+        (
+            "user_endpoints",
+            format!("DELETE FROM user_endpoints WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
+        ),
+        (
+            "endpoints",
+            "DELETE FROM endpoints WHERE group_id IN (SELECT id FROM api_groups WHERE tenant_id = $1)"
+                .to_string(),
+        ),
+        (
+            "user_groups",
+            "DELETE FROM user_groups WHERE group_id IN (SELECT id FROM api_groups WHERE tenant_id = $1)"
+                .to_string(),
+        ),
+        ("api_groups", "DELETE FROM api_groups WHERE tenant_id = $1".to_string()),
+        (
+            "api_keys",
+            "DELETE FROM api_keys WHERE tenant_id = $1 OR provider_tenant_id = $1".to_string(),
+        ),
+        ("tenant_users", "DELETE FROM tenant_users WHERE tenant_id = $1".to_string()),
+        // Last: takes mcp_tools, downstream auth, whatsapp channels, per-user
+        // credentials and idp requests with it by cascade.
+        ("tenants", "DELETE FROM tenants WHERE id = $1".to_string()),
+    ]
+}
+
 /// DELETE /api/internal/tenants/{tenant_id}
 ///
 /// Removing a tenant is not one statement. Some children cascade
@@ -366,51 +421,7 @@ pub async fn delete_tenant(
         }
     };
 
-    // Endpoints of this tenant's groups, named once and reused: every child of an
-    // endpoint has to go before the endpoint itself.
-    const OWNED_ENDPOINTS: &str =
-        "SELECT e.id FROM endpoints e JOIN api_groups g ON e.group_id = g.id
-          WHERE g.tenant_id = $1";
-
-    let steps: Vec<(&str, String)> = vec![
-        // Anyone defaulting to this tenant falls back to a fresh personal one.
-        (
-            "user_preferences.default_tenant_id",
-            "UPDATE user_preferences SET default_tenant_id = NULL WHERE default_tenant_id = $1"
-                .to_string(),
-        ),
-        (
-            "parameter_alternatives",
-            format!("DELETE FROM parameter_alternatives WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
-        ),
-        (
-            "parameters",
-            format!("DELETE FROM parameters WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
-        ),
-        (
-            "user_endpoints",
-            format!("DELETE FROM user_endpoints WHERE endpoint_id IN ({OWNED_ENDPOINTS})"),
-        ),
-        (
-            "endpoints",
-            "DELETE FROM endpoints WHERE group_id IN (SELECT id FROM api_groups WHERE tenant_id = $1)"
-                .to_string(),
-        ),
-        (
-            "user_groups",
-            "DELETE FROM user_groups WHERE group_id IN (SELECT id FROM api_groups WHERE tenant_id = $1)"
-                .to_string(),
-        ),
-        ("api_groups", "DELETE FROM api_groups WHERE tenant_id = $1".to_string()),
-        (
-            "api_keys",
-            "DELETE FROM api_keys WHERE tenant_id = $1 OR provider_tenant_id = $1".to_string(),
-        ),
-        ("tenant_users", "DELETE FROM tenant_users WHERE tenant_id = $1".to_string()),
-        // Last: takes mcp_tools, downstream auth, whatsapp channels, per-user
-        // credentials and idp requests with it by cascade.
-        ("tenants", "DELETE FROM tenants WHERE id = $1".to_string()),
-    ];
+    let steps = cascade_steps();
 
     let mut removed = serde_json::Map::new();
     for (label, sql) in &steps {
@@ -567,5 +578,132 @@ pub async fn add_consumers(
         "success": true,
         "linked": linked,
         "skipped": skipped,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct PruneBody {
+    /// When true (the default), report what would go without touching anything.
+    #[serde(default = "default_true")]
+    pub dry_run: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Tenants that hold nothing anyone would miss.
+///
+/// "Empty" deliberately ignores credits: a balance is not content, and an
+/// account nobody reaches is not worth keeping for it. It does *not* ignore a
+/// client id — a tenant somebody has wired a connector to is in use even before
+/// anything is imported into it, and deleting it would break that connector.
+///
+/// Consumer links count as content too: a tenant whose users were attached to a
+/// provider still records a relationship worth keeping.
+const EMPTY_TENANTS: &str = "
+    SELECT t.id, t.name, t.credit_balance
+      FROM tenants t
+     WHERE t.mcp_client_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM api_groups g WHERE g.tenant_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM mcp_tools m WHERE m.tenant_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM api_keys k
+                        WHERE k.tenant_id = t.id OR k.provider_tenant_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM tenant_users tu
+                        WHERE tu.tenant_id = t.id AND tu.role = 'consumer')
+       AND NOT EXISTS (SELECT 1 FROM tenant_downstream_auth d WHERE d.tenant_id = t.id)
+     ORDER BY t.created_at ASC";
+
+/// POST /api/internal/tenants/prune-empty
+///
+/// Removes every tenant holding no groups, endpoints, tools, keys, consumers,
+/// downstream auth or client id. Defaults to a dry run: the caller sees the list
+/// first and has to ask again to actually delete.
+pub async fn prune_empty_tenants(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<PruneBody>,
+) -> impl Responder {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized()
+            .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+
+    let mut client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, "prune_empty_tenants: no connection");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    let rows = match client.query(EMPTY_TENANTS, &[]).await {
+        Ok(r) => r,
+        Err(e) => {
+            app_log!(error, error = %e, "prune_empty_tenants: query failed");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    let candidates: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.get::<_, String>(0),
+                "name": r.get::<_, String>(1),
+                "credit_balance": r.get::<_, i64>(2),
+            })
+        })
+        .collect();
+
+    if body.dry_run {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "dry_run": true,
+            "candidates": candidates,
+        }));
+    }
+
+    let ids: Vec<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
+    let steps = cascade_steps();
+
+    // One transaction for the whole prune: a half-finished sweep would leave
+    // tenants stripped of their rows but still listed.
+    let tx = match client.transaction().await {
+        Ok(t) => t,
+        Err(e) => {
+            app_log!(error, error = %e, "prune_empty_tenants: could not open transaction");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
+    for id in &ids {
+        for (label, sql) in &steps {
+            if let Err(e) = tx.execute(sql.as_str(), &[id]).await {
+                app_log!(error, error = %e, tenant_id = %id, step = %label,
+                    "prune_empty_tenants: step failed, rolling back everything");
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed clearing {} for {}: {}", label, id, e)
+                }));
+            }
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        app_log!(error, error = %e, "prune_empty_tenants: commit failed");
+        return HttpResponse::InternalServerError()
+            .json(serde_json::json!({"success": false, "error": "Commit failed"}));
+    }
+
+    app_log!(warn, count = ids.len(), "Pruned empty tenants");
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "dry_run": false,
+        "deleted": candidates,
     }))
 }
