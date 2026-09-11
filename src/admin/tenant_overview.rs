@@ -540,7 +540,9 @@ pub async fn add_consumers(
         match client
             .execute(
                 "INSERT INTO tenant_users (tenant_id, email, role)
-                 VALUES ($1, $2, 'consumer')
+                 SELECT $1, up.email, 'consumer'
+                   FROM user_preferences up
+                  WHERE LOWER(up.email) = LOWER($2)
                  ON CONFLICT (tenant_id, email) DO NOTHING",
                 &[&tenant_id, &email],
             )

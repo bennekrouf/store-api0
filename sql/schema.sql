@@ -610,11 +610,24 @@ CREATE INDEX IF NOT EXISTS idx_idp_auth_requests_created
 -- tenant picker both exclude it. It is a relationship, not a permission.
 --
 -- Idempotent backfill for keys issued before the link was written at issue time.
-INSERT INTO tenant_users (tenant_id, email, role)
-SELECT DISTINCT k.provider_tenant_id, LOWER(k.email), 'consumer'
-  FROM api_keys k
- WHERE k.provider_tenant_id IS NOT NULL
-   AND k.email IS NOT NULL
-   AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = k.provider_tenant_id)
-   AND EXISTS (SELECT 1 FROM user_preferences up WHERE LOWER(up.email) = LOWER(k.email))
-ON CONFLICT (tenant_id, email) DO NOTHING;
+-- The email written must be the exact value user_preferences holds: the foreign
+-- key matches on value, not case, so inserting a lowercased copy of a
+-- differently-cased stored address fails the constraint — and a failure here
+-- aborts schema setup and stops the store from starting.
+-- Wrapped so it cannot stop the store from starting. schema.sql runs as one
+-- batch at boot and any error aborts the rest of it, which is the correct
+-- behaviour for a table definition and the wrong one for a data backfill: a
+-- surprise in existing rows should cost the backfill, not the service.
+DO $$
+BEGIN
+    INSERT INTO tenant_users (tenant_id, email, role)
+    SELECT DISTINCT k.provider_tenant_id, up.email, 'consumer'
+      FROM api_keys k
+      JOIN user_preferences up ON LOWER(up.email) = LOWER(k.email)
+      JOIN tenants t ON t.id = k.provider_tenant_id
+     WHERE k.provider_tenant_id IS NOT NULL
+       AND k.email IS NOT NULL
+    ON CONFLICT (tenant_id, email) DO NOTHING;
+EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'Consumer backfill skipped: %', SQLERRM;
+END $$;

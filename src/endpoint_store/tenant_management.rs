@@ -255,12 +255,16 @@ pub async fn link_consumer_to_tenant(
     email: &str,
     tenant_id: &str,
 ) -> Result<(), StoreError> {
-    let email = email.to_lowercase();
     let client = store.get_admin_conn().await?;
+    // Take the address as user_preferences stores it: tenant_users.email is a
+    // foreign key onto that column and matches by value, so a lowercased copy of
+    // a differently-cased row would be rejected.
     client
         .execute(
             "INSERT INTO tenant_users (tenant_id, email, role)
-             VALUES ($1, $2, 'consumer')
+             SELECT $1, up.email, 'consumer'
+               FROM user_preferences up
+              WHERE LOWER(up.email) = LOWER($2)
              ON CONFLICT (tenant_id, email) DO NOTHING",
             &[&tenant_id, &email],
         )
