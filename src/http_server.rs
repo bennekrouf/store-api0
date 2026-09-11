@@ -6,7 +6,7 @@ use crate::mcp::downstream_auth::{
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
 use crate::admin::tenant_overview::{
-    add_consumers, delete_tenant, tenants_overview, update_tenant_config,
+    add_consumers, delete_tenant, prune_empty_tenants, tenants_overview, update_tenant_config,
 };
 use crate::admin::user_roles::{delete_user_role, get_user_role, list_user_roles, set_user_role};
 use crate::whatsapp::channel::{
@@ -281,6 +281,13 @@ pub async fn start_http_server(
                             .route(
                                 "/internal/tenants/{tenant_id}/consumers",
                                 web::post().to(add_consumers),
+                            )
+                            // Before {tenant_id}: actix matches in registration
+                            // order, so a literal path must precede the pattern
+                            // that would otherwise swallow it.
+                            .route(
+                                "/internal/tenants/prune-empty",
+                                web::post().to(prune_empty_tenants),
                             )
                             .route(
                                 "/internal/tenants/{tenant_id}",
