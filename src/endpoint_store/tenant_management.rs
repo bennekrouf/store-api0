@@ -310,10 +310,13 @@ pub async fn verify_tenant_access_with_conn(
     let email = email.to_lowercase();
     let row = client
         .query_opt(
+            // Allowlist, not denylist: a role added later should have to be
+            // granted authority deliberately, not inherit it by not being
+            // 'consumer'.
             "SELECT 1 FROM tenant_users
               WHERE tenant_id = $1 AND LOWER(email) = LOWER($2)
-                AND role <> 'consumer'",
-            &[&tenant_id, &email],
+                AND role = ANY($3)",
+            &[&tenant_id, &email, &MEMBER_ROLES],
         )
         .await
         .to_store_error()?;
@@ -340,9 +343,9 @@ pub async fn list_user_tenants_with_conn(
             "SELECT t.id, t.name, t.credit_balance, t.created_at
              FROM tenants t
              JOIN tenant_users tu ON t.id = tu.tenant_id
-             WHERE LOWER(tu.email) = LOWER($1) AND tu.role <> 'consumer'
+             WHERE LOWER(tu.email) = LOWER($1) AND tu.role = ANY($2)
              ORDER BY t.created_at ASC",
-            &[&email],
+            &[&email, &MEMBER_ROLES],
         )
         .await
         .to_store_error()?;
