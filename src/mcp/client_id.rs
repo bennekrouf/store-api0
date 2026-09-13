@@ -42,10 +42,14 @@ pub async fn get_by_client_id_handler(
 #[derive(Deserialize)]
 pub struct SetClientIdBody {
     pub email: String,
-    pub mcp_client_id: Option<String>,
+    /// Absent leaves the stored value; `null` clears it. The wizard sends only
+    /// the fields it means to change.
+    #[serde(default, deserialize_with = "crate::admin::tenant_overview::double_option")]
+    pub mcp_client_id: Option<Option<String>>,
     /// Google OAuth 2.0 Web Client ID — used by the api0 authorize page to sign in
     /// end-users via Google Identity Services (not Firebase-specific).
-    pub google_client_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::admin::tenant_overview::double_option")]
+    pub google_client_id: Option<Option<String>>,
     /// Let people sign in with their own api0 account. Omitted leaves it as it is —
     /// saving a client id must not silently widen who can reach this workspace.
     pub allow_api0_signin: Option<bool>,
@@ -56,12 +60,15 @@ pub async fn set_client_id_handler(
     store: web::Data<Arc<EndpointStore>>,
     body: web::Json<SetClientIdBody>,
 ) -> impl Responder {
-    let id_ref = body.mcp_client_id.as_deref();
+    fn as_ref(v: &Option<Option<String>>) -> Option<Option<&str>> {
+        v.as_ref().map(|inner| inner.as_deref())
+    }
+
     match set_mcp_client_id(
         &store,
         &body.email,
-        id_ref,
-        body.google_client_id.as_deref(),
+        as_ref(&body.mcp_client_id),
+        as_ref(&body.google_client_id),
         body.allow_api0_signin,
     )
     .await
