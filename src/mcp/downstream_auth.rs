@@ -54,23 +54,29 @@ pub async fn get_downstream_auth_handler(
     };
 
     // Also surface the tenant's OAuth client IDs so the dashboard can display them.
-    let (mcp_client_id, google_client_id, allow_api0_signin): (
+    // The identity provider is surfaced as issuer and client id only — never the
+    // secret. The dashboard needs to know one is configured, because at authorize
+    // time it takes precedence over every other sign-in method.
+    let (mcp_client_id, google_client_id, allow_api0_signin, idp_issuer, idp_client_id): (
         Option<String>,
         Option<String>,
         bool,
+        Option<String>,
+        Option<String>,
     ) = match store.get_conn(Some(&tenant.id)).await {
         Ok(client) => client
             .query_opt(
-                "SELECT mcp_client_id, google_client_id, allow_api0_signin
+                "SELECT mcp_client_id, google_client_id, allow_api0_signin,
+                        idp_issuer, idp_client_id
                  FROM tenants WHERE id = $1",
                 &[&tenant.id],
             )
             .await
             .ok()
             .flatten()
-            .map(|row| (row.get(0), row.get(1), row.get(2)))
-            .unwrap_or((None, None, false)),
-        Err(_) => (None, None, false),
+            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4)))
+            .unwrap_or((None, None, false, None, None)),
+        Err(_) => (None, None, false, None, None),
     };
 
     match get_downstream_auth(&store, &tenant.id).await {
@@ -80,7 +86,9 @@ pub async fn get_downstream_auth_handler(
             "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
             "google_client_id": google_client_id,
-            "allow_api0_signin": allow_api0_signin
+            "allow_api0_signin": allow_api0_signin,
+            "idp_issuer": idp_issuer,
+            "idp_client_id": idp_client_id
         })),
         Ok(None) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
@@ -100,7 +108,9 @@ pub async fn get_downstream_auth_handler(
             "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
             "google_client_id": google_client_id,
-            "allow_api0_signin": allow_api0_signin
+            "allow_api0_signin": allow_api0_signin,
+            "idp_issuer": idp_issuer,
+            "idp_client_id": idp_client_id
         })),
         Err(e) => {
             app_log!(error, error = %e, "get_downstream_auth: DB error");
