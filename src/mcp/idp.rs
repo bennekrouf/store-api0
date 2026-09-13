@@ -104,6 +104,38 @@ pub struct SaveIdpForCaller {
     pub idp: SaveIdpRequest,
 }
 
+/// DELETE /api/user/tenant-idp — drop the caller's identity provider.
+pub async fn delete_tenant_idp_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<serde_json::Value>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
+    let email = match body.get("email").and_then(|v| v.as_str()) {
+        Some(e) => e.to_string(),
+        None => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"success": false, "error": "email is required"}))
+        }
+    };
+
+    let tenant = match get_default_tenant(&store, &email).await {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
+
+    match crate::endpoint_store::idp_management::clear_idp(&store, &tenant.id).await {
+        Ok(cleared) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "cleared": cleared,
+        })),
+        Err(e) => fail(e),
+    }
+}
+
 pub async fn save_tenant_idp_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,

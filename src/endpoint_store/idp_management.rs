@@ -137,6 +137,33 @@ pub async fn save_idp(
     Ok(())
 }
 
+/// Remove a tenant's identity provider, returning it to api0's own sign-in.
+///
+/// This has to exist. A stored IdP wins outright at authorize time — the gateway
+/// routes straight to it and never offers api0's page — so a wrong client id
+/// locks a workspace out of its own connector with no way back through the API.
+/// Saving a corrected config is one escape; abandoning the IdP entirely is the
+/// other, and until now only the first was possible.
+///
+/// The secret is cleared with the rest: leaving a sealed secret behind for an
+/// issuer nobody uses is a credential with no owner.
+pub async fn clear_idp(store: &EndpointStore, tenant_id: &str) -> Result<bool, StoreError> {
+    let client = store.get_admin_conn().await?;
+    let affected = client
+        .execute(
+            "UPDATE tenants
+                SET idp_issuer = NULL, idp_client_id = NULL, idp_client_secret = NULL
+              WHERE id = $1
+                AND (idp_issuer IS NOT NULL OR idp_client_id IS NOT NULL)",
+            &[&tenant_id],
+        )
+        .await
+        .to_store_error()?;
+
+    app_log!(info, tenant_id = %tenant_id, cleared = affected > 0, "Cleared tenant IdP");
+    Ok(affected > 0)
+}
+
 // ── In-flight sign-ins ───────────────────────────────────────────────────────
 
 pub async fn remember_auth_request(
