@@ -23,8 +23,8 @@ use crate::api::key_consumer_self_service::{
     generate_self_service_key, list_self_service_keys,
 };
 use crate::mcp::idp::{
-    consume_auth_request_handler, get_tenant_idp_handler, remember_auth_request_handler,
-    save_tenant_idp_handler,
+    consume_auth_request_handler, delete_tenant_idp_handler, get_tenant_idp_handler,
+    remember_auth_request_handler, save_tenant_idp_handler,
 };
 use crate::mcp::user_credentials::{
     delete_credential_handler, encrypt_legacy_secrets_handler, get_credential_secret_handler,
@@ -234,6 +234,7 @@ pub async fn start_http_server(
                             .route("/internal/idp-auth-request", web::post().to(remember_auth_request_handler))
                             .route("/internal/idp-auth-request/consume", web::post().to(consume_auth_request_handler))
                             .route("/user/tenant-idp", web::put().to(save_tenant_idp_handler))
+                            .route("/user/tenant-idp", web::delete().to(delete_tenant_idp_handler))
                             // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)
                             .route("/consumer-keys", web::post().to(generate_consumer_key_handler))
                             // Self-service consumer keys (end-users, Firebase JWT auth)
