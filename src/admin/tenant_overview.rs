@@ -185,7 +185,7 @@ pub struct UpdateTenantConfig {
     pub name: Option<String>,
 }
 
-fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+pub fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

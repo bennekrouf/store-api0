@@ -218,23 +218,29 @@ pub async fn get_tenant_by_mcp_client_id(
 pub async fn set_mcp_client_id(
     store: &EndpointStore,
     email: &str,
-    mcp_client_id: Option<&str>,
-    google_client_id: Option<&str>,
+    // `None` leaves the column alone; `Some(None)` clears it.
+    mcp_client_id: Option<Option<&str>>,
+    google_client_id: Option<Option<&str>>,
     allow_api0_signin: Option<bool>,
 ) -> Result<(), StoreError> {
     let tenant = get_default_tenant(store, email).await?;
     let client = store.get_admin_conn().await?;
 
+    // Absent must mean "leave it", not "clear it". A caller that only means to
+    // turn on a sign-in method would otherwise blank the client id, and a
+    // workspace would lose the identifier its connector is wired to.
     client
         .execute(
             "UPDATE tenants
-             SET mcp_client_id     = $1,
-                 google_client_id  = $2,
-                 allow_api0_signin = COALESCE($3, allow_api0_signin)
-             WHERE id = $4",
+             SET mcp_client_id     = CASE WHEN $1 THEN $2 ELSE mcp_client_id END,
+                 google_client_id  = CASE WHEN $3 THEN $4 ELSE google_client_id END,
+                 allow_api0_signin = COALESCE($5, allow_api0_signin)
+             WHERE id = $6",
             &[
-                &mcp_client_id,
-                &google_client_id,
+                &mcp_client_id.is_some(),
+                &mcp_client_id.flatten(),
+                &google_client_id.is_some(),
+                &google_client_id.flatten(),
                 &allow_api0_signin,
                 &tenant.id,
             ],

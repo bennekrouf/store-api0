@@ -551,8 +551,8 @@ impl EndpointStore {
     pub async fn set_mcp_client_id(
         &self,
         email: &str,
-        mcp_client_id: Option<&str>,
-        google_client_id: Option<&str>,
+        mcp_client_id: Option<Option<&str>>,
+        google_client_id: Option<Option<&str>>,
         allow_api0_signin: Option<bool>,
     ) -> Result<(), StoreError> {
         tenant_management::set_mcp_client_id(
