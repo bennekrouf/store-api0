@@ -22,6 +22,10 @@ use crate::api::providers::list_providers_handler;
 use crate::api::key_consumer_self_service::{
     generate_self_service_key, list_self_service_keys,
 };
+use crate::mcp::messaging_channels::{
+    channel_for_bridge_handler, delete_channel_handler, list_channels_handler,
+    register_channel_handler,
+};
 use crate::mcp::channel_identities::{
     create_link_code_handler, list_identities_handler, redeem_handler, resolve_handler,
     unlink_identity_handler,
@@ -245,6 +249,11 @@ pub async fn start_http_server(
                             .route("/user/channel-identities/{channel}/{external_id}", web::delete().to(unlink_identity_handler))
                             .route("/internal/channel-identities/redeem", web::post().to(redeem_handler))
                             .route("/internal/channel-identities/resolve", web::get().to(resolve_handler))
+                            // Messaging channels: a tenant's bot on a platform
+                            .route("/user/messaging-channels", web::put().to(register_channel_handler))
+                            .route("/user/messaging-channels", web::get().to(list_channels_handler))
+                            .route("/user/messaging-channels/{channel}", web::delete().to(delete_channel_handler))
+                            .route("/internal/messaging-channels/{channel}/{channel_ref}", web::get().to(channel_for_bridge_handler))
                             .route("/user/tenant-idp", web::delete().to(delete_tenant_idp_handler))
                             // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)
                             .route("/consumer-keys", web::post().to(generate_consumer_key_handler))

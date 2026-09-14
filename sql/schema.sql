@@ -682,3 +682,26 @@ CREATE TABLE IF NOT EXISTS channel_identities (
 
 CREATE INDEX IF NOT EXISTS idx_channel_identities_user
     ON channel_identities(tenant_id, user_email);
+
+-- ── Messaging channels (generic) ─────────────────────────────────────────────
+-- A bot a tenant owns on some messaging platform. whatsapp_channels predates
+-- this and keeps its own shape; every channel added from here on lives here.
+--
+--   channel        'telegram' | …
+--   channel_ref    what the platform uses to route to this bot — the Telegram
+--                  bot id (the number before the colon in its token). Public.
+--   credential_enc the bot token, sealed by infra::secret_box
+--   display_ref    something a person can recognise — the @username
+--   webhook_secret sent by the platform on every update, checked by the bridge
+CREATE TABLE IF NOT EXISTS messaging_channels (
+    channel        VARCHAR     NOT NULL,
+    channel_ref    VARCHAR     NOT NULL,
+    tenant_id      VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    credential_enc BYTEA       NOT NULL,
+    display_ref    VARCHAR     NOT NULL DEFAULT '',
+    webhook_secret VARCHAR     NOT NULL,
+    system_prompt  TEXT        NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (channel, channel_ref),
+    UNIQUE (channel, tenant_id)
+);

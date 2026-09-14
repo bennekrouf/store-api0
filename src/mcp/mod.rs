@@ -4,3 +4,4 @@ pub mod tools;
 pub mod user_credentials;
 pub mod idp;
 pub mod channel_identities;
+pub mod messaging_channels;
