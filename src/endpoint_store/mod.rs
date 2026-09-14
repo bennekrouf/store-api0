@@ -1,4 +1,5 @@
 mod add_user_api_group;
+pub mod channel_identities;
 pub mod encrypt_legacy;
 pub mod idp_management;
 pub mod user_credentials;

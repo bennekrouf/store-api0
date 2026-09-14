@@ -22,6 +22,10 @@ use crate::api::providers::list_providers_handler;
 use crate::api::key_consumer_self_service::{
     generate_self_service_key, list_self_service_keys,
 };
+use crate::mcp::channel_identities::{
+    create_link_code_handler, list_identities_handler, redeem_handler, resolve_handler,
+    unlink_identity_handler,
+};
 use crate::mcp::idp::{
     consume_auth_request_handler, delete_tenant_idp_handler, get_tenant_idp_handler,
     remember_auth_request_handler, save_tenant_idp_handler,
@@ -235,6 +239,12 @@ pub async fn start_http_server(
                             .route("/internal/idp-auth-request", web::post().to(remember_auth_request_handler))
                             .route("/internal/idp-auth-request/consume", web::post().to(consume_auth_request_handler))
                             .route("/user/tenant-idp", web::put().to(save_tenant_idp_handler))
+                            // Messaging-channel identities: a phone or chat id ↔ an api0 person
+                            .route("/user/channel-link-code", web::post().to(create_link_code_handler))
+                            .route("/user/channel-identities", web::get().to(list_identities_handler))
+                            .route("/user/channel-identities/{channel}/{external_id}", web::delete().to(unlink_identity_handler))
+                            .route("/internal/channel-identities/redeem", web::post().to(redeem_handler))
+                            .route("/internal/channel-identities/resolve", web::get().to(resolve_handler))
                             .route("/user/tenant-idp", web::delete().to(delete_tenant_idp_handler))
                             // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)
                             .route("/consumer-keys", web::post().to(generate_consumer_key_handler))
