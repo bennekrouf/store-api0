@@ -429,6 +429,21 @@ INSERT INTO user_roles (email, role, granted_by) VALUES
     ('mohamed.bennekrouf@gmail.com', 'super_admin', 'system')
 ON CONFLICT (email) DO NOTHING;
 
+-- ── Per-user, per-front-end preferences ─────────────────────────────────────
+-- A free-form JSON document a signed-in person keeps about themselves on one
+-- of the sites that authenticate against the gateway. `app` is the Firebase
+-- project that signed them in (app.api0.ai and mayorana.ch use different
+-- ones), so the same email holds one document per site and neither site has
+-- to know the other's schema. Not tenant data: no RLS, like user_roles.
+
+CREATE TABLE IF NOT EXISTS app_user_prefs (
+    app         VARCHAR     NOT NULL,
+    email       VARCHAR     NOT NULL,
+    prefs       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (app, email)
+);
+
 -- ── Email engagement tracking ────────────────────────────────────────────────
 -- first_call_at: set on first successful API call (FirstCallMilestone + Tier-3 nudge guard)
 -- nudge_sent_at: set when 7-day nudge is sent (prevents resending)
