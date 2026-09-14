@@ -646,3 +646,39 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
     RAISE WARNING 'Consumer backfill skipped: %', SQLERRM;
 END $$;
+
+-- ── Messaging channel identities ─────────────────────────────────────────────
+-- A messaging channel identifies a person by whatever it has — a phone number,
+-- a Telegram user id — and api0 identifies them by email. These two tables are
+-- the bridge between the two, and they are the reason a message from a phone can
+-- run a tool as a specific person, with that person's own credentials and that
+-- person's name on whatever it creates.
+--
+-- Nothing here is specific to any channel. `channel` is a label; `external_id`
+-- is whatever that channel calls a user.
+
+-- A short code a signed-in person mints in the dashboard and sends to the bot.
+-- Proves "this messaging identity is mine". Ten minutes, single use.
+CREATE TABLE IF NOT EXISTS channel_link_codes (
+    code        VARCHAR     PRIMARY KEY,
+    user_email  VARCHAR     NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+
+-- A linked identity. The api0 key is minted at link time, pinned to the
+-- channel's tenant, and sealed by infra::secret_box — the bridge reads it back
+-- through one internal route and uses it exactly as Claude uses its own key.
+CREATE TABLE IF NOT EXISTS channel_identities (
+    channel      VARCHAR     NOT NULL,          -- 'whatsapp' | 'telegram' | …
+    external_id  VARCHAR     NOT NULL,          -- phone number, chat user id, …
+    tenant_id    VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_email   VARCHAR     NOT NULL,
+    api_key_id   VARCHAR     NOT NULL,          -- so unlinking can revoke it
+    api_key_enc  BYTEA       NOT NULL,          -- sealed
+    linked_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (channel, external_id, tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_identities_user
+    ON channel_identities(tenant_id, user_email);

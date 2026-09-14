@@ -53,3 +53,10 @@ DROP POLICY IF EXISTS user_downstream_credential_isolation ON user_downstream_cr
 CREATE POLICY user_downstream_credential_isolation ON user_downstream_credentials
     USING (current_setting('app.bypass_rls', true) = 'true'
            OR tenant_id = current_setting('app.current_tenant_id', true));
+
+-- 8. Channel identity isolation
+ALTER TABLE channel_identities ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS channel_identity_isolation ON channel_identities;
+CREATE POLICY channel_identity_isolation ON channel_identities
+    USING (current_setting('app.bypass_rls', true) = 'true'
+           OR tenant_id = current_setting('app.current_tenant_id', true));

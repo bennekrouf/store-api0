@@ -277,12 +277,11 @@ api_groups:
         description: "List recent pipeline runs in a project."
         verb: "GET"
         path: "/{project}/_apis/build/builds?api-version=7.1"
+        # No `$top` parameter: names starting with `$` are rejected by the
+        # Anthropic tool schema and the whole tool disappears from Claude.
+        # Azure DevOps pages sensibly without it.
         parameters:
           - name: "project"
             description: "Azure DevOps project name."
             required: "true"
             alternatives: ["project_name"]
-          - name: "$top"
-            description: "How many builds to return, e.g. 20."
-            required: "false"
-            alternatives: ["limit", "count"]
