@@ -49,6 +49,7 @@ use crate::api::domains::get_authorized_domains;
 use crate::payment::balance::get_credit_balance_handler;
 use crate::payment::transactions::get_credit_transactions_handler;
 use crate::user::get::get_user_preferences;
+use crate::user::prefs::{get_user_prefs, patch_user_prefs, put_user_prefs};
 use crate::infra::health;
 use crate::api::usage_log::log_api_usage;
 use crate::api::endpoint_manage::manage_endpoint;
@@ -266,6 +267,10 @@ pub async fn start_http_server(
                             // WhatsApp dead-letter queue
                             .route("/internal/whatsapp/failed-messages", web::post().to(insert_failed_message))
                             .route("/internal/whatsapp/failed-messages/{tenant_id}", web::get().to(list_failed_messages))
+                            // Per-user, per-front-end preferences (X-Internal-Secret, gateway-proxied)
+                            .route("/internal/user-prefs/{app}/{email}", web::get().to(get_user_prefs))
+                            .route("/internal/user-prefs/{app}/{email}", web::put().to(put_user_prefs))
+                            .route("/internal/user-prefs/{app}/{email}", web::patch().to(patch_user_prefs))
                             // User roles (X-Internal-Secret)
                             .route("/internal/user-role/{email}", web::get().to(get_user_role))
                             .route("/internal/user-role", web::put().to(set_user_role))
