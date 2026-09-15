@@ -43,6 +43,10 @@ use crate::mcp::tools::{
     list_mcp_tools_handler, list_my_mcp_tools_handler, upsert_mcp_tool_handler,
     upsert_my_mcp_tool_handler,
 };
+use crate::mcp::instructions::{
+    get_mcp_instructions_handler, get_my_mcp_instructions_handler,
+    save_my_mcp_instructions_handler,
+};
 use crate::app_log;
 use crate::api::group_delete::delete_api_group;
 use crate::api::endpoint_delete::delete_endpoint;
@@ -231,6 +235,10 @@ pub async fn start_http_server(
                             .route("/user/mcp-tools", web::get().to(list_my_mcp_tools_handler))
                             .route("/user/mcp-tools", web::put().to(upsert_my_mcp_tool_handler))
                             .route("/user/mcp-tools/{tool_name}", web::delete().to(delete_my_mcp_tool_handler))
+                            // MCP initialize instructions: tool summary + the tenant's own text
+                            .route("/mcp-instructions/{tenant_id}", web::get().to(get_mcp_instructions_handler))
+                            .route("/user/mcp-instructions", web::get().to(get_my_mcp_instructions_handler))
+                            .route("/user/mcp-instructions", web::put().to(save_my_mcp_instructions_handler))
                             // Per-user downstream credentials
                             .route("/user/downstream-credentials", web::get().to(list_credentials_handler))
                             .route("/user/downstream-credentials", web::put().to(save_credential_handler))

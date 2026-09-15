@@ -6,6 +6,7 @@ pub mod messaging_channels;
 pub mod user_credentials;
 pub mod api_key_management;
 pub mod mcp_tools_management;
+pub mod mcp_instructions;
 mod authorized_domains;
 mod cleanup;
 pub mod db_helpers;

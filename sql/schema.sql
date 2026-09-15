@@ -705,3 +705,9 @@ CREATE TABLE IF NOT EXISTS messaging_channels (
     PRIMARY KEY (channel, channel_ref),
     UNIQUE (channel, tenant_id)
 );
+
+-- What a tenant tells the model about its own tools, returned as `instructions`
+-- in the MCP initialize result, after the guidance api0 generates from the
+-- tenant's tool groups. Plain text, written by the tenant — for example which
+-- project is the main one, or how its teams are named. NULL means none.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS mcp_instructions TEXT;
