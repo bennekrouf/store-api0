@@ -1,6 +1,7 @@
 pub mod downstream_auth;
 pub mod client_id;
 pub mod tools;
+pub mod instructions;
 pub mod user_credentials;
 pub mod idp;
 pub mod channel_identities;
