@@ -398,6 +398,10 @@ CREATE TABLE IF NOT EXISTS whatsapp_failed_messages (
 
 CREATE INDEX IF NOT EXISTS idx_whatsapp_failed_tenant ON whatsapp_failed_messages(tenant_id, created_at DESC);
 
+-- Which door the failed message came through. The table predates Telegram and
+-- keeps its name; NULL rows are from before this column and are WhatsApp's.
+ALTER TABLE whatsapp_failed_messages ADD COLUMN IF NOT EXISTS channel VARCHAR;
+
 -- ── System-wide admin configuration ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS system_config (
