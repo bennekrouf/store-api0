@@ -715,3 +715,21 @@ CREATE TABLE IF NOT EXISTS messaging_channels (
 -- tenant's tool groups. Plain text, written by the tenant — for example which
 -- project is the main one, or how its teams are named. NULL means none.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS mcp_instructions TEXT;
+
+-- The Meta app's App Secret, per tenant. Meta signs every webhook POST with the
+-- secret of the app the webhook is configured on, and every tenant brings its
+-- own app — so one platform-wide secret verifies at most one tenant and rejects
+-- the rest. NULL falls back to the platform's META_APP_SECRET.
+ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS app_secret TEXT;
+
+-- The last time a platform delivered a message to the bridge, written at the
+-- door before identity, rate limits or the model are involved. The only trace a
+-- message from someone not yet linked leaves, and so the only proof that a
+-- webhook set up in Meta or registered with Telegram is really being called.
+CREATE TABLE IF NOT EXISTS channel_inbound (
+    tenant_id        VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    channel          VARCHAR     NOT NULL,          -- 'whatsapp' | 'telegram'
+    last_inbound_at  TIMESTAMPTZ NOT NULL,
+    last_unlinked_at TIMESTAMPTZ,                   -- last one from an unlinked sender
+    PRIMARY KEY (tenant_id, channel)
+);

@@ -16,6 +16,9 @@
 //               phone, from before keys were namespaced), dead letters.
 //   telegram  — messaging_channels, sessions keyed "telegram:<id>", dead letters.
 //
+// For both messaging channels, channel_inbound dates the last delivery at the
+// bridge's door, whether or not anything came of it.
+//
 // A session is written only at the end of a turn that succeeded, and a dead
 // letter only when one failed, so between them they date the last success and
 // the last failure. Read-only, and no credentials: configured or not, never the
@@ -197,7 +200,10 @@ SELECT t.id,
        tf.last_failure, COALESCE(tf.failures_24h, 0), tf.last_failure_type, tf.last_failure_detail,
        COALESCE(ti.linked, 0), COALESCE(tb.tool_calls_7d, 0),
        -- misrouted Claude activity
-       mis.actual_tenant_id, mist.name, mis.last_at, mis.calls_7d
+       mis.actual_tenant_id, mist.name, mis.last_at, mis.calls_7d,
+       -- last delivery at the bridge's door
+       wib.last_inbound_at, wib.last_unlinked_at,
+       tib.last_inbound_at, tib.last_unlinked_at
   FROM tenants t
   JOIN tools              ON tools.tenant_id = t.id
   LEFT JOIN mcp           ON mcp.tenant_id = t.id
@@ -212,6 +218,8 @@ SELECT t.id,
   LEFT JOIN identities    ti ON ti.tenant_id = t.id AND ti.channel = 'telegram'
   LEFT JOIN bridge_calls  tb ON tb.tenant_id = t.id AND tb.channel = 'telegram'
   LEFT JOIN misrouted     mis ON mis.home_tenant_id = t.id
+  LEFT JOIN channel_inbound wib ON wib.tenant_id = t.id AND wib.channel = 'whatsapp'
+  LEFT JOIN channel_inbound tib ON tib.tenant_id = t.id AND tib.channel = 'telegram'
   LEFT JOIN tenants       mist ON mist.id = mis.actual_tenant_id
  -- Only tenants with a door, or traffic through one — a misrouted hint counts,
  -- since that is the one time a tenant with nothing else to show is worth
@@ -337,6 +345,8 @@ pub async fn connectors_overview(
                     "last_failure_detail": r.get::<_, Option<String>>(18),
                     "linked_identities": r.get::<_, i64>(19),
                     "tool_calls_7d": r.get::<_, i64>(20),
+                    "last_inbound_at": rfc(r.get(36)),
+                    "last_unlinked_at": rfc(r.get(37)),
                 },
                 "telegram": {
                     "status": tg_status,
@@ -353,6 +363,8 @@ pub async fn connectors_overview(
                     "last_failure_detail": r.get::<_, Option<String>>(29),
                     "linked_identities": r.get::<_, i64>(30),
                     "tool_calls_7d": r.get::<_, i64>(31),
+                    "last_inbound_at": rfc(r.get(38)),
+                    "last_unlinked_at": rfc(r.get(39)),
                 },
             })
         })

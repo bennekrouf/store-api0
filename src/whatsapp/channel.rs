@@ -3,7 +3,7 @@
 // WhatsApp channel management — one channel per tenant.
 //
 // Gateway-proxied (no auth on store side — gateway has already verified Firebase JWT):
-//   POST   /api/whatsapp/channel          body: { email, phone_number_id, wa_token, verify_token, system_prompt? }
+//   POST   /api/whatsapp/channel          body: { email, phone_number_id, wa_token, verify_token, system_prompt?, app_secret? }
 //   GET    /api/whatsapp/channel/{email}
 //   DELETE /api/whatsapp/channel/{email}
 //
@@ -37,6 +37,10 @@ pub struct RegisterChannelRequest {
     pub wa_token: String,
     pub verify_token: String,
     pub system_prompt: Option<String>,
+    /// The Meta app's App Secret, which signs every webhook POST. Absent or blank
+    /// keeps the stored one: the form cannot show it back, so a person updating
+    /// their persona must not have to paste the secret again to avoid wiping it.
+    pub app_secret: Option<String>,
 }
 
 // POST /api/whatsapp/channel
@@ -60,16 +64,22 @@ pub async fn register_channel(
     };
 
     let system_prompt = body.system_prompt.as_deref().unwrap_or("");
+    let app_secret = body
+        .app_secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
 
     match client.execute(
-        "INSERT INTO whatsapp_channels (phone_number_id, tenant_id, wa_token, verify_token, system_prompt)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO whatsapp_channels (phone_number_id, tenant_id, wa_token, verify_token, system_prompt, app_secret)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (tenant_id) DO UPDATE
            SET phone_number_id = EXCLUDED.phone_number_id,
                wa_token        = EXCLUDED.wa_token,
                verify_token    = EXCLUDED.verify_token,
-               system_prompt   = EXCLUDED.system_prompt",
-        &[&body.phone_number_id, &tenant.id, &body.wa_token, &body.verify_token, &system_prompt],
+               system_prompt   = EXCLUDED.system_prompt,
+               app_secret      = COALESCE(EXCLUDED.app_secret, whatsapp_channels.app_secret)",
+        &[&body.phone_number_id, &tenant.id, &body.wa_token, &body.verify_token, &system_prompt, &app_secret],
     ).await {
         Ok(_) => {
             app_log!(info, tenant_id = %tenant.id, "WA channel registered");
@@ -99,22 +109,29 @@ pub async fn get_channel(
     };
 
     match client.query_opt(
-        "SELECT phone_number_id, system_prompt, created_at FROM whatsapp_channels WHERE tenant_id = $1",
+        "SELECT phone_number_id, system_prompt, created_at, app_secret IS NOT NULL
+           FROM whatsapp_channels WHERE tenant_id = $1",
         &[&tenant.id],
     ).await {
+        // tenant_id travels at the top level, channel or not: the gateway builds
+        // the webhook URL from it, so the URL the guide shows and the URL the
+        // test probes come from one place.
         Ok(Some(row)) => {
             let created_at: chrono::DateTime<chrono::Utc> = row.get(2);
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
+                "tenant_id": tenant.id,
                 "channel": {
                     "phone_number_id": row.get::<_, &str>(0),
                     "system_prompt":   row.get::<_, &str>(1),
                     "created_at":      created_at.to_rfc3339(),
+                    // Whether one is stored — never the secret.
+                    "has_app_secret":  row.get::<_, bool>(3),
                 }
             }))
         }
         Ok(None) => HttpResponse::Ok()
-            .json(serde_json::json!({"success": true, "channel": null})),
+            .json(serde_json::json!({"success": true, "tenant_id": tenant.id, "channel": null})),
         Err(e) => HttpResponse::InternalServerError()
             .json(serde_json::json!({"success": false, "error": e.to_string()})),
     }
@@ -165,7 +182,7 @@ pub async fn lookup_channel_internal(
             .json(serde_json::json!({"success": false, "error": "DB error"})),
     };
     match client.query_opt(
-        "SELECT tenant_id, wa_token, verify_token, system_prompt
+        "SELECT tenant_id, wa_token, verify_token, system_prompt, app_secret
          FROM whatsapp_channels WHERE phone_number_id = $1",
         &[&phone_number_id],
     ).await {
@@ -175,6 +192,7 @@ pub async fn lookup_channel_internal(
             "wa_token":      row.get::<_, &str>(1),
             "verify_token":  row.get::<_, &str>(2),
             "system_prompt": row.get::<_, &str>(3),
+            "app_secret":    row.get::<_, Option<&str>>(4),
         })),
         Ok(None) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "Channel not found"})),
@@ -200,7 +218,7 @@ pub async fn lookup_channel_by_tenant_internal(
             .json(serde_json::json!({"success": false, "error": "DB error"})),
     };
     match client.query_opt(
-        "SELECT phone_number_id, wa_token, verify_token, system_prompt
+        "SELECT phone_number_id, wa_token, verify_token, system_prompt, app_secret
          FROM whatsapp_channels WHERE tenant_id = $1",
         &[&tenant_id],
     ).await {
@@ -210,6 +228,7 @@ pub async fn lookup_channel_by_tenant_internal(
             "wa_token":       row.get::<_, &str>(1),
             "verify_token":   row.get::<_, &str>(2),
             "system_prompt":  row.get::<_, &str>(3),
+            "app_secret":     row.get::<_, Option<&str>>(4),
         })),
         Ok(None) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "Channel not found"})),

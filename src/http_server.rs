@@ -27,6 +27,7 @@ use crate::mcp::messaging_channels::{
     channel_for_bridge_handler, delete_channel_handler, list_channels_handler,
     register_channel_handler,
 };
+use crate::mcp::channel_inbound::{record_inbound_handler, tenant_inbound_handler};
 use crate::mcp::channel_identities::{
     create_link_code_handler, list_identities_handler, redeem_handler, resolve_handler,
     unlink_identity_handler,
@@ -309,6 +310,11 @@ pub async fn start_http_server(
                                 "/internal/connectors/{tenant_id}/messaging-channels",
                                 web::get().to(messaging_channels_for_tenant),
                             )
+                            .route(
+                                "/internal/connectors/{tenant_id}/inbound",
+                                web::get().to(tenant_inbound_handler),
+                            )
+                            .route("/internal/channel-inbound", web::post().to(record_inbound_handler))
                             // Platform-wide tenant configuration overview
                             .route(
                                 "/internal/tenants/overview",
