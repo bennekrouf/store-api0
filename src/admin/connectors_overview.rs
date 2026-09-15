@@ -20,6 +20,12 @@
 // letter only when one failed, so between them they date the last success and
 // the last failure. Read-only, and no credentials: configured or not, never the
 // token.
+//
+// Claude also carries a `misrouted` hint: whether one of this tenant's own
+// members has recent MCP calls tagged with a *different* tenant. That is what
+// it looks like when someone connects Claude.ai with the wrong (or default)
+// Client ID — the workspace they meant to use looks silent, and their traffic
+// is sitting under their own personal tenant, or someone else's, instead.
 
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
@@ -141,6 +147,35 @@ tools AS (
              WHERE g.tenant_id = t.id)
          + (SELECT count(*) FROM mcp_tools m WHERE m.tenant_id = t.id AND m.is_active) AS tool_count
       FROM tenants t
+),
+members AS (
+    SELECT tenant_id, email FROM tenant_users WHERE role <> 'consumer'
+),
+-- Claude tenant_id is stamped from the caller's own tool_namespace() at call
+-- time (see gateway mcp_routes.rs) — it is whatever tenant their OAuth client
+-- id resolved to, not necessarily the workspace they meant to use. A member
+-- whose calls land somewhere other than their own tenant is the exact shape of
+-- a Claude.ai connector left on the default Client ID, or pointed at the wrong
+-- one: this tenant reads as silent while a member's own account absorbs it.
+member_calls AS (
+    SELECT m.tenant_id AS home_tenant_id,
+           ul.tenant_id AS actual_tenant_id,
+           max(ul.timestamp) AS last_at,
+           count(*) AS calls_7d
+      FROM members m
+      JOIN api_usage_logs ul
+        ON ul.email = m.email
+       AND ul.tenant_id <> m.tenant_id
+       AND ul.method = 'MCP'
+       AND ul.timestamp > now() - interval '7 days'
+       AND NOT EXISTS (SELECT 1 FROM channel_identities ci WHERE ci.api_key_id = ul.key_id)
+     GROUP BY m.tenant_id, ul.tenant_id
+),
+-- One row per home tenant: wherever its most recent misrouted call landed.
+misrouted AS (
+    SELECT DISTINCT ON (home_tenant_id) home_tenant_id, actual_tenant_id, last_at, calls_7d
+      FROM member_calls
+     ORDER BY home_tenant_id, last_at DESC
 )
 SELECT t.id,
        t.name,
@@ -160,7 +195,9 @@ SELECT t.id,
        tg.channel_ref, tg.display_ref, tg.created_at,
        ts.last_success, COALESCE(ts.conversations_7d, 0),
        tf.last_failure, COALESCE(tf.failures_24h, 0), tf.last_failure_type, tf.last_failure_detail,
-       COALESCE(ti.linked, 0), COALESCE(tb.tool_calls_7d, 0)
+       COALESCE(ti.linked, 0), COALESCE(tb.tool_calls_7d, 0),
+       -- misrouted Claude activity
+       mis.actual_tenant_id, mist.name, mis.last_at, mis.calls_7d
   FROM tenants t
   JOIN tools              ON tools.tenant_id = t.id
   LEFT JOIN mcp           ON mcp.tenant_id = t.id
@@ -174,8 +211,12 @@ SELECT t.id,
   LEFT JOIN failures      tf ON tf.tenant_id = t.id AND tf.channel = 'telegram'
   LEFT JOIN identities    ti ON ti.tenant_id = t.id AND ti.channel = 'telegram'
   LEFT JOIN bridge_calls  tb ON tb.tenant_id = t.id AND tb.channel = 'telegram'
- -- Only tenants with a door, or traffic through one. Every personal tenant
- -- nobody has wired up would otherwise bury the handful that matter.
+  LEFT JOIN misrouted     mis ON mis.home_tenant_id = t.id
+  LEFT JOIN tenants       mist ON mist.id = mis.actual_tenant_id
+ -- Only tenants with a door, or traffic through one — a misrouted hint counts,
+ -- since that is the one time a tenant with nothing else to show is worth
+ -- surfacing. Every personal tenant nobody has wired up would otherwise bury
+ -- the handful that matter.
  WHERE COALESCE(btrim(t.mcp_client_id), '') <> ''
     OR mcp.tenant_id IS NOT NULL
     OR wa.tenant_id IS NOT NULL
@@ -184,6 +225,7 @@ SELECT t.id,
     OR ts.tenant_id IS NOT NULL
     OR wf.tenant_id IS NOT NULL
     OR tf.tenant_id IS NOT NULL
+    OR mis.home_tenant_id IS NOT NULL
  ORDER BY t.name";
 
 type Ts = Option<DateTime<Utc>>;
@@ -241,6 +283,16 @@ pub async fn connectors_overview(
                 claude_status = "misconfigured";
             }
 
+            let misrouted_tenant_id: Option<String> = r.get(32);
+            let misrouted = misrouted_tenant_id.map(|id| {
+                serde_json::json!({
+                    "tenant_id": id,
+                    "tenant_name": r.get::<_, Option<String>>(33),
+                    "last_at": rfc(r.get(34)),
+                    "calls_7d": r.get::<_, i64>(35),
+                })
+            });
+
             // ── whatsapp ────────────────────────────────────────────────────
             let wa_number: Option<String> = r.get(11);
             let (wa_ok, wa_fail): (Ts, Ts) = (r.get(13), r.get(15));
@@ -266,6 +318,10 @@ pub async fn connectors_overview(
                     "errors_24h": r.get::<_, i64>(8),
                     "calls_7d": r.get::<_, i64>(9),
                     "users_7d": r.get::<_, i64>(10),
+                    // Set only when a member of this tenant has recent MCP
+                    // activity tagged with a different tenant — the shape of a
+                    // Claude.ai connector left on the wrong Client ID.
+                    "misrouted": misrouted,
                 },
                 "whatsapp": {
                     "status": wa_status,
