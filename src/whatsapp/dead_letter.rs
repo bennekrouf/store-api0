@@ -32,6 +32,9 @@ pub struct InsertFailedMessage {
     pub error_type: String,
     pub error_detail: String,
     pub payload: Option<serde_json::Value>,
+    /// "whatsapp" | "telegram". Optional so a bridge that predates it still
+    /// dead-letters; its rows read back as WhatsApp's.
+    pub channel: Option<String>,
 }
 
 // POST /api/internal/whatsapp/failed-messages
@@ -56,8 +59,8 @@ pub async fn insert_failed_message(
 
     match client.execute(
         "INSERT INTO whatsapp_failed_messages
-         (tenant_id, customer_phone, message_text, error_type, error_detail, payload)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         (tenant_id, customer_phone, message_text, error_type, error_detail, payload, channel)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
         &[
             &body.tenant_id,
             &body.customer_phone,
@@ -65,6 +68,7 @@ pub async fn insert_failed_message(
             &body.error_type,
             &body.error_detail,
             &payload,
+            &body.channel,
         ],
     ).await {
         Ok(_) => {

@@ -5,6 +5,7 @@ use crate::mcp::downstream_auth::{
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
+use crate::admin::connectors_overview::{connectors_overview, messaging_channels_for_tenant};
 use crate::admin::tenant_overview::{
     add_consumers, delete_tenant, prune_empty_tenants, tenants_overview, update_tenant_config,
 };
@@ -302,6 +303,12 @@ pub async fn start_http_server(
                             .route("/internal/user-role/{email}", web::get().to(get_user_role))
                             .route("/internal/user-role", web::put().to(set_user_role))
                             .route("/internal/user-roles", web::get().to(list_user_roles))
+                            // Platform-wide connector configuration and activity
+                            .route("/internal/connectors/overview", web::get().to(connectors_overview))
+                            .route(
+                                "/internal/connectors/{tenant_id}/messaging-channels",
+                                web::get().to(messaging_channels_for_tenant),
+                            )
                             // Platform-wide tenant configuration overview
                             .route(
                                 "/internal/tenants/overview",
