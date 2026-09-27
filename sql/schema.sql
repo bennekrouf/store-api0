@@ -733,3 +733,33 @@ CREATE TABLE IF NOT EXISTS channel_inbound (
     last_unlinked_at TIMESTAMPTZ,                   -- last one from an unlinked sender
     PRIMARY KEY (tenant_id, channel)
 );
+
+-- The Stripe PaymentIntent a top-up came from. Unique, so a payment is credited
+-- once however many times it is reported: by the browser's confirm call, by the
+-- payment_intent.succeeded webhook, or by both, in either order. NULL for every
+-- other kind of balance change.
+ALTER TABLE credit_transactions ADD COLUMN IF NOT EXISTS stripe_payment_intent_id VARCHAR;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_tx_stripe_intent
+    ON credit_transactions(stripe_payment_intent_id)
+    WHERE stripe_payment_intent_id IS NOT NULL;
+
+-- Licences for the desktop apps sold on mayorana.ch (Splitter first). Not
+-- tenant data: a buyer has no api0 account, only the email Stripe Checkout
+-- collected, so the table is outside RLS and read with the admin connection.
+--   key            the signed licence the app verifies offline (see payment::license)
+--   updates_until  last release date the licence unlocks; older builds keep working
+--   revoked_at     set when the payment is refunded
+CREATE TABLE IF NOT EXISTS licenses (
+    id                VARCHAR     PRIMARY KEY,
+    product           VARCHAR     NOT NULL,
+    edition           VARCHAR     NOT NULL,
+    email             VARCHAR     NOT NULL,
+    stripe_session_id VARCHAR     NOT NULL UNIQUE,
+    stripe_payment_intent_id VARCHAR,
+    key               TEXT        NOT NULL,
+    updates_until     DATE        NOT NULL,
+    issued_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(email);
+CREATE INDEX IF NOT EXISTS idx_licenses_payment_intent ON licenses(stripe_payment_intent_id);
