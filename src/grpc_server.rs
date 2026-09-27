@@ -526,6 +526,16 @@ impl EndpointService for EndpointServiceImpl {
 
         app_log!(info, email = %email, amount = amount, currency = %currency, "Received create_payment_intent request");
 
+        use crate::payment::topup::{MAX_AMOUNT, MIN_AMOUNT};
+        if !(MIN_AMOUNT..=MAX_AMOUNT).contains(&amount) {
+            return Ok(Response::new(CreatePaymentIntentResponse {
+                success: false,
+                client_secret: "".to_string(),
+                payment_intent_id: "".to_string(),
+                message: format!("Amount must be between {} and {}", MIN_AMOUNT / 100, MAX_AMOUNT / 100),
+            }));
+        }
+
         match self
             .payment_service
             .create_payment_intent(amount, &currency, &email)
@@ -559,7 +569,6 @@ impl EndpointService for EndpointServiceImpl {
         let req = request.into_inner();
         let email = req.email;
         let payment_intent_id = req.payment_intent_id;
-        let amount = req.amount;
 
         app_log!(info, email = %email, payment_intent_id = %payment_intent_id, "Received confirm_payment request");
 
@@ -576,51 +585,29 @@ impl EndpointService for EndpointServiceImpl {
             }
         };
 
-        if intent.status != stripe::PaymentIntentStatus::Succeeded {
-            app_log!(warn, email = %email, status = ?intent.status, "Payment intent not succeeded");
-            return Ok(Response::new(ConfirmPaymentResponse {
-                success: false,
-                payment_verified: false,
-                new_credit_balance: 0,
-                message: format!("Payment not succeeded. Status: {:?}", intent.status),
-            }));
-        }
-
-        // Add credits to user balance (1 cent = 100 credits)
-        let credits_to_add = amount * 100;
-
-        // Resolve tenant_id for the user
-        use crate::endpoint_store::tenant_management;
-        let tenant_id = match tenant_management::get_default_tenant(&self.store, &email).await {
-            Ok(t) => t.id,
+        // Credits come from what Stripe charged, for the account the intent was
+        // created for, once per intent (see payment::topup) — never from req.amount.
+        use crate::payment::topup::{credit_intent, TopUp, TopUpError};
+        match credit_intent(&self.store, &intent, Some(&email)).await {
+            Ok((_, TopUp::Credited { new_balance, .. })) => Ok(Response::new(ConfirmPaymentResponse {
+                success: true,
+                payment_verified: true,
+                new_credit_balance: new_balance,
+                message: "Payment confirmed and credits added".to_string(),
+            })),
+            Ok((_, TopUp::AlreadyCredited { balance })) => Ok(Response::new(ConfirmPaymentResponse {
+                success: true,
+                payment_verified: true,
+                new_credit_balance: balance,
+                message: "Payment confirmed; credits were already added".to_string(),
+            })),
             Err(e) => {
-                app_log!(error, error = %e, email = %email, "Failed to resolve tenant for credit update");
-                return Ok(Response::new(ConfirmPaymentResponse {
-                    success: false,
-                    payment_verified: true,
-                    new_credit_balance: 0,
-                    message: format!("Payment verified but failed to resolve tenant: {}", e),
-                }));
-            }
-        };
-
-        match self.store.update_credit_balance(&tenant_id, &email, credits_to_add, "topup", None).await {
-            Ok(new_balance) => {
-                app_log!(info, email = %email, amount = amount, credits = credits_to_add, new_balance = new_balance, "Successfully added credits");
-                Ok(Response::new(ConfirmPaymentResponse {
-                    success: true,
-                    payment_verified: true,
-                    new_credit_balance: new_balance,
-                    message: "Payment confirmed and credits added".to_string(),
-                }))
-            }
-            Err(e) => {
-                app_log!(error, error = %e, email = %email, "Failed to update credit balance");
+                app_log!(warn, error = %e, email = %email, payment_intent_id = %payment_intent_id, "Payment not credited");
                 Ok(Response::new(ConfirmPaymentResponse {
                     success: false,
-                    payment_verified: true,
+                    payment_verified: !matches!(e, TopUpError::NotSucceeded(_)),
                     new_credit_balance: 0,
-                    message: format!("Payment verified but failed to update balance: {}", e),
+                    message: e.to_string(),
                 }))
             }
         }

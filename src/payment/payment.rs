@@ -2,7 +2,9 @@ use crate::app_log;
 use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::EndpointStore;
 use crate::payment::service::PaymentService;
-use actix_web::{web, HttpResponse, Responder};
+use crate::middleware::internal_secret::require_internal_secret;
+use crate::payment::topup::{self, TopUp, TopUpError, MAX_AMOUNT, MIN_AMOUNT};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -17,15 +19,32 @@ pub struct CreateIntentRequest {
 pub struct ConfirmRequest {
     pub email: String,
     pub payment_intent_id: String,
-    pub amount: i64,   // dollar amount (frontend sends the selected $ value)
+    /// Still sent by the dashboard, and ignored: the credits come from the
+    /// amount Stripe charged. See payment::topup.
+    #[allow(dead_code)]
+    pub amount: Option<i64>,
 }
 
 /// POST /api/payments/intent
 /// Creates a Stripe PaymentIntent and returns the client_secret to the frontend.
 pub async fn create_payment_intent_handler(
+    req: HttpRequest,
     payment_service: web::Data<Arc<PaymentService>>,
     request: web::Json<CreateIntentRequest>,
 ) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    if !(MIN_AMOUNT..=MAX_AMOUNT).contains(&request.amount) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": format!(
+                "Amount must be between {} and {}",
+                MIN_AMOUNT / 100,
+                MAX_AMOUNT / 100
+            ),
+        }));
+    }
     let email = request.email.to_lowercase();
     app_log!(info,
         email = %email,
@@ -60,89 +79,70 @@ pub async fn create_payment_intent_handler(
 }
 
 /// POST /api/payments/confirm
-/// Verifies the PaymentIntent succeeded with Stripe, then credits the user's account.
+/// Called by the browser once Stripe.js reports the payment succeeded. Credits
+/// the account the intent was created for, from the amount Stripe charged, once
+/// per intent: the payment_intent.succeeded webhook may already have done it.
 pub async fn confirm_payment_handler(
+    req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     payment_service: web::Data<Arc<PaymentService>>,
     request: web::Json<ConfirmRequest>,
 ) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
     let email = request.email.to_lowercase();
     let payment_intent_id = &request.payment_intent_id;
-    let amount = request.amount; // dollar amount, e.g. 10 for a $10 payment
 
     app_log!(info,
         email = %email,
         payment_intent_id = %payment_intent_id,
-        amount = amount,
         "Confirming payment"
     );
 
-    // 1. Verify Stripe intent status
-    match payment_service.confirm_payment(payment_intent_id).await {
-        Ok(intent) => {
-            use stripe::PaymentIntentStatus;
-            if intent.status != PaymentIntentStatus::Succeeded {
-                app_log!(warn,
-                    payment_intent_id = %payment_intent_id,
-                    status = ?intent.status,
-                    "Payment intent not succeeded"
-                );
-                return HttpResponse::BadRequest().json(serde_json::json!({
-                    "success": false,
-                    "message": format!("Payment not completed. Status: {:?}", intent.status),
-                }));
-            }
-
-            // 2. Credit the user account
-            let tenant = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
-                Ok(t) => t,
-                Err(e) => {
-                    app_log!(error, error = %e, email = %email, "Confirm payment: tenant lookup failed");
-                    return HttpResponse::InternalServerError().json(serde_json::json!({
-                        "success": false,
-                        "message": "Account resolution failed"
-                    }));
-                }
-            };
-
-            let description = format!("Stripe payment – ${}", amount);
-            match store
-                .update_credit_balance(&tenant.id, &email, amount, "stripe_topup", Some(&description))
-                .await
-            {
-                Ok(new_balance) => {
-                    app_log!(info, email = %email, amount = amount, new_balance = new_balance, "Credits added after successful payment");
-
-                    send_async(store.as_ref().clone(), email.clone(), EmailKind::PaymentReceipt {
-                        amount_dollars: amount as f64,
-                        credits_added: amount,
-                        new_balance,
-                    });
-
-                    HttpResponse::Ok().json(serde_json::json!({
-                        "success": true,
-                        "message": format!("Payment confirmed. {} credits added.", amount),
-                        "new_balance": new_balance,
-                    }))
-                }
-                Err(e) => {
-                    app_log!(error,
-                        error = %e,
-                        email = %email,
-                        "Payment confirmed but credit update failed"
-                    );
-                    HttpResponse::InternalServerError().json(serde_json::json!({
-                        "success": false,
-                        "message": format!("Payment confirmed but credits could not be added: {}", e),
-                    }))
-                }
-            }
-        }
+    let intent = match payment_service.confirm_payment(payment_intent_id).await {
+        Ok(intent) => intent,
         Err(e) => {
             app_log!(error, error = %e, "Failed to verify payment intent with Stripe");
-            HttpResponse::InternalServerError().json(serde_json::json!({
+            return HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
                 "message": format!("Failed to verify payment: {}", e),
+            }));
+        }
+    };
+
+    match topup::credit_intent(&store, &intent, Some(&email)).await {
+        Ok((email, TopUp::Credited { credits, new_balance })) => {
+            send_async(store.as_ref().clone(), email, EmailKind::PaymentReceipt {
+                amount_dollars: intent.amount_received as f64 / 100.0,
+                credits_added: credits,
+                new_balance,
+            });
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": format!("Payment confirmed. {} credits added.", credits),
+                "new_balance": new_balance,
+            }))
+        }
+        Ok((_, TopUp::AlreadyCredited { balance })) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "Payment confirmed. Credits were already added.",
+            "new_balance": balance,
+        })),
+        Err(e @ TopUpError::Store(_)) => {
+            app_log!(error, error = %e, email = %email, payment_intent_id = %payment_intent_id,
+                "Payment confirmed but credit update failed");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": e.to_string(),
+            }))
+        }
+        Err(e) => {
+            app_log!(warn, error = %e, email = %email, payment_intent_id = %payment_intent_id,
+                "Payment not credited");
+            HttpResponse::BadRequest().json(serde_json::json!({
+                "success": false,
+                "message": e.to_string(),
             }))
         }
     }

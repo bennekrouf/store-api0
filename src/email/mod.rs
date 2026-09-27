@@ -54,6 +54,8 @@ pub enum EmailKind {
     Nudge { name: String, credits: i64 },
     WinBack { name: String },
     WhatsNew { feature_title: String, description: String },
+    // ── Desktop app licences (sold on mayorana.ch, not api0) ─────────────────
+    LicenseIssued { product_name: String, key: String, updates_until: String },
 }
 
 impl EmailKind {
@@ -72,6 +74,7 @@ impl EmailKind {
             Self::Nudge { .. }             => "nudge",
             Self::WinBack { .. }           => "win_back",
             Self::WhatsNew { .. }          => "whats_new",
+            Self::LicenseIssued { .. }     => "license_issued",
         }
     }
 
@@ -93,10 +96,29 @@ impl EmailKind {
             Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
             Self::WhatsNew { feature_title, .. }             => format!("New on api0: {}", feature_title),
+            Self::LicenseIssued { product_name, .. }         => format!("Your {} licence key", product_name),
+        }
+    }
+
+    /// The name the email is sent as. Licence emails go to people who bought a
+    /// desktop app from mayorana.ch and have never heard of api0.
+    fn sender_name(&self) -> &'static str {
+        match self {
+            Self::LicenseIssued { .. } => "mayorana",
+            _ => "api0",
         }
     }
 
     pub fn html_body(&self) -> String {
+        if let Self::LicenseIssued { product_name, key, updates_until } = self {
+            return wrap_mayorana_layout(&format!(
+                r#"<h1>Thank you for buying {product_name}</h1>
+<p>Here is your licence key. To activate it, click <strong>Splitter</strong> at the top of the file list and paste the key in.</p>
+<pre style="white-space:pre-wrap;word-break:break-all;background:#F1F5F9;padding:12px;border-radius:6px;font-size:12px">{key}</pre>
+<p>It includes every update released until <strong>{updates_until}</strong>. Versions released before that date keep working after it.</p>
+<p style="color:#64748B;font-size:13px">Keep this email: the key works offline and is all you need to activate {product_name} on another computer.</p>"#
+            ));
+        }
         let content = match self {
             // ── Tier 1 ───────────────────────────────────────────────────────
             Self::Welcome { name, key_prefix, credits } => format!(
@@ -249,6 +271,7 @@ impl EmailKind {
 <p>{description}</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Try It Now</a></p>"#
             ),
+            Self::LicenseIssued { .. } => unreachable!("rendered above"),
         };
 
         wrap_layout(&content)
@@ -277,6 +300,23 @@ fn wrap_layout(content: &str) -> String {
     )
 }
 
+fn wrap_mayorana_layout(content: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F8FAFC;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:600px;margin:24px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+  <div style="padding:32px;color:#1E293B;line-height:1.6">{content}</div>
+  <div style="padding:16px 32px;background:#F8FAFC;color:#64748B;font-size:12px;text-align:center">
+    <a href="https://mayorana.ch" style="color:#475569">mayorana.ch</a>
+  </div>
+</div>
+</body>
+</html>"#
+    )
+}
+
 // ── Fire-and-forget helper (call from any handler) ────────────────────────────
 
 pub fn send_async(store: Arc<EndpointStore>, to: impl Into<String>, kind: EmailKind) {
@@ -296,7 +336,7 @@ async fn deliver_internal(store: &EndpointStore, to: &str, kind: &EmailKind) -> 
         .ok_or_else(|| anyhow::anyhow!("SMTP not configured"))?;
 
     let email = lettre::Message::builder()
-        .from(format!("api0 <{}>", cfg.from_addr).parse()?)
+        .from(format!("{} <{}>", kind.sender_name(), cfg.from_addr).parse()?)
         .to(to.parse()?)
         .subject(kind.subject())
         .header(ContentType::TEXT_HTML)
