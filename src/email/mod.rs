@@ -113,7 +113,7 @@ impl EmailKind {
         if let Self::LicenseIssued { product_name, key, updates_until } = self {
             return wrap_mayorana_layout(&format!(
                 r#"<h1>Thank you for buying {product_name}</h1>
-<p>Here is your licence key. To activate it, click <strong>Splitter</strong> at the top of the file list and paste the key in.</p>
+<p>Here is your licence key. To activate it, open {product_name} and click <strong>Get Pro…</strong> at the top of the file list (in versions before 0.1.14, click the <strong>Splitter</strong> name there), then paste the key in.</p>
 <pre style="white-space:pre-wrap;word-break:break-all;background:#F1F5F9;padding:12px;border-radius:6px;font-size:12px">{key}</pre>
 <p>It includes every update released until <strong>{updates_until}</strong>. Versions released before that date keep working after it.</p>
 <p style="color:#64748B;font-size:13px">Keep this email: the key works offline and is all you need to activate {product_name} on another computer.</p>"#
