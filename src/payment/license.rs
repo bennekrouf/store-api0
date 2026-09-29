@@ -45,7 +45,20 @@ const UPDATES_DAYS: u64 = 365;
 fn product_name(product: &str, edition: &str) -> Option<&'static str> {
     match (product, edition) {
         ("splitter", "pro") => Some("Splitter Pro"),
+        ("gitagent", "pro") => Some("GitAgent Pro"),
         _ => None,
+    }
+}
+
+/// Where the key goes in each app, for the licence email (HTML).
+fn activation_html(product: &str) -> &'static str {
+    match product {
+        "splitter" => {
+            "open Splitter and click <strong>Get Pro…</strong> at the top of the file list \
+             (in versions before 0.1.14, click the <strong>Splitter</strong> name there), then paste the key in."
+        }
+        "gitagent" => "open GitAgent, click <strong>Get Pro…</strong> in the top bar and paste the key in.",
+        _ => "open the app and paste the key into its licence window.",
     }
 }
 
@@ -187,6 +200,7 @@ pub async fn issue_for_session(
     app_log!(info, license_id = %payload.id, product = %payload.product, email = %email, session_id = %session_id, "Licence issued");
     send_async(Arc::clone(store), email.clone(), EmailKind::LicenseIssued {
         product_name: name.to_string(),
+        how: activation_html(&payload.product).to_string(),
         key: key.clone(),
         updates_until: payload.updates_until.to_string(),
     });
@@ -368,7 +382,9 @@ mod tests {
     #[test]
     fn only_known_products_are_for_sale() {
         assert_eq!(product_name("splitter", "pro"), Some("Splitter Pro"));
+        assert_eq!(product_name("gitagent", "pro"), Some("GitAgent Pro"));
         assert_eq!(product_name("splitter", "free"), None);
+        assert!(activation_html("gitagent").contains("top bar"));
         assert_eq!(price_env("splitter", "pro"), "LICENSE_PRICE_SPLITTER_PRO");
     }
 
