@@ -109,41 +109,6 @@ pub async fn save_credential(
     Ok(row_to_summary(row))
 }
 
-/// The credential itself, decrypted. The gateway is the only caller.
-pub async fn get_secret(
-    store: &EndpointStore,
-    tenant_id: &str,
-    user_email: &str,
-    kind: &str,
-) -> Result<Option<String>, StoreError> {
-    let user_email = user_email.to_lowercase();
-    let client = store.get_conn(Some(tenant_id)).await?;
-
-    let row = client
-        .query_opt(
-            "SELECT secret FROM user_downstream_credentials
-             WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
-            &[&tenant_id, &user_email, &kind],
-        )
-        .await
-        .to_store_error()?;
-
-    let sealed: Vec<u8> = match row {
-        Some(r) => r.get(0),
-        None => return Ok(None),
-    };
-
-    // A record that will not open is not a missing record: someone rotated the
-    // key or altered the row, and saying "not found" would send the user off to
-    // paste a new token that would fail the same way.
-    secret_box::open(&sealed, &SecretContext { tenant_id, purpose: kind })
-        .map(Some)
-        .map_err(|e| {
-            app_log!(error, tenant_id = %tenant_id, kind = %kind, error = %e, "Stored credential would not open");
-            StoreError::Database(format!("stored credential could not be read: {}", e))
-        })
-}
-
 pub async fn list_credentials(
     store: &EndpointStore,
     tenant_id: &str,
@@ -172,9 +137,14 @@ pub async fn list_credentials(
 pub struct TenantCredentialSlot {
     pub tenant_id: String,
     pub tenant_name: String,
-    /// True when the tenant authenticates as each user — the only case where a
-    /// personal credential is used at all.
+    /// True when the tenant authenticates as each user with a token they paste
+    /// themselves — the only case where a personal credential is typed at all.
     pub per_user: bool,
+    /// True when the tenant authenticates as each user through OAuth. Also a
+    /// personal credential, but obtained by connecting rather than pasting.
+    pub oauth: bool,
+    /// For `oauth`: whether this person has connected their account yet.
+    pub connected: bool,
     pub credential: Option<CredentialSummary>,
 }
 
@@ -249,29 +219,55 @@ pub async fn credential_slots(
     let mut slots = Vec::with_capacity(tenants.len());
 
     for (tenant_id, tenant_name) in tenants {
-        let per_user = client
+        let auth_mode = client
             .query_opt(
                 "SELECT auth_mode FROM tenant_downstream_auth WHERE tenant_id = $1",
                 &[&tenant_id],
             )
             .await
             .to_store_error()?
-            .map(|r| r.get::<_, String>(0) == "per_user")
-            .unwrap_or(false);
+            .map(|r| r.get::<_, String>(0))
+            .unwrap_or_default();
+        let per_user = auth_mode == "per_user";
+        let oauth = auth_mode == "per_user_oauth";
 
+        // Scoped to the pasted token on purpose. OAuth stores two rows for the
+        // same (tenant, user) — the refresh token and the current access token —
+        // and an unscoped query_opt errors outright on more than one row, which
+        // would break this panel for everyone in an OAuth workspace.
         let credential = client
             .query_opt(
                 "SELECT tenant_id, user_email, kind, label, expires_at,
                         verified_identity, created_at, updated_at
                  FROM user_downstream_credentials
-                 WHERE tenant_id = $1 AND user_email = $2",
+                 WHERE tenant_id = $1 AND user_email = $2 AND kind = 'pat'",
                 &[&tenant_id, &email],
             )
             .await
             .to_store_error()?
             .map(row_to_summary);
 
-        slots.push(TenantCredentialSlot { tenant_id, tenant_name, per_user, credential });
+        // The refresh token is what makes a connection durable, so its presence
+        // is what "connected" means. An access token alone expires within the
+        // hour and cannot be renewed.
+        let connected = client
+            .query_opt(
+                "SELECT 1 FROM user_downstream_credentials
+                 WHERE tenant_id = $1 AND user_email = $2 AND kind = 'oauth_refresh'",
+                &[&tenant_id, &email],
+            )
+            .await
+            .to_store_error()?
+            .is_some();
+
+        slots.push(TenantCredentialSlot {
+            tenant_id,
+            tenant_name,
+            per_user,
+            oauth,
+            connected,
+            credential,
+        });
     }
 
     Ok(slots)
@@ -334,4 +330,48 @@ fn row_to_summary(row: tokio_postgres::Row) -> CredentialSummary {
         created_at: row.get::<_, DateTime<Utc>>(6).to_rfc3339(),
         updated_at: row.get::<_, DateTime<Utc>>(7).to_rfc3339(),
     }
+}
+
+/// A stored secret together with the expiry recorded for it.
+///
+/// The expiry matters only for OAuth: a hand-pasted PAT's `expires_at` is
+/// advisory, since only the provider really knows. An access token's is not —
+/// it is the whole reason we keep a refresh token — so the caller has to be
+/// able to see it and decide whether to refresh.
+pub async fn get_secret_with_expiry(
+    store: &EndpointStore,
+    tenant_id: &str,
+    user_email: &str,
+    kind: &str,
+) -> Result<Option<(String, Option<DateTime<Utc>>)>, StoreError> {
+    let user_email = user_email.to_lowercase();
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let row = client
+        .query_opt(
+            "SELECT secret, expires_at FROM user_downstream_credentials
+             WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
+            &[&tenant_id, &user_email, &kind],
+        )
+        .await
+        .to_store_error()?;
+
+    let row = match row {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+
+    let sealed: Vec<u8> = row.get(0);
+    let expires_at: Option<DateTime<Utc>> = row.get(1);
+
+    // A record that will not open is not a missing record: someone rotated the
+    // key or altered the row, and reporting it as absent would send the person
+    // back through a connect flow that fails identically.
+    let secret = secret_box::open(&sealed, &SecretContext { tenant_id, purpose: kind })
+        .map_err(|e| {
+            app_log!(error, tenant_id = %tenant_id, kind = %kind, error = %e, "Stored credential would not open");
+            StoreError::Database(format!("stored credential could not be read: {}", e))
+        })?;
+
+    Ok(Some((secret, expires_at)))
 }

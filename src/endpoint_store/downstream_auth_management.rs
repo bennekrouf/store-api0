@@ -36,6 +36,8 @@ pub struct TenantDownstreamAuth {
     pub client_secret: Option<String>,
     pub scope: Option<String>,
     pub client_auth_style: Option<String>,
+    /// per_user_oauth only: where the person is sent to approve access.
+    pub authorize_url: Option<String>,
     pub updated_at: String,
 }
 
@@ -55,6 +57,7 @@ pub struct SaveDownstreamAuthRequest {
     pub client_secret: Option<String>,
     pub scope: Option<String>,
     pub client_auth_style: Option<String>,
+    pub authorize_url: Option<String>,
 }
 
 /// Open a sealed column, falling back to the plaintext one for rows the backfill
@@ -106,7 +109,8 @@ pub async fn get_downstream_auth(
                     updated_at, bearer_token_enc, custom_headers_enc,
                     service_account_json_enc, per_user_verify_url,
                     per_user_identity_pointer, oauth_token_url, oauth_client_id,
-                    oauth_client_secret_enc, oauth_scope, oauth_client_auth_style
+                    oauth_client_secret_enc, oauth_scope, oauth_client_auth_style,
+                    oauth_authorize_url
              FROM tenant_downstream_auth WHERE tenant_id = $1",
             &[&tenant_id],
         )
@@ -141,6 +145,7 @@ pub async fn get_downstream_auth(
             client_secret:        unseal_or_plain(r.get(16), None, tenant_id, "oauth_client_secret"),
             scope:                r.get(17),
             client_auth_style:    r.get(18),
+            authorize_url:        r.get(19),
             updated_at:           r.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
         }
     }))
@@ -184,9 +189,10 @@ pub async fn save_downstream_auth(
                  updated_at, bearer_token_enc, service_account_json_enc,
                  custom_headers_enc, per_user_verify_url,
                  per_user_identity_pointer, oauth_token_url, oauth_client_id,
-                 oauth_client_secret_enc, oauth_scope, oauth_client_auth_style)
+                 oauth_client_secret_enc, oauth_scope, oauth_client_auth_style,
+                 oauth_authorize_url)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                     $15, $16, $17, $18, $19)
+                     $15, $16, $17, $18, $19, $20)
              ON CONFLICT (tenant_id) DO UPDATE SET
                 auth_mode                = EXCLUDED.auth_mode,
                 service_account_json     = EXCLUDED.service_account_json,
@@ -205,7 +211,8 @@ pub async fn save_downstream_auth(
                 oauth_client_id          = EXCLUDED.oauth_client_id,
                 oauth_client_secret_enc  = EXCLUDED.oauth_client_secret_enc,
                 oauth_scope              = EXCLUDED.oauth_scope,
-                oauth_client_auth_style  = EXCLUDED.oauth_client_auth_style
+                oauth_client_auth_style  = EXCLUDED.oauth_client_auth_style,
+                oauth_authorize_url      = EXCLUDED.oauth_authorize_url
              RETURNING tenant_id, auth_mode, service_account_json, target_audience,
                        bearer_token, custom_headers, per_user_scheme,
                        per_user_header, updated_at",
@@ -229,6 +236,7 @@ pub async fn save_downstream_auth(
                 &client_secret_enc as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.scope as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.client_auth_style as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.authorize_url as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -254,6 +262,7 @@ pub async fn save_downstream_auth(
         client_secret:        req.client_secret.clone(),
         scope:                req.scope.clone(),
         client_auth_style:    req.client_auth_style.clone(),
+        authorize_url:        req.authorize_url.clone(),
         updated_at:           row.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
     })
 }
