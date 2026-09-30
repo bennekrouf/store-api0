@@ -580,6 +580,31 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS allow_api0_signin BOOLEAN NOT NULL 
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_verify_url       VARCHAR;
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_identity_pointer VARCHAR;
 
+-- ── auth_mode 'client_credentials' ──────────────────────────────────────────
+-- OAuth 2.0 client credentials (RFC 6749 §4.4): the default machine-to-machine
+-- mechanism across enterprise SaaS — Salesforce, Microsoft Graph, ServiceNow,
+-- Workday, Okta and the rest.
+--
+-- It is the one shape the other modes could not express. static_bearer and
+-- header_injection hold a credential that never changes; google_sa mints a
+-- short-lived one but only ever from Google. A tenant on such a backend had to
+-- paste an access token into static_bearer, which worked until it expired an
+-- hour later and then returned 401s that read like a bad credential.
+--
+-- The secret is sealed like every other, and there is deliberately no plaintext
+-- column to fall back to: nothing predates this, so nothing needs a backfill.
+--
+--   oauth_token_url          the provider's token endpoint
+--   oauth_client_id          the registered client
+--   oauth_client_secret_enc  sealed by infra::secret_box
+--   oauth_scope              space-separated, when the provider needs them
+--   oauth_client_auth_style  'post' (default) | 'basic'
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_token_url         VARCHAR;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_client_id         VARCHAR;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_client_secret_enc BYTEA;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_scope             VARCHAR;
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_client_auth_style VARCHAR;
+
 -- Who the stored token turned out to be. NULL when the tenant configured no
 -- verification, or when it was stored before verification existed.
 ALTER TABLE user_downstream_credentials ADD COLUMN IF NOT EXISTS verified_identity VARCHAR;

@@ -13,6 +13,7 @@ use serde_json::Value;
 pub struct TenantDownstreamAuth {
     pub tenant_id: String,
     // "none" | "google_sa" | "static_bearer" | "header_injection" | "per_user"
+    //        | "client_credentials"
     pub auth_mode: String,
     pub service_account_json: Option<String>,
     pub target_audience: Option<String>,
@@ -28,6 +29,13 @@ pub struct TenantDownstreamAuth {
     pub per_user_verify_url: Option<String>,
     /// JSON pointer into that endpoint's response.
     pub per_user_identity_pointer: Option<String>,
+    // client_credentials. These names are the gateway's contract — see
+    // DownstreamAuth::from_tenant_config, which reads them off this JSON.
+    pub token_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub scope: Option<String>,
+    pub client_auth_style: Option<String>,
     pub updated_at: String,
 }
 
@@ -42,6 +50,11 @@ pub struct SaveDownstreamAuthRequest {
     pub per_user_header: Option<String>,
     pub per_user_verify_url: Option<String>,
     pub per_user_identity_pointer: Option<String>,
+    pub token_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub scope: Option<String>,
+    pub client_auth_style: Option<String>,
 }
 
 /// Open a sealed column, falling back to the plaintext one for rows the backfill
@@ -92,7 +105,8 @@ pub async fn get_downstream_auth(
                     bearer_token, custom_headers, per_user_scheme, per_user_header,
                     updated_at, bearer_token_enc, custom_headers_enc,
                     service_account_json_enc, per_user_verify_url,
-                    per_user_identity_pointer
+                    per_user_identity_pointer, oauth_token_url, oauth_client_id,
+                    oauth_client_secret_enc, oauth_scope, oauth_client_auth_style
              FROM tenant_downstream_auth WHERE tenant_id = $1",
             &[&tenant_id],
         )
@@ -120,6 +134,13 @@ pub async fn get_downstream_auth(
             per_user_header:      r.get(7),
             per_user_verify_url:  r.get(12),
             per_user_identity_pointer: r.get(13),
+            token_url:            r.get(14),
+            client_id:            r.get(15),
+            // Sealed only: this column is newer than the plaintext fallbacks,
+            // so there is no historical value to fall back to.
+            client_secret:        unseal_or_plain(r.get(16), None, tenant_id, "oauth_client_secret"),
+            scope:                r.get(17),
+            client_auth_style:    r.get(18),
             updated_at:           r.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
         }
     }))
@@ -148,6 +169,10 @@ pub async fn save_downstream_auth(
         Some(v) => Some(seal_for(&v.to_string(), tenant_id, "custom_headers")?),
         None => None,
     };
+    let client_secret_enc = match req.client_secret.as_deref().filter(|v| !v.is_empty()) {
+        Some(v) => Some(seal_for(v, tenant_id, "oauth_client_secret")?),
+        None => None,
+    };
     let no_plaintext: Option<String> = None;
     let no_plaintext_json: Option<Value> = None;
 
@@ -158,8 +183,10 @@ pub async fn save_downstream_auth(
                  bearer_token, custom_headers, per_user_scheme, per_user_header,
                  updated_at, bearer_token_enc, service_account_json_enc,
                  custom_headers_enc, per_user_verify_url,
-                 per_user_identity_pointer)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 per_user_identity_pointer, oauth_token_url, oauth_client_id,
+                 oauth_client_secret_enc, oauth_scope, oauth_client_auth_style)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     $15, $16, $17, $18, $19)
              ON CONFLICT (tenant_id) DO UPDATE SET
                 auth_mode                = EXCLUDED.auth_mode,
                 service_account_json     = EXCLUDED.service_account_json,
@@ -173,7 +200,12 @@ pub async fn save_downstream_auth(
                 updated_at               = EXCLUDED.updated_at,
                 bearer_token_enc         = EXCLUDED.bearer_token_enc,
                 service_account_json_enc = EXCLUDED.service_account_json_enc,
-                custom_headers_enc       = EXCLUDED.custom_headers_enc
+                custom_headers_enc       = EXCLUDED.custom_headers_enc,
+                oauth_token_url          = EXCLUDED.oauth_token_url,
+                oauth_client_id          = EXCLUDED.oauth_client_id,
+                oauth_client_secret_enc  = EXCLUDED.oauth_client_secret_enc,
+                oauth_scope              = EXCLUDED.oauth_scope,
+                oauth_client_auth_style  = EXCLUDED.oauth_client_auth_style
              RETURNING tenant_id, auth_mode, service_account_json, target_audience,
                        bearer_token, custom_headers, per_user_scheme,
                        per_user_header, updated_at",
@@ -192,6 +224,11 @@ pub async fn save_downstream_auth(
                 &headers_enc as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.per_user_verify_url as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.per_user_identity_pointer as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.token_url as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.client_id as &(dyn tokio_postgres::types::ToSql + Sync),
+                &client_secret_enc as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.scope as &(dyn tokio_postgres::types::ToSql + Sync),
+                &req.client_auth_style as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -212,6 +249,11 @@ pub async fn save_downstream_auth(
         per_user_header:      row.get(7),
         per_user_verify_url:  req.per_user_verify_url.clone(),
         per_user_identity_pointer: req.per_user_identity_pointer.clone(),
+        token_url:            req.token_url.clone(),
+        client_id:            req.client_id.clone(),
+        client_secret:        req.client_secret.clone(),
+        scope:                req.scope.clone(),
+        client_auth_style:    req.client_auth_style.clone(),
         updated_at:           row.get::<_, chrono::DateTime<Utc>>(8).to_rfc3339(),
     })
 }

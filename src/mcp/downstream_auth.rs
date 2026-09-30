@@ -31,6 +31,12 @@ pub struct SaveAuthBody {
     pub per_user_header: Option<String>,
     pub per_user_verify_url: Option<String>,
     pub per_user_identity_pointer: Option<String>,
+    // client_credentials
+    pub token_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub scope: Option<String>,
+    pub client_auth_style: Option<String>,
 }
 
 pub async fn get_downstream_auth_handler(
@@ -103,6 +109,11 @@ pub async fn get_downstream_auth_handler(
                 "per_user_header": null,
                 "per_user_verify_url": null,
                 "per_user_identity_pointer": null,
+                "token_url": null,
+                "client_id": null,
+                "client_secret": null,
+                "scope": null,
+                "client_auth_style": null,
                 "updated_at": null
             },
             "tenant_name": tenant.name,
@@ -150,6 +161,11 @@ pub async fn save_downstream_auth_handler(
         per_user_header:      body.per_user_header.clone(),
         per_user_verify_url:  body.per_user_verify_url.clone(),
         per_user_identity_pointer: body.per_user_identity_pointer.clone(),
+        token_url:            body.token_url.clone(),
+        client_id:            body.client_id.clone(),
+        client_secret:        body.client_secret.clone(),
+        scope:                body.scope.clone(),
+        client_auth_style:    body.client_auth_style.clone(),
     };
 
     match save_downstream_auth(&store, &tenant.id, &req).await {
