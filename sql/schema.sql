@@ -605,6 +605,48 @@ ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_client_secret_
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_scope             VARCHAR;
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_client_auth_style VARCHAR;
 
+-- ── auth_mode 'per_user_oauth' ──────────────────────────────────────────────
+-- Three-legged OAuth: each person connects their own account once, and api0
+-- keeps the access token fresh from a refresh token.
+--
+-- The difference from 'per_user' is who does the work. per_user means every
+-- person creates a token by hand in the provider's UI and replaces it when it
+-- expires; this means they press "Connect" once and never think about it again.
+--
+-- Provider settings reuse the oauth_* columns added for client_credentials --
+-- the token exchange is the same, only the grant differs -- plus the authorize
+-- endpoint, which only the three-legged flow needs.
+ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS oauth_authorize_url VARCHAR;
+
+-- Per-person tokens live in user_downstream_credentials, which is already keyed
+-- (tenant_id, user_email, kind) and already carries expires_at. Two new kinds
+-- rather than a new table:
+--
+--   kind 'oauth_refresh'  the long-lived refresh token; expires_at usually NULL
+--   kind 'oauth_access'   the current access token, with a real expires_at
+--
+-- Storing the access token at all is what stops every tool call paying for a
+-- refresh round trip. It is sealed exactly like the refresh token: an access
+-- token is a bearer credential, and a leaked one is usable until it expires.
+
+-- Short-lived record of an authorization in flight. The state parameter is the
+-- CSRF defence: the callback is an unauthenticated endpoint the provider
+-- redirects a browser to, so the only thing tying that request back to a person
+-- is this row. Single use, and swept on the way in.
+CREATE TABLE IF NOT EXISTS downstream_oauth_requests (
+    state         VARCHAR     PRIMARY KEY,
+    tenant_id     VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_email    VARCHAR     NOT NULL,
+    -- PKCE. Sent as a challenge on the way out and proved here on the way back,
+    -- so an intercepted authorization code cannot be redeemed by anyone else.
+    code_verifier VARCHAR     NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at    TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_downstream_oauth_requests_expiry
+    ON downstream_oauth_requests(expires_at);
+
 -- Who the stored token turned out to be. NULL when the tenant configured no
 -- verification, or when it was stored before verification existed.
 ALTER TABLE user_downstream_credentials ADD COLUMN IF NOT EXISTS verified_identity VARCHAR;

@@ -250,6 +250,9 @@ pub async fn start_http_server(
                             .route("/user/downstream-credentials", web::put().to(save_credential_handler))
                             .route("/user/downstream-credentials/{kind}", web::delete().to(delete_credential_handler))
                             .route("/internal/downstream-credential/{tenant_id}/{kind}", web::get().to(get_credential_secret_handler))
+                            .route("/internal/downstream-credential/{tenant_id}/{kind}", web::put().to(crate::mcp::downstream_oauth::save_secret_handler))
+                            .route("/internal/downstream-oauth/start", web::post().to(crate::mcp::downstream_oauth::start_handler))
+                            .route("/internal/downstream-oauth/redeem", web::post().to(crate::mcp::downstream_oauth::redeem_handler))
                             // One-shot: seal secrets written before secret_box existed
                             .route("/internal/encrypt-legacy-secrets", web::post().to(encrypt_legacy_secrets_handler))
                             // Tenant identity providers (inbound OIDC)

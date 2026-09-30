@@ -15,7 +15,8 @@
 use crate::app_log;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::user_credentials::{
-    count_credentials, credential_slots, delete_credential, get_secret, require_tenant_access,
+    count_credentials, credential_slots, delete_credential,
+    get_secret_with_expiry, require_tenant_access,
     save_credential, SaveCredentialRequest,
 };
 use crate::endpoint_store::{EndpointStore, StoreError};
@@ -192,10 +193,15 @@ pub async fn get_credential_secret_handler(
 
     let (tenant_id, kind) = path.into_inner();
 
-    match get_secret(&store, &tenant_id, &query.email, &kind).await {
-        Ok(Some(secret)) => {
-            HttpResponse::Ok().json(serde_json::json!({"success": true, "secret": secret}))
-        }
+    // Returns the expiry alongside the secret. An extra field, so every caller
+    // that only reads `secret` is unaffected — but the OAuth path needs it, as
+    // an access token's expiry is the thing that decides whether to refresh.
+    match get_secret_with_expiry(&store, &tenant_id, &query.email, &kind).await {
+        Ok(Some((secret, expires_at))) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "secret": secret,
+            "expires_at": expires_at.map(|e| e.to_rfc3339()),
+        })),
         Ok(None) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "No credential for this user"})),
         Err(e) => store_error_response(e),

@@ -37,6 +37,7 @@ pub struct SaveAuthBody {
     pub client_secret: Option<String>,
     pub scope: Option<String>,
     pub client_auth_style: Option<String>,
+    pub authorize_url: Option<String>,
 }
 
 pub async fn get_downstream_auth_handler(
@@ -114,6 +115,7 @@ pub async fn get_downstream_auth_handler(
                 "client_secret": null,
                 "scope": null,
                 "client_auth_style": null,
+                "authorize_url": null,
                 "updated_at": null
             },
             "tenant_name": tenant.name,
@@ -166,6 +168,7 @@ pub async fn save_downstream_auth_handler(
         client_secret:        body.client_secret.clone(),
         scope:                body.scope.clone(),
         client_auth_style:    body.client_auth_style.clone(),
+        authorize_url:        body.authorize_url.clone(),
     };
 
     match save_downstream_auth(&store, &tenant.id, &req).await {
