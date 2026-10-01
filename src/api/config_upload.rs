@@ -385,7 +385,14 @@ pub async fn upload_api_config(
                 email = %upload_data.email,
                 "Failed to import API groups"
             );
-            HttpResponse::InternalServerError().json(UploadResponse {
+            // A refused import (wrong tenant, bad input) is the caller's to fix;
+            // as a 500 its message was replaced by a generic one on the way out.
+            let mut status = if matches!(e, crate::endpoint_store::StoreError::InvalidInput(_)) {
+                HttpResponse::BadRequest()
+            } else {
+                HttpResponse::InternalServerError()
+            };
+            status.json(UploadResponse {
                 success: false,
                 message: format!("Failed to import API groups: {}", e),
                 imported_count: 0,
