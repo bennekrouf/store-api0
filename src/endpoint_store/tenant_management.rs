@@ -150,26 +150,43 @@ async fn get_or_create_personal_tenant_locked(
         .to_store_error()?;
     }
 
-    // Someone invited into a workspace joins it instead of getting a personal
-    // one: a workspace nobody asked for is exactly the clutter that leaves
-    // accounts with several tenants and no idea which is theirs.
-    if let Some(invited_id) =
-        crate::endpoint_store::tenant_members::accept_pending_invites(client, &email).await?
-    {
+    // No default, but somewhere to be: a workspace they were invited into, else
+    // the oldest one they already belong to. Only an account that belongs
+    // nowhere gets a personal workspace. A default goes missing when its
+    // workspace is deleted, and recreating a personal one then would bring back
+    // exactly the clutter that leaves accounts with several tenants and no idea
+    // which is theirs.
+    let invited =
+        crate::endpoint_store::tenant_members::accept_pending_invites(client, &email).await?;
+    let existing = match invited {
+        Some(id) => Some(id),
+        None => client
+            .query_opt(
+                "SELECT t.id FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
+                  WHERE LOWER(tu.email) = LOWER($1) AND tu.role = ANY($2)
+                  ORDER BY t.created_at LIMIT 1",
+                &[&email, &MEMBER_ROLES],
+            )
+            .await
+            .to_store_error()?
+            .map(|r| r.get::<_, String>(0)),
+    };
+    if let Some(tenant_id) = existing {
         client
             .execute(
                 "UPDATE user_preferences SET default_tenant_id = $1 WHERE LOWER(email) = LOWER($2)",
-                &[&invited_id, &email],
+                &[&tenant_id, &email],
             )
             .await
             .to_store_error()?;
         let row = client
             .query_one(
                 "SELECT id, name, credit_balance, created_at FROM tenants WHERE id = $1",
-                &[&invited_id],
+                &[&tenant_id],
             )
             .await
             .to_store_error()?;
+        app_log!(info, email = %email, tenant_id = %tenant_id, "Default workspace restored from an existing membership");
         return Ok(Tenant {
             id: row.get(0),
             name: row.get(1),
@@ -557,5 +574,33 @@ mod db_tests {
             )
             .await.unwrap().get(0);
         assert_eq!(orphans, 0, "no member-less workspace left behind");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn a_lost_default_falls_back_to_an_existing_membership() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = std::sync::Arc::new(EndpointStore::new(&url).await.expect("store"));
+        let run = Uuid::new_v4().simple().to_string();
+        let (alice, bob) = (format!("alice-{run}@example.com"), format!("bob-{run}@example.com"));
+
+        let shared = get_default_tenant(&store, &alice).await.unwrap();
+        let bob_personal = get_default_tenant(&store, &bob).await.unwrap();
+        crate::endpoint_store::tenant_members::invite(&store, &alice, &bob, "owner").await.unwrap();
+
+        // Bob's own workspace is deleted, as the admin panel does it.
+        let c = store.get_admin_conn().await.unwrap();
+        c.execute("UPDATE user_preferences SET default_tenant_id = NULL WHERE default_tenant_id = $1",
+            &[&bob_personal.id]).await.unwrap();
+        c.execute("DELETE FROM tenant_users WHERE tenant_id = $1", &[&bob_personal.id]).await.unwrap();
+        c.execute("DELETE FROM api_keys WHERE tenant_id = $1", &[&bob_personal.id]).await.unwrap();
+        c.execute("DELETE FROM tenants WHERE id = $1", &[&bob_personal.id]).await.unwrap();
+
+        let now = get_default_tenant(&store, &bob).await.unwrap();
+        assert_eq!(now.id, shared.id, "bob lands in the workspace he still belongs to");
+        let owned: i64 = c
+            .query_one("SELECT count(*) FROM tenant_users WHERE email = $1", &[&bob])
+            .await.unwrap().get(0);
+        assert_eq!(owned, 1, "and no new personal workspace was made");
     }
 }
