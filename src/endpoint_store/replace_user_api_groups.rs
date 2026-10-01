@@ -18,6 +18,33 @@ pub async fn replace_user_api_groups(
 ) -> Result<usize, StoreError> {
     app_log!(info, email = %email, "Starting complete API group replacement");
 
+    // Settle the target tenant before touching anything: a refused import must
+    // not have already deleted the caller's existing endpoints.
+    let tenant_id = match tenant_id {
+        // A named tenant must be one the caller actually belongs to, or an
+        // import becomes a way to write into someone else's namespace.
+        Some(requested) => {
+            let client = store.get_admin_conn().await?;
+            let allowed = crate::endpoint_store::tenant_management::verify_tenant_access_with_conn(
+                &client, email, requested,
+            )
+            .await?;
+            if !allowed {
+                app_log!(warn, email = %email, tenant_id = %requested, "Rejected import into a tenant the caller does not belong to");
+                return Err(StoreError::InvalidInput(format!(
+                    "You do not belong to tenant '{}'",
+                    requested
+                )));
+            }
+            requested.to_string()
+        }
+        None => {
+            crate::endpoint_store::tenant_management::get_default_tenant(store, email)
+                .await?
+                .id
+        }
+    };
+
     // Clean up existing user data
     match store.force_clean_user_data(email).await {
         Ok(_) => {
@@ -44,30 +71,6 @@ pub async fn replace_user_api_groups(
     }
 
     // Add new groups and endpoints
-    let tenant_id = match tenant_id {
-        // A named tenant must be one the caller actually belongs to, or an
-        // import becomes a way to write into someone else's namespace.
-        Some(requested) => {
-            let client = store.get_admin_conn().await?;
-            let allowed = crate::endpoint_store::tenant_management::verify_tenant_access_with_conn(
-                &client, email, requested,
-            )
-            .await?;
-            if !allowed {
-                app_log!(warn, email = %email, tenant_id = %requested, "Rejected import into a tenant the caller does not belong to");
-                return Err(StoreError::InvalidInput(format!(
-                    "You do not belong to tenant '{}'",
-                    requested
-                )));
-            }
-            requested.to_string()
-        }
-        None => {
-            crate::endpoint_store::tenant_management::get_default_tenant(store, email)
-                .await?
-                .id
-        }
-    };
 
     let mut imported_count = 0;
     let mut client = store.get_admin_conn().await?;
