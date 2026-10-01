@@ -90,5 +90,5 @@ async fn test_credit_deduction_logic() {
     assert_eq!(new_balance_3, 978, "Balance mismatch after Case 3");
 
     // Cleanup
-    store.force_clean_user_data(&email).await.expect("Failed to cleanup");
+    store.delete_user_account(&email).await.expect("Failed to cleanup");
 }

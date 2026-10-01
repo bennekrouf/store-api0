@@ -20,6 +20,8 @@ use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use slug::slugify;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 fn check_internal_secret(req: &HttpRequest) -> bool {
@@ -115,9 +117,21 @@ pub async fn tenants_overview(
         }
     };
 
+    let own_hosts = first_party_hosts();
+    let mut leaks = match identity_leaks(&client, &own_hosts).await {
+        Ok(l) => l,
+        Err(e) => {
+            app_log!(error, error = %e, "tenants_overview: identity leak query failed");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}));
+        }
+    };
+
     let tenants: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
+            let id: String = r.get(0);
+            let tenant_leaks = leaks.remove(&id).unwrap_or_default();
             let mcp_client_id: Option<String> = r.get(4);
             let google_client_id: Option<String> = r.get(5);
             let allow_api0_signin: bool = r.get(6);
@@ -128,7 +142,7 @@ pub async fn tenants_overview(
                 .unwrap_or(false);
 
             serde_json::json!({
-                "id": r.get::<_, String>(0),
+                "id": id,
                 "name": r.get::<_, String>(1),
                 "credit_balance": r.get::<_, i64>(2),
                 "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
@@ -161,6 +175,9 @@ pub async fn tenants_overview(
                     .map(|t| t.to_rfc3339()),
                 "members": r.get::<_, serde_json::Value>(22),
                 "consumer_count": r.get::<_, i64>(23),
+                // Tools that send api0's identity headers (internal secret, the
+                // caller's email) to a host outside `first_party_hosts`.
+                "identity_leaks": tenant_leaks,
             })
         })
         .collect();
@@ -170,7 +187,170 @@ pub async fn tenants_overview(
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "tenants": tenants,
+        "first_party_hosts": own_hosts,
     }))
+}
+
+// ── Identity leaks ────────────────────────────────────────────────────────────
+//
+// `forward_identity` defaults to true on both tools and endpoints, which is right
+// for a first-party backend and wrong for anything else: a tool pointed at Azure
+// DevOps that nobody remembered to switch off sends X-Internal-Secret and the
+// caller's email to Microsoft on every call. Nothing fails, so nothing notices.
+
+/// The domains trusted with api0's identity headers, subdomains included.
+///
+/// `API0_FIRST_PARTY_HOSTS` is a comma-separated list. The defaults are the
+/// platform's own domains; a host on the private network is always trusted
+/// (see [`is_first_party`]), so internal service names need no entry.
+fn first_party_hosts() -> Vec<String> {
+    let raw = std::env::var("API0_FIRST_PARTY_HOSTS")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "api0.ai,cvenom.com".to_string());
+    raw.split(',')
+        .map(|h| h.trim().trim_start_matches('.').to_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect()
+}
+
+/// The host of a backend URL, lowercased, without port or credentials.
+/// `None` when there is no host to speak of (relative or placeholder-only).
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.trim().split_once("://").map(|(_, r)| r).unwrap_or(url.trim());
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    let host = host.to_lowercase();
+    if host.is_empty() || host.contains('{') {
+        return None;
+    }
+    Some(host)
+}
+
+/// Whether `host` may receive api0's identity headers.
+///
+/// Besides the listed domains: loopback, a bare service name (no dot — only
+/// resolvable inside the deployment's own network) and the RFC 1918 ranges.
+fn is_first_party(host: &str, own: &[String]) -> bool {
+    if host == "localhost" || host == "::1" || !host.contains('.') {
+        return true;
+    }
+    if let Ok(std::net::IpAddr::V4(ip)) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback() || ip.is_private();
+    }
+    own.iter()
+        .any(|d| host == d || host.ends_with(&format!(".{d}")))
+}
+
+/// Per tenant, every tool that forwards identity to a host outside `own`.
+///
+/// Mirrors how the gateway assembles a tenant's tools: the active `mcp_tools`
+/// rows, plus an endpoint only when no row already carries its name. Checking
+/// the endpoint behind an explicit row would report a setting nobody uses.
+async fn identity_leaks(
+    client: &deadpool_postgres::Object,
+    own: &[String],
+) -> Result<HashMap<String, Vec<serde_json::Value>>, tokio_postgres::Error> {
+    let explicit = client
+        .query(
+            "SELECT tenant_id, tool_name, backend_url, forward_identity
+               FROM mcp_tools WHERE is_active = true",
+            &[],
+        )
+        .await?;
+    let endpoints = client
+        .query(
+            "SELECT g.tenant_id, g.name, e.text, e.base, g.base, e.path,
+                    COALESCE(e.forward_identity, true)
+               FROM api_groups g JOIN endpoints e ON g.id = e.group_id
+              WHERE g.tenant_id IS NOT NULL",
+            &[],
+        )
+        .await?;
+
+    let mut named: HashSet<(String, String)> = HashSet::new();
+    let mut tools: Vec<(String, String, String, bool)> = Vec::new();
+
+    for r in &explicit {
+        let tenant: String = r.get(0);
+        let name: String = r.get(1);
+        named.insert((tenant.clone(), name.clone()));
+        tools.push((tenant, name, r.get(2), r.get(3)));
+    }
+    for r in &endpoints {
+        let tenant: String = r.get(0);
+        let group: String = r.get(1);
+        let text: String = r.get(2);
+        let e_base: String = r.get(3);
+        let g_base: String = r.get(4);
+        let path: String = r.get(5);
+        let name = slugify(format!("{} {}", group, text));
+        if name.is_empty() || named.contains(&(tenant.clone(), name.clone())) {
+            continue;
+        }
+        let base = if e_base.is_empty() { &g_base } else { &e_base };
+        let url = format!("{}{}", base.trim_end_matches('/'), path);
+        tools.push((tenant, name, url, r.get(6)));
+    }
+
+    let mut out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for (tenant, name, url, forward) in tools {
+        if !forward {
+            continue;
+        }
+        let Some(host) = host_of(&url) else { continue };
+        if is_first_party(&host, own) {
+            continue;
+        }
+        out.entry(tenant)
+            .or_default()
+            .push(serde_json::json!({"tool": name, "host": host}));
+    }
+    for list in out.values_mut() {
+        list.sort_by(|a, b| a["tool"].as_str().cmp(&b["tool"].as_str()));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod identity_leak_tests {
+    use super::*;
+
+    fn own() -> Vec<String> {
+        vec!["api0.ai".to_string(), "cvenom.com".to_string()]
+    }
+
+    #[test]
+    fn host_of_strips_scheme_port_path_and_credentials() {
+        assert_eq!(host_of("https://dev.azure.com/org/_apis/wit").as_deref(), Some("dev.azure.com"));
+        assert_eq!(host_of("http://user:pw@API.cvenom.com:8443/x?y").as_deref(), Some("api.cvenom.com"));
+        assert_eq!(host_of("http://[::1]:5007/x").as_deref(), Some("::1"));
+        assert_eq!(host_of("/relative/path"), None);
+        assert_eq!(host_of("https://{host}/x"), None);
+    }
+
+    #[test]
+    fn own_domains_and_their_subdomains_are_first_party() {
+        assert!(is_first_party("cvenom.com", &own()));
+        assert!(is_first_party("api.cvenom.com", &own()));
+        assert!(!is_first_party("notcvenom.com", &own()));
+        assert!(!is_first_party("dev.azure.com", &own()));
+    }
+
+    #[test]
+    fn the_private_network_is_first_party() {
+        assert!(is_first_party("localhost", &own()));
+        assert!(is_first_party("backend-cvenom", &own()));
+        assert!(is_first_party("127.0.0.1", &own()));
+        assert!(is_first_party("10.0.0.7", &own()));
+        assert!(is_first_party("192.168.1.20", &own()));
+        assert!(!is_first_party("8.8.8.8", &own()));
+    }
 }
 
 #[derive(serde::Deserialize)]

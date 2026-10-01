@@ -46,6 +46,30 @@ pub async fn get_or_create_personal_tenant_with_conn(
     email: &str,
 ) -> Result<Tenant, StoreError> {
     let email = email.to_lowercase();
+
+    // Check-then-create is a race: a dashboard opening fires several requests
+    // at once, and each found no tenant and created one — two "Personal"
+    // tenants created in the same second. A per-email lock makes the second
+    // caller wait, then find the first one's tenant.
+    client
+        .execute("SELECT pg_advisory_lock(hashtext($1))", &[&email])
+        .await
+        .to_store_error()?;
+    let result = get_or_create_personal_tenant_locked(client, &email).await;
+    let unlocked = client
+        .execute("SELECT pg_advisory_unlock(hashtext($1))", &[&email])
+        .await;
+    if let Err(e) = unlocked {
+        app_log!(error, email = %email, error = %e, "Could not release the tenant-creation lock");
+    }
+    result
+}
+
+async fn get_or_create_personal_tenant_locked(
+    client: &PgConnection,
+    email: &str,
+) -> Result<Tenant, StoreError> {
+    let email = email.to_string();
     // 1. Check if user has a default tenant
     let default_tenant_reow = client
         .query_opt(

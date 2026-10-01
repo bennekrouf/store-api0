@@ -237,8 +237,15 @@ impl EndpointStore {
         delete_user_endpoint::delete_user_endpoint(self, email, endpoint_id).await
     }
 
-    pub(crate) async fn force_clean_user_data(&self, email: &str) -> Result<(), StoreError> {
-        cleanup::force_clean_user_data(self, email).await
+    /// The user's uploaded endpoints only — what an upload replaces.
+    pub(crate) async fn clean_user_endpoints(&self, email: &str) -> Result<(), StoreError> {
+        cleanup::clean_user_endpoints(self, email).await
+    }
+
+    /// Everything the user has, account included. Test teardown only.
+    #[allow(dead_code)]
+    pub(crate) async fn delete_user_account(&self, email: &str) -> Result<(), StoreError> {
+        cleanup::delete_user_account(self, email).await
     }
 
     pub(crate) async fn fallback_clean_user_data(&self, email: &str) -> Result<(), StoreError> {
