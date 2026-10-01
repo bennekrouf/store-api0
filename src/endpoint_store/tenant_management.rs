@@ -25,6 +25,23 @@ pub fn is_valid_tenant_name(name: &str) -> bool {
     !trimmed.is_empty() && !trimmed.contains('@')
 }
 
+/// Tenant names are unique ignoring case and surrounding space: "solanize" and
+/// "Solanize" are two workspaces nobody can tell apart in a connector list or
+/// the admin panel. The `tenants_name_ci_key` index enforces it; this query is
+/// how callers ask first, so a clash is answered with a sentence rather than a
+/// constraint violation. `$2` is the tenant being renamed (NULL when creating),
+/// which may of course keep its own name.
+pub const NAME_TAKEN_SQL: &str = "SELECT 1 FROM tenants
+     WHERE lower(btrim(name)) = lower(btrim($1)) AND id IS DISTINCT FROM $2";
+
+/// The refusal for a name already in use. Carried in `StoreError::InvalidInput`;
+/// handlers compare against it to answer 409 rather than 400.
+pub const NAME_TAKEN: &str = "That name is already used by another workspace";
+
+/// The unique index behind [`NAME_TAKEN_SQL`], for recognising the race where
+/// two renames to the same name both pass the check.
+pub const NAME_INDEX: &str = "tenants_name_ci_key";
+
 /// Roles that grant authority over a tenant.
 ///
 /// `consumer` is deliberately absent. A consumer row records that someone uses a
@@ -37,36 +54,37 @@ pub async fn get_or_create_personal_tenant(
     store: &EndpointStore,
     email: &str,
 ) -> Result<Tenant, StoreError> {
-    let client = store.get_admin_conn().await?;
-    get_or_create_personal_tenant_with_conn(&client, email).await
+    let mut client = store.get_admin_conn().await?;
+    get_or_create_personal_tenant_with_conn(&mut client, email).await
 }
 
 pub async fn get_or_create_personal_tenant_with_conn(
-    client: &PgConnection,
+    client: &mut PgConnection,
     email: &str,
 ) -> Result<Tenant, StoreError> {
     let email = email.to_lowercase();
 
+    // Creating a tenant is several writes — the tenant, its owner, the user's
+    // default — and they stand or fall together. Without a transaction a failure
+    // after the first one left a tenant nobody belonged to, and the next request
+    // (finding no default) created another.
+    let tx = client.transaction().await.to_store_error()?;
+
     // Check-then-create is a race: a dashboard opening fires several requests
     // at once, and each found no tenant and created one — two "Personal"
     // tenants created in the same second. A per-email lock makes the second
-    // caller wait, then find the first one's tenant.
-    client
-        .execute("SELECT pg_advisory_lock(hashtext($1))", &[&email])
+    // caller wait, then find the first one's tenant. Transaction-scoped, so it
+    // is released on commit or rollback alike.
+    tx.execute("SELECT pg_advisory_xact_lock(hashtext($1))", &[&email])
         .await
         .to_store_error()?;
-    let result = get_or_create_personal_tenant_locked(client, &email).await;
-    let unlocked = client
-        .execute("SELECT pg_advisory_unlock(hashtext($1))", &[&email])
-        .await;
-    if let Err(e) = unlocked {
-        app_log!(error, email = %email, error = %e, "Could not release the tenant-creation lock");
-    }
-    result
+    let tenant = get_or_create_personal_tenant_locked(&tx, &email).await?;
+    tx.commit().await.to_store_error()?;
+    Ok(tenant)
 }
 
 async fn get_or_create_personal_tenant_locked(
-    client: &PgConnection,
+    client: &deadpool_postgres::Transaction<'_>,
     email: &str,
 ) -> Result<Tenant, StoreError> {
     let email = email.to_string();
@@ -99,7 +117,21 @@ async fn get_or_create_personal_tenant_locked(
     // header, so it must not be an email address: seeing "someone@example.com"
     // where a workspace name belongs makes every screen ambiguous about whether
     // it is naming a person or a workspace. Derive something readable instead.
-    let name = personal_tenant_name(&email);
+    //
+    // Two people can share a local part (bob@a.com, bob@b.com), and names are
+    // unique, so the second gets "Personal — bob 2".
+    let base = personal_tenant_name(&email);
+    let mut name = base.clone();
+    for n in 2.. {
+        let taken = client
+            .query_opt(NAME_TAKEN_SQL, &[&name, &None::<String>])
+            .await
+            .to_store_error()?;
+        if taken.is_none() {
+            break;
+        }
+        name = format!("{} {}", base, n);
+    }
 
     // Note: We are using a client that likely has bypass_rls = true (from get_admin_conn)
     
@@ -116,6 +148,34 @@ async fn get_or_create_personal_tenant_locked(
         )
         .await
         .to_store_error()?;
+    }
+
+    // Someone invited into a workspace joins it instead of getting a personal
+    // one: a workspace nobody asked for is exactly the clutter that leaves
+    // accounts with several tenants and no idea which is theirs.
+    if let Some(invited_id) =
+        crate::endpoint_store::tenant_members::accept_pending_invites(client, &email).await?
+    {
+        client
+            .execute(
+                "UPDATE user_preferences SET default_tenant_id = $1 WHERE LOWER(email) = LOWER($2)",
+                &[&invited_id, &email],
+            )
+            .await
+            .to_store_error()?;
+        let row = client
+            .query_one(
+                "SELECT id, name, credit_balance, created_at FROM tenants WHERE id = $1",
+                &[&invited_id],
+            )
+            .await
+            .to_store_error()?;
+        return Ok(Tenant {
+            id: row.get(0),
+            name: row.get(1),
+            credit_balance: row.get(2),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+        });
     }
 
     // Create Tenant
@@ -308,18 +368,35 @@ pub async fn update_tenant_name(
     email: &str,
     new_name: &str,
 ) -> Result<(), StoreError> {
+    let new_name = new_name.trim();
+    if !is_valid_tenant_name(new_name) {
+        return Err(StoreError::InvalidInput(
+            "A workspace name is required, and cannot be an email address".to_string(),
+        ));
+    }
+
     let tenant = get_default_tenant(store, email).await?;
     let client = store.get_admin_conn().await?;
 
-    client
-        .execute(
-            "UPDATE tenants SET name = $1 WHERE id = $2",
-            &[&new_name, &tenant.id],
-        )
+    let taken = client
+        .query_opt(NAME_TAKEN_SQL, &[&new_name, &Some(&tenant.id)])
         .await
         .to_store_error()?;
+    if taken.is_some() {
+        return Err(StoreError::InvalidInput(NAME_TAKEN.to_string()));
+    }
 
-    Ok(())
+    match client
+        .execute("UPDATE tenants SET name = $1 WHERE id = $2", &[&new_name, &tenant.id])
+        .await
+    {
+        Ok(_) => Ok(()),
+        // Lost a race with another rename to the same name.
+        Err(e) if e.to_string().contains(NAME_INDEX) => {
+            Err(StoreError::InvalidInput(NAME_TAKEN.to_string()))
+        }
+        Err(e) => Err(StoreError::Database(e.to_string())),
+    }
 }
 
 #[allow(dead_code)]
@@ -354,25 +431,31 @@ pub async fn verify_tenant_access_with_conn(
     Ok(row.is_some())
 }
 
-#[allow(dead_code)]
-pub async fn list_user_tenants(
-    store: &EndpointStore,
-    email: &str,
-) -> Result<Vec<Tenant>, StoreError> {
-    let client = store.get_admin_conn().await?;
-    list_user_tenants_with_conn(&client, email).await
+/// A workspace as one of its members sees it: which role they hold there, and
+/// whether it is the one everything they do currently acts on.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserTenant {
+    #[serde(flatten)]
+    pub tenant: Tenant,
+    pub role: String,
+    /// The account's default tenant — the one keys, credits, tools, settings and
+    /// uploads resolve to. Exactly one entry is active, unless the default
+    /// points at a workspace the user has since lost access to.
+    pub active: bool,
 }
 
 pub async fn list_user_tenants_with_conn(
     client: &PgConnection,
     email: &str,
-) -> Result<Vec<Tenant>, StoreError> {
+) -> Result<Vec<UserTenant>, StoreError> {
     let email = email.to_lowercase();
     let rows = client
         .query(
-            "SELECT t.id, t.name, t.credit_balance, t.created_at
+            "SELECT t.id, t.name, t.credit_balance, t.created_at, tu.role,
+                    COALESCE(up.default_tenant_id = t.id, false)
              FROM tenants t
              JOIN tenant_users tu ON t.id = tu.tenant_id
+             LEFT JOIN user_preferences up ON LOWER(up.email) = LOWER(tu.email)
              WHERE LOWER(tu.email) = LOWER($1) AND tu.role = ANY($2)
              ORDER BY t.created_at ASC",
             &[&email, &MEMBER_ROLES],
@@ -380,15 +463,99 @@ pub async fn list_user_tenants_with_conn(
         .await
         .to_store_error()?;
 
-    let mut tenants = Vec::new();
-    for row in rows {
-        tenants.push(Tenant {
-            id: row.get(0),
-            name: row.get(1),
-            credit_balance: row.get(2),
-            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
-        });
+    Ok(rows
+        .iter()
+        .map(|row| UserTenant {
+            tenant: Tenant {
+                id: row.get(0),
+                name: row.get(1),
+                credit_balance: row.get(2),
+                created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+            },
+            role: row.get(4),
+            active: row.get(5),
+        })
+        .collect())
+}
+
+/// Make `tenant_id` the workspace everything `email` does acts on.
+///
+/// Switching is just moving `default_tenant_id`: every store path already
+/// resolves the caller's tenant through it, so none of them has to learn about
+/// switching. `None` when the caller is not a member there — a consumer, in
+/// particular, must never be able to step into a provider's workspace, since
+/// that would hand them its settings, keys and credits.
+pub async fn set_active_tenant(
+    store: &EndpointStore,
+    email: &str,
+    tenant_id: &str,
+) -> Result<Option<Tenant>, StoreError> {
+    let client = store.get_admin_conn().await?;
+    if !verify_tenant_access_with_conn(&client, email, tenant_id).await? {
+        return Ok(None);
     }
 
-    Ok(tenants)
+    client
+        .execute(
+            "UPDATE user_preferences SET default_tenant_id = $1 WHERE LOWER(email) = LOWER($2)",
+            &[&tenant_id, &email],
+        )
+        .await
+        .to_store_error()?;
+
+    let row = client
+        .query_one(
+            "SELECT id, name, credit_balance, created_at FROM tenants WHERE id = $1",
+            &[&tenant_id],
+        )
+        .await
+        .to_store_error()?;
+
+    Ok(Some(Tenant {
+        id: row.get(0),
+        name: row.get(1),
+        credit_balance: row.get(2),
+        created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+    }))
+}
+
+/// Against a real database — see tenant_members::db_tests for how to run.
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn concurrent_first_requests_create_one_workspace() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = std::sync::Arc::new(EndpointStore::new(&url).await.expect("store"));
+        let email = format!("race-{}@example.com", Uuid::new_v4().simple());
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let (store, email) = (store.clone(), email.clone());
+                tokio::spawn(async move { get_default_tenant(&store, &email).await.unwrap().id })
+            })
+            .collect();
+        let mut ids = Vec::new();
+        for h in handles {
+            ids.push(h.await.unwrap());
+        }
+        ids.dedup();
+        assert_eq!(ids.len(), 1, "every caller got the same workspace");
+
+        let c = store.get_admin_conn().await.unwrap();
+        let memberships: i64 = c
+            .query_one("SELECT count(*) FROM tenant_users WHERE email = $1", &[&email])
+            .await.unwrap().get(0);
+        assert_eq!(memberships, 1);
+        let orphans: i64 = c
+            .query_one(
+                "SELECT count(*) FROM tenants t WHERE t.name = $1
+                   AND NOT EXISTS (SELECT 1 FROM tenant_users tu WHERE tu.tenant_id = t.id)",
+                &[&personal_tenant_name(&email)],
+            )
+            .await.unwrap().get(0);
+        assert_eq!(orphans, 0, "no member-less workspace left behind");
+    }
 }

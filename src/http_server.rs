@@ -81,7 +81,8 @@ use crate::api::tenant_name::update_tenant_name_handler;
 use crate::api::config_upload::upload_api_config;
 use crate::api::reference_upload;
 use crate::api::key_validate::validate_api_key;
-use crate::api::tenant_management::{verify_tenant_access, list_user_tenants};
+use crate::api::tenant_management::{verify_tenant_access, list_user_tenants, set_active_tenant};
+use crate::api::tenant_members;
 use crate::middleware::error_handler::handle_internal_server_error;
 use actix_cors::Cors;
 use actix_web::middleware::{ErrorHandlers, Logger};
@@ -283,6 +284,14 @@ pub async fn start_http_server(
                             .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
                             .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
                             .route("/user/tenant/name", web::put().to(update_tenant_name_handler))
+                            .route("/user/tenant/active", web::put().to(set_active_tenant))
+                            // Workspace membership (caller's active workspace)
+                            .route("/user/tenant/members", web::get().to(tenant_members::list_members))
+                            .route("/user/tenant/members/role", web::put().to(tenant_members::change_role))
+                            .route("/user/tenant/members/remove", web::post().to(tenant_members::remove_member))
+                            .route("/user/tenant/invites", web::post().to(tenant_members::invite))
+                            .route("/user/tenant/invites/cancel", web::post().to(tenant_members::cancel_invite))
+                            .route("/user/tenant/leave", web::post().to(tenant_members::leave))
                             // Internal: gateway uses tenant_id directly
                             .route("/tenant/downstream-auth/{tenant_id}", web::get().to(get_downstream_auth_by_id_handler))
                             // Per-provider OAuth client ID resolution
@@ -334,6 +343,10 @@ pub async fn start_http_server(
                             .route(
                                 "/internal/tenants/{tenant_id}/consumers",
                                 web::post().to(add_consumers),
+                            )
+                            .route(
+                                "/internal/tenants/{tenant_id}/members",
+                                web::post().to(tenant_members::admin_add_member),
                             )
                             // Before {tenant_id}: actix matches in registration
                             // order, so a literal path must precede the pattern

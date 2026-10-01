@@ -50,6 +50,9 @@ pub enum EmailKind {
     FirstCallMilestone { endpoint: String },
     MonthlyDigest { month: String, total_calls: i64, credits_spent: i64, top_endpoints: Vec<String> },
     ProviderConnected { provider: String },
+    /// Someone was added to, or invited into, a workspace. Every field but
+    /// `has_account` is user-supplied text and is escaped when rendered.
+    WorkspaceInvite { workspace: String, role: String, invited_by: String, has_account: bool },
     // ── Tier 3 — engagement ──────────────────────────────────────────────────
     Nudge { name: String, credits: i64 },
     WinBack { name: String },
@@ -72,6 +75,7 @@ impl EmailKind {
             Self::FirstCallMilestone { .. }=> "first_call_milestone",
             Self::MonthlyDigest { .. }     => "monthly_digest",
             Self::ProviderConnected { .. } => "provider_connected",
+            Self::WorkspaceInvite { .. }   => "workspace_invite",
             Self::Nudge { .. }             => "nudge",
             Self::WinBack { .. }           => "win_back",
             Self::WhatsNew { .. }          => "whats_new",
@@ -94,6 +98,10 @@ impl EmailKind {
             Self::FirstCallMilestone { .. }                  => "Your first tool call — you're live!".into(),
             Self::MonthlyDigest { month, .. }                => format!("Your api0 usage summary — {}", month),
             Self::ProviderConnected { provider }             => format!("{} connected to api0", provider),
+            Self::WorkspaceInvite { workspace, has_account, .. } => {
+                if *has_account { format!("You've been added to {} on api0", workspace) }
+                else            { format!("You're invited to join {} on api0", workspace) }
+            }
             Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
             Self::WhatsNew { feature_title, .. }             => format!("New on api0: {}", feature_title),
@@ -233,6 +241,23 @@ impl EmailKind {
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">View Dashboard</a></p>"#
             ),
 
+            Self::WorkspaceInvite { workspace, role, invited_by, has_account } => {
+                let (workspace, role, invited_by) =
+                    (escape_html(workspace), escape_html(role), escape_html(invited_by));
+                let next = if *has_account {
+                    "<p>It's in your workspace list now: open the dashboard and pick it from the switcher next to your workspace name.</p>"
+                } else {
+                    "<p>Sign in with Google using <strong>this email address</strong> and you'll land in the workspace.</p>"
+                };
+                format!(
+                    r#"<h1>Join {workspace}</h1>
+<p><strong>{invited_by}</strong> gave you the <strong>{role}</strong> role in the <strong>{workspace}</strong> workspace on api0.</p>
+{next}
+<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open api0</a></p>
+<p style="color:#64748B;font-size:13px">Not expecting this? You can ignore it — nothing happens unless you sign in.</p>"#
+                )
+            }
+
             // ── Tier 3 ───────────────────────────────────────────────────────
             Self::Nudge { name, credits } => {
                 let credits_line = if *credits > 0 {
@@ -277,6 +302,15 @@ impl EmailKind {
 
         wrap_layout(&content)
     }
+}
+
+/// Text a user typed, made safe to put inside an HTML email.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn wrap_layout(content: &str) -> String {
