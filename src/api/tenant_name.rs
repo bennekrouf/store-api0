@@ -1,5 +1,5 @@
-use crate::endpoint_store::tenant_management::update_tenant_name;
-use crate::endpoint_store::EndpointStore;
+use crate::endpoint_store::tenant_management::{update_tenant_name, NAME_TAKEN};
+use crate::endpoint_store::{EndpointStore, StoreError};
 use crate::app_log;
 use actix_web::{web, HttpResponse, Responder};
 use serde::Deserialize;
@@ -33,6 +33,17 @@ pub async fn update_tenant_name_handler(
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "message": "Tenant name updated successfully"
+            }))
+        }
+        Err(StoreError::InvalidInput(msg)) => {
+            let status = if msg == NAME_TAKEN {
+                actix_web::http::StatusCode::CONFLICT
+            } else {
+                actix_web::http::StatusCode::BAD_REQUEST
+            };
+            HttpResponse::build(status).json(serde_json::json!({
+                "success": false,
+                "message": msg
             }))
         }
         Err(e) => {

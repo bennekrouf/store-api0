@@ -20,6 +20,7 @@ use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use crate::endpoint_store::tenant_management::{NAME_INDEX, NAME_TAKEN, NAME_TAKEN_SQL};
 use slug::slugify;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -411,6 +412,21 @@ pub async fn update_tenant_config(
         }
     };
 
+    if let Some(new_name) = body.name.as_deref() {
+        match client.query_opt(NAME_TAKEN_SQL, &[&new_name, &Some(&tenant_id)]).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                return HttpResponse::Conflict()
+                    .json(serde_json::json!({"success": false, "error": NAME_TAKEN}))
+            }
+            Err(e) => {
+                app_log!(error, error = %e, "update_tenant_config: name check failed");
+                return HttpResponse::InternalServerError()
+                    .json(serde_json::json!({"success": false, "error": "DB error"}));
+            }
+        }
+    }
+
     // Empty string means "clear it", so a blanked input does not store "".
     let blank_to_null = |v: Option<Option<String>>| -> Option<Option<String>> {
         v.map(|inner| inner.filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string()))
@@ -456,6 +472,10 @@ pub async fn update_tenant_config(
             // A duplicate mcp_client_id is the caller's mistake, not a server fault:
             // the column is UNIQUE because it must resolve to exactly one tenant.
             let msg = e.to_string();
+            if msg.contains(NAME_INDEX) {
+                return HttpResponse::Conflict()
+                    .json(serde_json::json!({"success": false, "error": NAME_TAKEN}));
+            }
             if msg.contains("duplicate") || msg.contains("unique") {
                 return HttpResponse::BadRequest().json(serde_json::json!({
                     "success": false,
@@ -886,4 +906,85 @@ pub async fn prune_empty_tenants(
         "dry_run": false,
         "deleted": candidates,
     }))
+}
+
+/// Against a real database — see tenant_members::db_tests for how to run.
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn identity_leaks_follow_the_gateways_tool_list() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let run = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        let tenant = crate::endpoint_store::tenant_management::get_default_tenant(
+            &store, &format!("leaks-{run}@example.com"),
+        ).await.unwrap();
+        let t = tenant.id.as_str();
+        let c = store.get_admin_conn().await.unwrap();
+
+        let g = format!("g-{run}");
+        c.execute("INSERT INTO api_groups (id, name, description, base, tenant_id)
+                   VALUES ($1, 'azure', '', 'https://dev.azure.com/org', $2)", &[&g, &t]).await.unwrap();
+        for (id, text, fwd) in [("e1", "list items", None), ("e2", "list off", Some(false)), ("e3", "shadowed", None)] {
+            c.execute("INSERT INTO endpoints (id, text, description, verb, base, path, suggested_sentence, group_id, forward_identity)
+                       VALUES ($1, $2, '', 'GET', '', '/_apis/x', '', $3, $4)",
+                &[&format!("{id}-{run}"), &text, &g, &fwd]).await.unwrap();
+        }
+        for (name, url, fwd, active) in [
+            ("azure-shadowed", "https://dev.azure.com/org/x", false, true),   // explicit row wins over e3
+            ("first-party", "https://api.cvenom.com/x", true, true),
+            ("internal", "http://backend-cvenom:8080/x", true, true),
+            ("jira", "https://acme.atlassian.net/rest", true, true),
+            ("inactive", "https://acme.atlassian.net/rest", true, false),
+        ] {
+            c.execute("INSERT INTO mcp_tools (tenant_id, tool_name, backend_url, forward_identity, is_active)
+                       VALUES ($1, $2, $3, $4, $5)", &[&t, &name, &url, &fwd, &active]).await.unwrap();
+        }
+
+        let own = vec!["api0.ai".to_string(), "cvenom.com".to_string()];
+        let mut leaks = identity_leaks(&c, &own).await.unwrap();
+        let found: Vec<(String, String)> = leaks.remove(t).unwrap_or_default().iter()
+            .map(|v| (v["tool"].as_str().unwrap().to_string(), v["host"].as_str().unwrap().to_string()))
+            .collect();
+        assert_eq!(found, vec![
+            ("azure-list-items".to_string(), "dev.azure.com".to_string()),
+            ("jira".to_string(), "acme.atlassian.net".to_string()),
+        ]);
+    }
+
+    async fn has_index(c: &crate::infra::db::PgConnection) -> bool {
+        c.query_one("SELECT count(*) FROM pg_indexes WHERE indexname = 'tenants_name_ci_key'", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+            == 1
+    }
+
+    /// Existing duplicates must cost the index, never the boot.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; drops and recreates a shared index"]
+    async fn colliding_names_warn_instead_of_stopping_the_store() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let run = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        let c = store.get_admin_conn().await.unwrap();
+
+        c.execute("DROP INDEX tenants_name_ci_key", &[]).await.unwrap();
+        let (a, b) = (format!("dup-a-{run}"), format!("dup-b-{run}"));
+        for (id, name) in [(&a, format!("Dup {run}")), (&b, format!("dup {run}"))] {
+            c.execute("INSERT INTO tenants (id, name, credit_balance, created_at) VALUES ($1, $2, 0, NOW())",
+                &[id, &name]).await.unwrap();
+        }
+
+        EndpointStore::new(&url).await.expect("the store still starts");
+        assert!(!has_index(&c).await, "the index is skipped while names collide");
+
+        c.execute("DELETE FROM tenants WHERE id = $1", &[&b]).await.unwrap();
+        EndpointStore::new(&url).await.expect("store");
+        assert!(has_index(&c).await, "and created at the next start once they don't");
+        c.execute("DELETE FROM tenants WHERE id = $1", &[&a]).await.unwrap();
+    }
 }

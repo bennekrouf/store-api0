@@ -24,6 +24,7 @@ mod replace_user_api_groups;
 mod user_preferences;
 mod utils;
 pub mod tenant_management;
+pub mod tenant_members;
 pub mod downstream_auth_management;
 use crate::app_log;
 pub use errors::*;
@@ -588,7 +589,7 @@ impl EndpointStore {
     pub async fn list_user_tenants(
         &self,
         email: &str,
-    ) -> Result<Vec<Tenant>, StoreError> {
+    ) -> Result<Vec<tenant_management::UserTenant>, StoreError> {
         let client = self.get_admin_conn().await?;
         tenant_management::list_user_tenants_with_conn(&client, email).await
     }

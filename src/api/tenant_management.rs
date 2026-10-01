@@ -1,6 +1,7 @@
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpResponse, Responder};
+use serde::Deserialize;
 use std::sync::Arc;
 
 pub async fn verify_tenant_access(
@@ -65,6 +66,45 @@ pub async fn list_user_tenants(
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
                 "message": format!("Internal error: {}", e),
+            }))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetActiveTenantRequest {
+    pub email: String,
+    pub tenant_id: String,
+}
+
+/// PUT /api/user/tenant/active — switch the workspace the caller acts on.
+pub async fn set_active_tenant(
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<SetActiveTenantRequest>,
+) -> impl Responder {
+    let email = body.email.to_lowercase();
+    let tenant_id = body.tenant_id.trim();
+
+    match crate::endpoint_store::tenant_management::set_active_tenant(&store, &email, tenant_id).await {
+        Ok(Some(tenant)) => {
+            app_log!(info, email = %email, tenant_id = %tenant.id, "Switched active workspace");
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "tenant": tenant,
+            }))
+        }
+        Ok(None) => {
+            app_log!(warn, email = %email, tenant_id = %tenant_id, "Refused a switch into a workspace the caller is not a member of");
+            HttpResponse::Forbidden().json(serde_json::json!({
+                "success": false,
+                "message": "You are not a member of that workspace",
+            }))
+        }
+        Err(e) => {
+            app_log!(error, email = %email, tenant_id = %tenant_id, "Failed to switch workspace: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": "Could not switch workspace",
             }))
         }
     }

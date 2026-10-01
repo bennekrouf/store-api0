@@ -830,3 +830,32 @@ CREATE TABLE IF NOT EXISTS licenses (
 );
 CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(email);
 CREATE INDEX IF NOT EXISTS idx_licenses_payment_intent ON licenses(stripe_payment_intent_id);
+
+-- ── Tenant names are unique, ignoring case ───────────────────────────────────
+-- "solanize" and "Solanize" are two workspaces nobody can tell apart. The store
+-- checks before every write (tenant_management::NAME_TAKEN_SQL); this index is
+-- what holds when two writes race.
+--
+-- Existing duplicates make the CREATE fail. That must not stop the store from
+-- starting — this file runs as one batch at boot — so the failure is a warning:
+-- rename or delete the duplicates and the index is created on the next start.
+DO $$
+BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS tenants_name_ci_key ON tenants (lower(btrim(name)));
+EXCEPTION WHEN unique_violation THEN
+    RAISE WARNING 'tenants_name_ci_key not created: some tenant names collide ignoring case';
+END $$;
+
+-- ── Workspace invitations ────────────────────────────────────────────────────
+-- tenant_users.email is a foreign key onto user_preferences, so someone who has
+-- never signed in cannot be a member yet. Their invitation waits here and is
+-- turned into a membership inside their first sign-in (tenant_members.rs).
+CREATE TABLE IF NOT EXISTS tenant_invites (
+    tenant_id   VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    email       VARCHAR     NOT NULL,   -- lowercased
+    role        VARCHAR     NOT NULL,   -- owner | admin | member
+    invited_by  VARCHAR     NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_invites_email ON tenant_invites(email);
