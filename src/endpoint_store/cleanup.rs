@@ -63,8 +63,13 @@ pub async fn fallback_clean_user_data(
     Ok(())
 }
 
-/// Forces a clean of user data
-pub async fn force_clean_user_data(store: &EndpointStore, email: &str) -> Result<(), StoreError> {
+/// Remove the endpoints a user uploaded, before an upload replaces them.
+///
+/// Endpoints only. This used to be the whole of `delete_user_account` below,
+/// so every upload also deleted the uploader's API keys, tenant memberships and
+/// default tenant: the owner of a tenant lost it by uploading to it, and the
+/// next requests each created a fresh personal tenant in its place.
+pub async fn clean_user_endpoints(store: &EndpointStore, email: &str) -> Result<(), StoreError> {
     let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
@@ -119,7 +124,19 @@ pub async fn force_clean_user_data(store: &EndpointStore, email: &str) -> Result
         }
     }
 
-    // NEW: Clean up tenant/key/preference data
+    tx.commit().await.to_store_error()?;
+    Ok(())
+}
+
+/// Delete everything a user has: endpoints, usage logs, API keys, tenant
+/// memberships, their personal tenant and preferences. For tearing down test
+/// accounts — never part of an upload.
+pub async fn delete_user_account(store: &EndpointStore, email: &str) -> Result<(), StoreError> {
+    clean_user_endpoints(store, email).await?;
+
+    let mut client = store.get_admin_conn().await?;
+    let tx = client.transaction().await.to_store_error()?;
+
     
     // 1. Delete API usage logs
     tx.execute("DELETE FROM api_usage_logs WHERE email = $1", &[&email]).await.to_store_error()?;

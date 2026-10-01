@@ -46,7 +46,7 @@ pub async fn replace_user_api_groups(
     };
 
     // Clean up existing user data
-    match store.force_clean_user_data(email).await {
+    match store.clean_user_endpoints(email).await {
         Ok(_) => {
             app_log!(info, email = %email, "Successfully cleaned up user data");
         }
