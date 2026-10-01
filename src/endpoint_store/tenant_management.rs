@@ -18,6 +18,17 @@ pub fn personal_tenant_name(email: &str) -> String {
     }
 }
 
+/// Whether `email` can own an account: something@something. A blank value is
+/// what an unauthenticated or half-filled request carries, and resolving one
+/// used to create a "Personal workspace" owned by the empty string.
+pub fn is_account_email(email: &str) -> bool {
+    let email = email.trim();
+    match email.split_once('@') {
+        Some((local, domain)) => !local.is_empty() && !domain.is_empty() && !email.contains(char::is_whitespace),
+        None => false,
+    }
+}
+
 /// Is this a name a person chose, rather than an address that leaked into the
 /// name column? Used to reject renames that would reintroduce the confusion.
 pub fn is_valid_tenant_name(name: &str) -> bool {
@@ -63,6 +74,12 @@ pub async fn get_or_create_personal_tenant_with_conn(
     email: &str,
 ) -> Result<Tenant, StoreError> {
     let email = email.to_lowercase();
+    if !is_account_email(&email) {
+        return Err(StoreError::InvalidInput(format!(
+            "'{}' is not an account email, so it has no workspace",
+            email
+        )));
+    }
 
     // Creating a tenant is several writes — the tenant, its owner, the user's
     // default — and they stand or fall together. Without a transaction a failure
@@ -536,10 +553,38 @@ pub async fn set_active_tenant(
     }))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_real_addresses_own_accounts() {
+        assert!(is_account_email("bob@example.com"));
+        assert!(is_account_email("Bob@Example.com"));
+        for bad in ["", "   ", "bob", "@example.com", "bob@", "bob smith@example.com"] {
+            assert!(!is_account_email(bad), "{bad:?} must be refused");
+        }
+    }
+}
+
 /// Against a real database — see tenant_members::db_tests for how to run.
 #[cfg(test)]
 mod db_tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn a_blank_email_gets_no_workspace() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let c = store.get_admin_conn().await.unwrap();
+        let before: i64 = c.query_one("SELECT count(*) FROM tenants", &[]).await.unwrap().get(0);
+        for blank in ["", "  ", "not-an-address"] {
+            assert!(matches!(get_default_tenant(&store, blank).await, Err(StoreError::InvalidInput(_))));
+        }
+        let after: i64 = c.query_one("SELECT count(*) FROM tenants", &[]).await.unwrap().get(0);
+        assert_eq!(before, after, "nothing was created");
+    }
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL"]
