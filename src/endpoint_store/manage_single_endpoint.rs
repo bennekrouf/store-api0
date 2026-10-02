@@ -1,6 +1,6 @@
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
-use crate::endpoint_store::{Endpoint, EndpointStore, StoreError};
+use crate::endpoint_store::{workspace_access, Endpoint, EndpointStore, StoreError};
 /// Manages (adds or updates) a single endpoint
 pub async fn manage_single_endpoint(
     store: &EndpointStore,
@@ -20,19 +20,25 @@ pub async fn manage_single_endpoint(
         "Managing single endpoint"
     );
 
-    // Check if user has access to this group
-    let user_has_group_row = tx
-        .query_opt(
-            "SELECT 1 FROM user_groups WHERE email = $1 AND group_id = $2",
-            &[&email, group_id],
-        )
-        .await
-        .to_store_error()?;
-
-    if user_has_group_row.is_none() {
+    // Any member of the group's workspace may edit it — not only the email
+    // that created the group.
+    let Some(tenant_id) = workspace_access::group_tenant(&tx, group_id).await? else {
+        return Err(StoreError::InvalidInput(format!("No API group '{}'", group_id)));
+    };
+    if !workspace_access::is_member(&tx, email, &tenant_id).await? {
         return Err(StoreError::Database(
             "User does not have access to this API group".to_string(),
         ));
+    }
+    // An existing endpoint must already be in this workspace: an update may not
+    // pull another workspace's endpoint into this group.
+    if let Some(current) = workspace_access::endpoint_tenant(&tx, endpoint_id).await? {
+        if current != tenant_id {
+            return Err(StoreError::InvalidInput(format!(
+                "Endpoint id '{}' belongs to another workspace",
+                endpoint_id
+            )));
+        }
     }
 
     // Check if endpoint exists
@@ -84,9 +90,9 @@ pub async fn manage_single_endpoint(
         .await
         .to_store_error()?;
 
-        // Associate endpoint with user
+        // Associate endpoint with user (informational; access is by workspace)
         tx.execute(
-            "INSERT INTO user_endpoints (email, endpoint_id) VALUES ($1, $2)",
+            "INSERT INTO user_endpoints (email, endpoint_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
             &[&email as &(dyn tokio_postgres::types::ToSql + Sync), endpoint_id as &(dyn tokio_postgres::types::ToSql + Sync)],
         )
         .await
@@ -138,6 +144,9 @@ pub async fn manage_single_endpoint(
     }
 
     tx.commit().await.to_store_error()?;
+
+    // The edit reaches Claude: the workspace's tools are re-synced.
+    crate::endpoint_store::mcp_tools_management::resync_tenant_tools(store, &tenant_id).await;
 
     app_log!(info,
         email = %email,

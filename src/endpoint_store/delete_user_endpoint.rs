@@ -1,7 +1,12 @@
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
+use crate::endpoint_store::workspace_access::{delete_endpoints, endpoint_tenant, is_member};
 use crate::endpoint_store::{EndpointStore, StoreError};
-/// Deletes a single endpoint for a user
+
+/// Deletes an endpoint, for any member of the workspace it belongs to.
+///
+/// `Ok(false)` when it does not exist or the caller is not a member — the same
+/// answer for both, so a caller cannot probe another workspace's ids.
 pub async fn delete_user_endpoint(
     store: &EndpointStore,
     email: &str,
@@ -10,82 +15,20 @@ pub async fn delete_user_endpoint(
     let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
-    app_log!(debug,
-        email = %email,
-        endpoint_id = %endpoint_id,
-        "Starting endpoint deletion process"
-    );
-
-    // Check if user has access to this endpoint
-    let user_endpoint_row = tx
-        .query_opt(
-            "SELECT 1 FROM user_endpoints WHERE email = $1 AND endpoint_id = $2",
-            &[&email, &endpoint_id],
-        )
-        .await
-        .to_store_error()?;
-
-    if user_endpoint_row.is_none() {
-        app_log!(debug,
-            email = %email,
-            endpoint_id = %endpoint_id,
-            "User does not have access to this endpoint"
-        );
+    let Some(tenant_id) = endpoint_tenant(&tx, endpoint_id).await? else {
+        return Ok(false);
+    };
+    if !is_member(&tx, email, &tenant_id).await? {
+        app_log!(warn, email = %email, endpoint_id = %endpoint_id, tenant_id = %tenant_id,
+            "Refused to delete an endpoint outside the caller's workspaces");
         return Ok(false);
     }
 
-    // Remove user-endpoint association
-    tx.execute(
-        "DELETE FROM user_endpoints WHERE email = $1 AND endpoint_id = $2",
-        &[&email, &endpoint_id],
-    )
-    .await
-    .to_store_error()?;
-
-    // Check if any other user still uses this endpoint
-    let still_used_row = tx
-        .query_opt(
-            "SELECT 1 FROM user_endpoints WHERE endpoint_id = $1",
-            &[&endpoint_id],
-        )
-        .await
-        .to_store_error()?;
-
-    // If no other user uses this endpoint, delete it completely
-    if still_used_row.is_none() {
-        app_log!(debug,
-            endpoint_id = %endpoint_id,
-            "No other users reference this endpoint, deleting completely"
-        );
-
-        // Delete parameter alternatives
-        tx.execute(
-            "DELETE FROM parameter_alternatives WHERE endpoint_id = $1",
-            &[&endpoint_id],
-        )
-        .await
-        .to_store_error()?;
-
-        // Delete parameters
-        tx.execute(
-            "DELETE FROM parameters WHERE endpoint_id = $1",
-            &[&endpoint_id],
-        )
-        .await
-        .to_store_error()?;
-
-        // Delete the endpoint itself
-        tx.execute("DELETE FROM endpoints WHERE id = $1", &[&endpoint_id])
-            .await
-            .to_store_error()?;
-    }
-
-    app_log!(info,
-        email = %email,
-        endpoint_id = %endpoint_id,
-        "Endpoint successfully deleted"
-    );
-
+    delete_endpoints(&tx, &[endpoint_id.to_string()]).await?;
     tx.commit().await.to_store_error()?;
+    app_log!(info, email = %email, endpoint_id = %endpoint_id, tenant_id = %tenant_id, "Endpoint deleted");
+
+    // The endpoint's tool goes with it.
+    crate::endpoint_store::mcp_tools_management::resync_tenant_tools(store, &tenant_id).await;
     Ok(true)
 }

@@ -570,6 +570,24 @@ pub async fn sync_endpoints_as_mcp_tools(
     Ok(count)
 }
 
+/// Re-sync a workspace's imported tools from *all* its API groups, after any
+/// change to them — a single endpoint edited, a group added or deleted. The
+/// sync switches off imported tools missing from the set it is given, so it
+/// must always see the whole workspace, never one group. Non-fatal: the
+/// change itself is already committed.
+pub async fn resync_tenant_tools(store: &EndpointStore, tenant_id: &str) {
+    let groups = match crate::endpoint_store::get_api_groups_by_email::get_api_groups_by_tenant(store, tenant_id).await {
+        Ok(g) => g,
+        Err(e) => {
+            app_log!(warn, tenant_id = %tenant_id, error = %e, "Could not read groups to resync tools");
+            return;
+        }
+    };
+    if let Err(e) = sync_endpoints_as_mcp_tools(store, tenant_id, &groups).await {
+        app_log!(warn, tenant_id = %tenant_id, error = %e, "Tool resync failed");
+    }
+}
+
 /// Build a minimal JSON Schema from a list of endpoint parameters.
 fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> String {
     if params.is_empty() {
