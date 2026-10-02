@@ -38,6 +38,16 @@ pub async fn get_api_groups_by_email(
     Ok(result)
 }
 
+/// A workspace's API groups and endpoints, by tenant id — what its tools are
+/// synced from.
+pub async fn get_api_groups_by_tenant(
+    store: &EndpointStore,
+    tenant_id: &str,
+) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
+    let client = store.get_admin_conn().await?;
+    fetch_custom_groups_with_endpoints(&client, tenant_id).await
+}
+
 /// Fetches a workspace's API groups and their endpoints
 async fn fetch_custom_groups_with_endpoints(
     client: &deadpool_postgres::Object,

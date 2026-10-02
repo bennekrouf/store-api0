@@ -22,17 +22,14 @@ pub async fn add_user_api_group(
     // We update if exists to handle idempotent uploads usually
     // BUT now we must ensure tenant_id is set.
     
-    // Check existence
-    let existing_group = tx.query_opt("SELECT tenant_id FROM api_groups WHERE id = $1", &[group_id]).await.to_store_error()?;
-    
-    if let Some(row) = existing_group {
-        // Group exists. Verify ownership?
-        let existing_tenant_id: Option<String> = row.get(0);
-        if let Some(t_id) = existing_tenant_id {
-            if t_id != tenant_id {
-                 // Warn or handle mismatch
-                 app_log!(warn, email=%email, group=%group_id, "Group exists under different tenant");
-            }
+    // A group id that already belongs to another workspace is refused. It used
+    // to be logged and written anyway, adding endpoints into that workspace.
+    if let Some(owner) = crate::endpoint_store::workspace_access::group_tenant(&tx, group_id).await? {
+        if owner != tenant_id {
+            return Err(StoreError::InvalidInput(format!(
+                "API group id '{}' is used by another workspace",
+                group_id
+            )));
         }
     }
 
@@ -67,6 +64,14 @@ pub async fn add_user_api_group(
     let mut endpoint_count = 0;
 
     for endpoint in &api_group.endpoints {
+        if let Some(owner) = crate::endpoint_store::workspace_access::endpoint_tenant(&tx, &endpoint.id).await? {
+            if owner != tenant_id {
+                return Err(StoreError::InvalidInput(format!(
+                    "Endpoint id '{}' is used by another workspace",
+                    endpoint.id
+                )));
+            }
+        }
         let endpoint_exists_row = tx
             .query_opt("SELECT 1 FROM endpoints WHERE id = $1", &[&endpoint.id])
             .await
@@ -163,5 +168,8 @@ pub async fn add_user_api_group(
     );
 
     tx.commit().await.to_store_error()?;
+
+    // The new group's endpoints become tools in Claude.
+    crate::endpoint_store::mcp_tools_management::resync_tenant_tools(store, &tenant_id).await;
     Ok(endpoint_count)
 }

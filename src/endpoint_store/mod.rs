@@ -24,6 +24,7 @@ mod replace_user_api_groups;
 mod user_preferences;
 mod utils;
 pub mod tenant_management;
+pub mod workspace_access;
 pub mod tenant_members;
 pub mod downstream_auth_management;
 use crate::app_log;
