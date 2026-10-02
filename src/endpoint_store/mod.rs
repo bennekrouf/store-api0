@@ -328,7 +328,7 @@ impl EndpointStore {
             
             if let Some(row) = key_row {
                 // If this is a consumer key (provider_tenant_id set), the activity
-                // belongs to the PROVIDER's tenant (e.g. Cvenom).
+                // belongs to the PROVIDER's tenant.
                 tenant_id = row.get::<_, Option<String>>(0).or_else(|| row.get::<_, Option<String>>(1));
             }
         }

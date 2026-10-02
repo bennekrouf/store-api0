@@ -47,7 +47,7 @@ the bridge must be given the same value.
 
 ## Service keys
 
-A first-party service that calls the store directly (cvenom) gets a key scoped
+A first-party service that calls the store directly gets a key scoped
 to the routes it needs, never `API0_INTERNAL_SECRET`. It sends
 `X-Service-Key: <key>`; the store keeps only the key's SHA-256:
 
@@ -57,7 +57,7 @@ printf %s "$key" | shasum -a 256       # this goes in API0_SERVICE_KEYS
 ```
 
 ```
-API0_SERVICE_KEYS="cvenom:<sha256 hex>:credits.read,credits.write,email.send"
+API0_SERVICE_KEYS="billing-app:<sha256 hex>:credits.read,credits.write,email.send"
 ```
 
 Several services are separated by `;`. The scopes, and the routes they open:

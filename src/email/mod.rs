@@ -441,7 +441,7 @@ pub async fn send_email_handler(
     store: web::Data<Arc<EndpointStore>>,
     body: web::Json<SendEmailRequest>,
 ) -> impl Responder {
-    // The internal secret, or a service key with `email.send` (cvenom).
+    // The internal secret, or a service key with `email.send`.
     if let Err(deny) = crate::middleware::service_key::require_scope(
         &req,
         crate::middleware::service_key::Scope::EmailSend,

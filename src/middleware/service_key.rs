@@ -1,13 +1,13 @@
 // src/middleware/service_key.rs
 //
 // Scoped credentials for first-party services that call the store directly —
-// cvenom today — so they no longer need API0_INTERNAL_SECRET, which opens every
+// so they no longer need API0_INTERNAL_SECRET, which opens every
 // internal route the store has.
 //
 // A service sends `X-Service-Key: <key>`. The store holds only each key's
 // SHA-256 and the scopes it grants, in one environment variable:
 //
-//   API0_SERVICE_KEYS = "cvenom:<sha256 hex>:credits.read,credits.write,email.send"
+//   API0_SERVICE_KEYS = "billing-app:<sha256 hex>:credits.read,credits.write,email.send"
 //
 // Several services are separated by `;`. To issue a key:
 //
@@ -196,14 +196,14 @@ pub fn require_scope(req: &HttpRequest, scope: Scope) -> Result<Caller, HttpResp
 mod tests {
     use super::*;
 
-    const KEY: &str = "cvenom-test-key";
+    const KEY: &str = "billing-app-test-key";
 
     fn hash_hex(key: &str) -> String {
         hex::encode(Sha256::digest(key.as_bytes()))
     }
 
-    fn cvenom() -> Vec<ServiceEntry> {
-        parse_entries(&format!("cvenom:{}:credits.read,credits.write,email.send", hash_hex(KEY)))
+    fn billing_app() -> Vec<ServiceEntry> {
+        parse_entries(&format!("billing-app:{}:credits.read,credits.write,email.send", hash_hex(KEY)))
     }
 
     #[test]
@@ -215,10 +215,10 @@ mod tests {
 
     #[test]
     fn a_service_key_passes_its_own_scopes() {
-        let entries = cvenom();
+        let entries = billing_app();
         assert_eq!(
             decide(None, None, &entries, Some(KEY), Scope::CreditsWrite),
-            Ok(Caller::Service("cvenom".into()))
+            Ok(Caller::Service("billing-app".into()))
         );
     }
 
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn a_wrong_or_missing_key_is_unauthenticated() {
-        let entries = cvenom();
+        let entries = billing_app();
         assert_eq!(decide(None, None, &entries, Some("guess"), Scope::CreditsRead), Err(Denial::Unauthenticated));
         assert_eq!(decide(None, None, &entries, None, Scope::CreditsRead), Err(Denial::Unauthenticated));
         assert_eq!(decide(None, None, &entries, Some(""), Scope::CreditsRead), Err(Denial::Unauthenticated));
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn the_key_itself_is_not_accepted_as_its_hash() {
         // Someone who read the store's environment has the hash, not the key.
-        let entries = cvenom();
+        let entries = billing_app();
         let hash = hash_hex(KEY);
         assert_eq!(decide(None, None, &entries, Some(&hash), Scope::CreditsRead), Err(Denial::Unauthenticated));
     }
@@ -257,12 +257,12 @@ mod tests {
     #[test]
     fn malformed_entries_are_dropped_without_affecting_the_rest() {
         let raw = format!(
-            "broken:nothex:credits.read; :{h}:email.send; typo:{h}:credits.everything; cvenom:{h}:credits.read",
+            "broken:nothex:credits.read; :{h}:email.send; typo:{h}:credits.everything; billing-app:{h}:credits.read",
             h = hash_hex(KEY)
         );
         let entries = parse_entries(&raw);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "cvenom");
+        assert_eq!(entries[0].name, "billing-app");
         assert_eq!(entries[0].scopes, vec![Scope::CreditsRead]);
     }
 }

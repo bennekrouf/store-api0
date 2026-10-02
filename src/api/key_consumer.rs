@@ -2,7 +2,7 @@
 //
 // POST /api/consumer-keys
 //
-// Providers (e.g. cvenom backend) call this to create an MCP consumer key for
+// Providers (a product backend) call this to create an MCP consumer key for
 // one of their end-users. The resulting key has provider_tenant_id set to the
 // provider's tenant, so:
 //   - tools/list returns the provider's tools
@@ -13,7 +13,7 @@
 //
 // Body:
 //   {
-//     "provider_email":  "admin@cvenom.com",   -- identifies the provider tenant
+//     "provider_email":  "admin@example.com",   -- identifies the provider tenant
 //     "consumer_email":  "alice@example.com",  -- the end-user who will use the key
 //     "key_name":        "Alice's MCP key"     -- label shown in dashboard
 //   }

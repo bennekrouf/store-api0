@@ -208,7 +208,9 @@ fn first_party_hosts() -> Vec<String> {
     let raw = std::env::var("API0_FIRST_PARTY_HOSTS")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "api0.ai,cvenom.com".to_string());
+        // api0's own domain only; a deployment adds the products it runs
+        // first-party (e.g. API0_FIRST_PARTY_HOSTS=api0.ai,example.com).
+        .unwrap_or_else(|| "api0.ai".to_string());
     raw.split(',')
         .map(|h| h.trim().trim_start_matches('.').to_lowercase())
         .filter(|h| !h.is_empty())
@@ -323,13 +325,13 @@ mod identity_leak_tests {
     use super::*;
 
     fn own() -> Vec<String> {
-        vec!["api0.ai".to_string(), "cvenom.com".to_string()]
+        vec!["api0.ai".to_string(), "example.com".to_string()]
     }
 
     #[test]
     fn host_of_strips_scheme_port_path_and_credentials() {
         assert_eq!(host_of("https://dev.azure.com/org/_apis/wit").as_deref(), Some("dev.azure.com"));
-        assert_eq!(host_of("http://user:pw@API.cvenom.com:8443/x?y").as_deref(), Some("api.cvenom.com"));
+        assert_eq!(host_of("http://user:pw@API.example.com:8443/x?y").as_deref(), Some("api.example.com"));
         assert_eq!(host_of("http://[::1]:5007/x").as_deref(), Some("::1"));
         assert_eq!(host_of("/relative/path"), None);
         assert_eq!(host_of("https://{host}/x"), None);
@@ -337,16 +339,16 @@ mod identity_leak_tests {
 
     #[test]
     fn own_domains_and_their_subdomains_are_first_party() {
-        assert!(is_first_party("cvenom.com", &own()));
-        assert!(is_first_party("api.cvenom.com", &own()));
-        assert!(!is_first_party("notcvenom.com", &own()));
+        assert!(is_first_party("example.com", &own()));
+        assert!(is_first_party("api.example.com", &own()));
+        assert!(!is_first_party("notexample.com", &own()));
         assert!(!is_first_party("dev.azure.com", &own()));
     }
 
     #[test]
     fn the_private_network_is_first_party() {
         assert!(is_first_party("localhost", &own()));
-        assert!(is_first_party("backend-cvenom", &own()));
+        assert!(is_first_party("backend-service", &own()));
         assert!(is_first_party("127.0.0.1", &own()));
         assert!(is_first_party("10.0.0.7", &own()));
         assert!(is_first_party("192.168.1.20", &own()));
@@ -935,8 +937,8 @@ mod db_tests {
         }
         for (name, url, fwd, active) in [
             ("azure-shadowed", "https://dev.azure.com/org/x", false, true),   // explicit row wins over e3
-            ("first-party", "https://api.cvenom.com/x", true, true),
-            ("internal", "http://backend-cvenom:8080/x", true, true),
+            ("first-party", "https://api.example.com/x", true, true),
+            ("internal", "http://backend-service:8080/x", true, true),
             ("jira", "https://acme.atlassian.net/rest", true, true),
             ("inactive", "https://acme.atlassian.net/rest", true, false),
         ] {
@@ -944,7 +946,7 @@ mod db_tests {
                        VALUES ($1, $2, $3, $4, $5)", &[&t, &name, &url, &fwd, &active]).await.unwrap();
         }
 
-        let own = vec!["api0.ai".to_string(), "cvenom.com".to_string()];
+        let own = vec!["api0.ai".to_string(), "example.com".to_string()];
         let mut leaks = identity_leaks(&c, &own).await.unwrap();
         let found: Vec<(String, String)> = leaks.remove(t).unwrap_or_default().iter()
             .map(|v| (v["tool"].as_str().unwrap().to_string(), v["host"].as_str().unwrap().to_string()))

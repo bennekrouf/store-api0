@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS tenant_downstream_auth (
 );
 
 -- Per-provider OAuth client ID — allows each provider to have their own
--- client_id (e.g. "cvenom-mcp") that resolves to their provider_tenant_id.
+-- client_id (e.g. "acme-mcp") that resolves to their provider_tenant_id.
 DO $$
 BEGIN
     IF NOT EXISTS (
