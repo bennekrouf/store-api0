@@ -238,7 +238,9 @@ impl EndpointStore {
         delete_user_endpoint::delete_user_endpoint(self, email, endpoint_id).await
     }
 
-    /// The user's uploaded endpoints only — what an upload replaces.
+    /// The user's uploaded endpoints, across workspaces. No longer part of an
+    /// upload (that replaces one workspace's groups); kept for test teardown.
+    #[allow(dead_code)]
     pub(crate) async fn clean_user_endpoints(&self, email: &str) -> Result<(), StoreError> {
         cleanup::clean_user_endpoints(self, email).await
     }
@@ -249,6 +251,7 @@ impl EndpointStore {
         cleanup::delete_user_account(self, email).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn fallback_clean_user_data(&self, email: &str) -> Result<(), StoreError> {
         cleanup::fallback_clean_user_data(self, email).await
     }

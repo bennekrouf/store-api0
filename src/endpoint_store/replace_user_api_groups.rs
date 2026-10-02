@@ -45,36 +45,46 @@ pub async fn replace_user_api_groups(
         }
     };
 
-    // Clean up existing user data
-    match store.clean_user_endpoints(email).await {
-        Ok(_) => {
-            app_log!(info, email = %email, "Successfully cleaned up user data");
-        }
-        Err(e) => {
-            app_log!(error,
-                error = %e,
-                email = %email,
-                "Failed to clean up user data, will try fallback approach"
-            );
-
-            match store.fallback_clean_user_data(email).await {
-                Ok(_) => app_log!(info, email = %email, "Fallback cleanup successful"),
-                Err(e) => {
-                    app_log!(error,
-                        error = %e,
-                        email = %email,
-                        "Fallback cleanup also failed, proceeding with import anyway"
-                    );
-                }
-            }
-        }
-    }
-
     // Add new groups and endpoints
 
     let mut imported_count = 0;
     let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
+
+    // An upload replaces *this workspace's* APIs, in the same transaction as
+    // the insert. It used to clear everything the uploading email had created,
+    // in every workspace it belongs to, and never removed old groups — so they
+    // piled up (and one person's second workspace lost its endpoints).
+    let old_groups: Vec<String> = tx
+        .query("SELECT id FROM api_groups WHERE tenant_id = $1", &[&tenant_id])
+        .await
+        .to_store_error()?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    let old_endpoints: Vec<String> = tx
+        .query("SELECT id FROM endpoints WHERE group_id = ANY($1)", &[&old_groups])
+        .await
+        .to_store_error()?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    for sql in [
+        "DELETE FROM parameter_alternatives WHERE endpoint_id = ANY($1)",
+        "DELETE FROM parameters WHERE endpoint_id = ANY($1)",
+        "DELETE FROM user_endpoints WHERE endpoint_id = ANY($1)",
+        "DELETE FROM endpoints WHERE id = ANY($1)",
+    ] {
+        tx.execute(sql, &[&old_endpoints]).await.to_store_error()?;
+    }
+    for sql in [
+        "DELETE FROM user_groups WHERE group_id = ANY($1)",
+        "DELETE FROM api_groups WHERE id = ANY($1)",
+    ] {
+        tx.execute(sql, &[&old_groups]).await.to_store_error()?;
+    }
+    app_log!(info, tenant_id = %tenant_id, groups = old_groups.len(), endpoints = old_endpoints.len(),
+        "Replaced the workspace's previous API groups");
 
     for group_with_endpoints in &api_groups {
         let group = &group_with_endpoints.group;
@@ -92,6 +102,12 @@ pub async fn replace_user_api_groups(
             .await
             .to_store_error()?;
 
+        if group_exists_row.is_some() {
+            return Err(StoreError::InvalidInput(format!(
+                "API group id '{}' is used by another workspace; remove the explicit id or choose another",
+                group_id
+            )));
+        }
         if group_exists_row.is_none() {
             app_log!(debug, group_id = %group_id, tenant_id = %tenant_id, "Creating new API group");
             tx.execute(
@@ -131,6 +147,12 @@ pub async fn replace_user_api_groups(
                 .await
                 .to_store_error()?;
 
+            if endpoint_exists_row.is_some() {
+                return Err(StoreError::InvalidInput(format!(
+                    "Endpoint id '{}' is used by another workspace; remove the explicit id or choose another",
+                    endpoint_id
+                )));
+            }
             if endpoint_exists_row.is_none() {
                 app_log!(debug, endpoint_id = %endpoint_id, "Creating new endpoint");
                 tx.execute(
