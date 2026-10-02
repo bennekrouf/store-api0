@@ -441,8 +441,12 @@ pub async fn send_email_handler(
     store: web::Data<Arc<EndpointStore>>,
     body: web::Json<SendEmailRequest>,
 ) -> impl Responder {
-    if !check_internal_secret(&req) {
-        return HttpResponse::Unauthorized().json(serde_json::json!({"success":false,"error":"Unauthorized"}));
+    // The internal secret, or a service key with `email.send` (cvenom).
+    if let Err(deny) = crate::middleware::service_key::require_scope(
+        &req,
+        crate::middleware::service_key::Scope::EmailSend,
+    ) {
+        return deny;
     }
     let cfg = match load_smtp_config(&store).await {
         Some(c) => c,

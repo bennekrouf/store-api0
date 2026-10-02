@@ -1,14 +1,25 @@
 use crate::app_log;
 use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::{EndpointStore, UpdateCreditRequest};
-use actix_web::{web, HttpResponse, Responder};
+use crate::middleware::service_key::{require_scope, Scope};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::sync::Arc;
 
 const LOW_CREDITS_THRESHOLD: i64 = 50;
+/// POST /api/user/credits — add or spend credits.
+///
+/// Until now this took no credential at all: anything that could reach the
+/// store could top up any account. It needs the internal secret (gateway) or a
+/// service key with `credits.write` (cvenom).
 pub async fn update_credit_balance_handler(
+    req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     request: web::Json<UpdateCreditRequest>,
 ) -> impl Responder {
+    let caller = match require_scope(&req, Scope::CreditsWrite) {
+        Ok(c) => c,
+        Err(deny) => return deny,
+    };
     let email = request.email.to_lowercase();
 
     // A tenant id in the email field would create a tenant named after a UUID —
@@ -41,7 +52,7 @@ pub async fn update_credit_balance_handler(
 
     match store.update_credit_balance(&tenant_id, &email, amount, &request.action_type, request.description.as_deref()).await {
         Ok(new_balance) => {
-            app_log!(info, email = %email, amount = amount, new_balance = new_balance, "Successfully updated credit balance");
+            app_log!(info, email = %email, amount = amount, new_balance = new_balance, caller = %caller.name(), "Successfully updated credit balance");
 
             // Low credits warning: only when a deduction crosses the threshold.
             if amount < 0 && new_balance < LOW_CREDITS_THRESHOLD && (new_balance - amount) >= LOW_CREDITS_THRESHOLD {

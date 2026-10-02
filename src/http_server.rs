@@ -260,6 +260,8 @@ pub async fn start_http_server(
                             .route("/internal/tenant-idp/{mcp_client_id}", web::get().to(get_tenant_idp_handler))
                             .route("/internal/idp-auth-request", web::post().to(remember_auth_request_handler))
                             .route("/internal/idp-auth-request/consume", web::post().to(consume_auth_request_handler))
+                            // Single use for OAuth authorization codes
+                            .route("/internal/oauth-code/redeem", web::post().to(crate::mcp::oauth_codes::redeem_code_handler))
                             .route("/user/tenant-idp", web::put().to(save_tenant_idp_handler))
                             // Messaging-channel identities: a phone or chat id ↔ an api0 person
                             .route("/user/channel-link-code", web::post().to(create_link_code_handler))

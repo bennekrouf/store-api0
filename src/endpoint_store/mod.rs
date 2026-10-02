@@ -2,6 +2,7 @@ mod add_user_api_group;
 pub mod channel_identities;
 pub mod encrypt_legacy;
 pub mod idp_management;
+pub mod oauth_codes;
 pub mod downstream_oauth;
 pub mod messaging_channels;
 pub mod user_credentials;
