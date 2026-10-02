@@ -91,6 +91,9 @@ pub async fn insert_failed_message(
 #[derive(Deserialize)]
 pub struct ListQuery {
     pub limit: Option<i64>,
+    /// Only this channel's failures ("whatsapp" | "telegram"). Rows from before
+    /// the channel column are WhatsApp's.
+    pub channel: Option<String>,
 }
 
 // GET /api/internal/whatsapp/failed-messages/{tenant_id}
@@ -115,12 +118,14 @@ pub async fn list_failed_messages(
     };
 
     match client.query(
-        "SELECT id, customer_phone, message_text, error_type, error_detail, payload, created_at
+        "SELECT id, customer_phone, message_text, error_type, error_detail, payload, created_at,
+                COALESCE(channel, 'whatsapp')
          FROM whatsapp_failed_messages
          WHERE tenant_id = $1
+           AND ($3::text IS NULL OR COALESCE(channel, 'whatsapp') = $3)
          ORDER BY created_at DESC
          LIMIT $2",
-        &[&tenant_id, &limit],
+        &[&tenant_id, &limit, &query.channel],
     ).await {
         Ok(rows) => {
             let messages: Vec<serde_json::Value> = rows.iter().map(|row| {
@@ -133,6 +138,7 @@ pub async fn list_failed_messages(
                     "error_detail": row.get::<_, String>(4),
                     "payload": row.get::<_, Option<serde_json::Value>>(5),
                     "created_at": created_at.to_rfc3339(),
+                    "channel": row.get::<_, String>(7),
                 })
             }).collect();
             HttpResponse::Ok().json(serde_json::json!({
