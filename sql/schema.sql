@@ -414,6 +414,16 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- API keys for the messaging assistant's AI provider, one per provider, set by
+-- the super admin. Sealed with secret_box (tenant "platform"); never returned by
+-- an admin route. The active provider and model are system_config's
+-- assistant.provider and assistant.model.
+CREATE TABLE IF NOT EXISTS assistant_llm_keys (
+    provider    VARCHAR     PRIMARY KEY,
+    key_enc     BYTEA       NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Default AI uploader config (idempotent)
 INSERT INTO system_config (key, value) VALUES
     ('ai_uploader.provider', 'cohere'),

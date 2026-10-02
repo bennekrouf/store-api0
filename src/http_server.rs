@@ -217,6 +217,12 @@ pub async fn start_http_server(
                             // Admin model config (X-Internal-Secret, gateway-facing)
                             .route("/admin/config/models", web::get().to(get_model_config))
                             .route("/admin/config/models", web::put().to(update_model_config))
+                            // Messaging assistant's AI provider (super admin, via the gateway)
+                            .route("/admin/config/assistant", web::get().to(crate::admin::assistant_config::get_assistant_config))
+                            .route("/admin/config/assistant", web::put().to(crate::admin::assistant_config::update_assistant_config))
+                            .route("/admin/config/assistant/keys/{provider}", web::put().to(crate::admin::assistant_config::set_assistant_key))
+                            .route("/admin/config/assistant/keys/{provider}", web::delete().to(crate::admin::assistant_config::delete_assistant_key))
+                            .route("/internal/assistant-config", web::get().to(crate::admin::assistant_config::internal_assistant_config))
                             // Email: SMTP config admin + internal send endpoint + broadcast
                             .route("/admin/smtp-config", web::get().to(get_smtp_config_handler))
                             .route("/admin/smtp-config", web::put().to(update_smtp_config_handler))
