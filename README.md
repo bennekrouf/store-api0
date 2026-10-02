@@ -1,195 +1,103 @@
-# API Store
+# store-api0
 
-A Rust service for managing API endpoints with parameter definitions, alternatives, and HTTP verbs.
+The api0 store: every piece of persistent state the platform has — tenants and
+their members, API keys, endpoint groups, the MCP tool registry, credits,
+licences, downstream credentials, messaging channels and linked identities.
 
-## Overview
+It sits behind the gateway and has no user authentication of its own. Nothing
+in a browser should reach it.
 
-API Store is a gRPC service written in Rust that allows you to manage and query API endpoint definitions. It supports storing default endpoints and user-specific endpoint configurations.
+## Who calls it
 
-## Features
+| Caller | How | For |
+|---|---|---|
+| `gateway-api0` | HTTP, `X-Internal-Secret` on sensitive routes | everything the dashboard, the SDK and MCP clients do |
+| `whatsapp-bridge` | HTTP, `/api/internal/*` with `X-Internal-Secret` | channel lookup, sessions, linked identities, link codes |
+| `ai-uploader` | HTTP, unauthenticated read of the public AI config | which model to format specs with |
 
-- Store API endpoint definitions with parameters
-- Support for HTTP verbs (GET, POST, PUT, DELETE, etc.)
-- Parameter definitions with optional descriptions and alternatives
-- User-specific endpoint configurations
-- Default endpoints management with user preferences
-- YAML and JSON import/export
+The gateway talks to the store over HTTP only (`gateway-api0/src/store`).
 
-## Data Structure
+## What runs
 
-Each endpoint consists of:
+`cargo run` starts two servers in one process:
 
-- `id`: Unique identifier
-- `text`: Display text or short description
-- `description`: Optional longer description (defaults to empty string)
-- `verb`: HTTP verb (GET, POST, PUT, DELETE, etc. - defaults to "GET")
-- `parameters`: List of parameters (can be empty)
+- **HTTP (actix-web)** on `server.http` in `config.yaml` — `127.0.0.1:5007` by
+  default. This is the real interface. Every route is registered in
+  [`src/http_server.rs`](src/http_server.rs), grouped and commented by purpose;
+  read it rather than a list here, which would go stale.
+- **gRPC (tonic, with gRPC-Web and reflection)** on `server.grpc` —
+  `0.0.0.0:50057` by default. It serves the older `EndpointService` from
+  [`endpoint_service.proto`](endpoint_service.proto) (API groups, user
+  preferences, payments). Nothing in this tree calls it any more.
 
-Each parameter consists of:
+Both share one `EndpointStore` over Postgres. On every start the store applies
+[`sql/schema.sql`](sql/schema.sql) and the row-level security policies in
+[`sql/rls.sql`](sql/rls.sql).
 
-- `name`: Parameter name
-- `description`: Optional parameter description (defaults to empty string)
-- `required`: Whether the parameter is required (defaults to false)
-- `alternatives`: List of alternative names for the parameter (defaults to empty list)
+If `ENDPOINTS_CONFIG_PATH` points at a YAML file, its API groups are loaded as
+default endpoints at boot.
 
-User preferences consist of:
+## Internal routes fail closed
 
-- `email`: User's email address
-- `hidden_defaults`: List of default endpoint IDs that the user has chosen to hide
+Routes that read or write a tenant's credentials call
+`require_internal_secret` ([`src/middleware/internal_secret.rs`](src/middleware/internal_secret.rs)).
+An unset or empty `API0_INTERNAL_SECRET` denies every such request rather than
+allowing it, so a misconfigured deployment is loud, not open. The gateway and
+the bridge must be given the same value.
 
 ## Configuration
 
-Endpoints can be defined in YAML or JSON. Here's an example:
+`config.yaml` (or `CONFIG_PATH`) sets the two listen addresses and the YAML
+formatter's host and port. Everything else is environment, see
+[`.env.example`](.env.example):
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL` | yes — exits without it | Postgres connection string |
+| `LOG_PATH_API0` | yes — exits without it | log file |
+| `API0_INTERNAL_SECRET` | for any internal route | shared secret with gateway and bridge |
+| `API0_ENCRYPTION_KEY` | for stored secrets | AES-256-GCM key sealing secrets at rest: downstream credentials, bot tokens, IdP client secrets, linked keys |
+| `API0_LOG_LEVEL` | no | `trace` · `debug` · `info` (default) · `warn` · `error` |
+| `FIREBASE_PROJECT_ID` | for admin routes | verifies Firebase JWTs |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_AUTOMATIC_TAX` | for payments | credits and licence checkout |
+| `LICENSE_SIGNING_KEY`, `LICENSE_SITE_URL` | for licences | signs desktop licences |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` | for email | invites, broadcasts |
+| `AI_UPLOADER_URL` | for uploads | the spec formatter |
+| `API0_FIRST_PARTY_HOSTS` | no | hosts treated as the platform's own |
+| `ENDPOINTS_CONFIG_PATH` | no | default endpoint groups to load at boot |
+| `TEST_DATABASE_URL` | tests only | database the integration tests use |
+
+## Endpoint definitions
+
+An endpoint group, as uploaded or as `ENDPOINTS_CONFIG_PATH` holds it:
 
 ```yaml
-endpoints:
-  - id: "get_users"
-    text: "Get users"
-    # Description is optional
-    verb: "GET"  # Optional, defaults to GET
-    parameters:
-      - name: "page"
-        # No required field - defaults to false
-        # No description - defaults to empty string
-      - name: "limit"
-        description: "Number of users per page"
-      - name: "sort_by"
-        description: "Field to sort by"
-        alternatives:
-          - "order_by"
-          - "sort"
-
-  - id: "create_user"
-    text: "Create a new user"
-    description: "Creates a new user in the system"
-    verb: "POST"
-    parameters:
-      - name: "username"
-        description: "User's username"
-        required: true
-        alternatives:
-          - "user_name"
-          - "login"
+api_groups:
+  - name: "Users"
+    base: "https://api.example.com"
+    endpoints:
+      - id: "list_users"
+        text: "List users"
+        description: "Returns a page of users"
+        verb: "GET"
+        path: "/users"
+        suggested_sentence: "Show me the first ten users"
+        parameters:
+          - name: "limit"
+            description: "Number of users per page"
+            required: false
+            alternatives: ["page_size"]
 ```
 
-## Default Endpoints Management
+`suggested_sentence` is not decoration: it goes into the MCP `initialize`
+instructions the gateway hands to clients.
 
-API Store includes support for default endpoints that cannot be modified or deleted by users. Users can, however, choose to hide specific default endpoints from their view.
-
-### User Preferences API
-
-The following API endpoints are available for managing user preferences:
-
-#### Get User Preferences
-
-```
-GET /api/user/preferences/:email
-```
-
-Returns user preferences including hidden default endpoints.
-
-Response:
-```json
-{
-  "success": true,
-  "preferences": {
-    "email": "user@example.com",
-    "hidden_defaults": ["endpoint_id_1", "endpoint_id_2"]
-  }
-}
-```
-
-#### Update User Preferences
-
-```
-POST /api/user/preferences
-```
-
-Request body:
-```json
-{
-  "email": "user@example.com",
-  "action": "hide_default",  // or "show_default"
-  "endpoint_id": "endpoint_id_1"
-}
-```
-
-Response:
-```json
-{
-  "success": true,
-  "message": "User preferences successfully updated"
-}
-```
-
-#### Reset User Preferences
-
-```
-DELETE /api/user/preferences/:email
-```
-
-Resets all user preferences to default.
-
-Response:
-```json
-{
-  "success": true,
-  "message": "User preferences successfully reset"
-}
-```
-
-## Usage
-
-### Running the Server
+## Build and test
 
 ```bash
-cargo run
+cargo build
+cargo test            # integration tests need TEST_DATABASE_URL
 ```
 
-The server will start on port 50055 (gRPC) and 9090 (HTTP) by default.
-
-### Testing
-
-Use the provided test scripts in the `test` directory:
-
-```bash
-cd test
-./query.sh                   # Fetch endpoints for a user
-./upload.sh                  # Upload a new endpoints file
-./test_user_preferences.sh   # Test user preferences functionality
-```
-
-## API
-
-The service exposes both gRPC and HTTP endpoints:
-
-### gRPC Endpoints:
-
-1. `GetApiGroups`: Fetch endpoints for a user
-2. `UploadApiGroups`: Upload a new endpoints configuration file
-3. `GetUserPreferences`: Get user preferences
-4. `UpdateUserPreferences`: Update user preferences
-5. `ResetUserPreferences`: Reset user preferences
-
-### HTTP Endpoints:
-
-1. `GET /api/groups/:email`: Get API groups for a user
-2. `POST /api/upload`: Upload a new endpoints configuration file
-3. `POST /api/group`: Add a new API group
-4. `PUT /api/group`: Update an API group
-5. `DELETE /api/groups/:email/:group_id`: Delete an API group
-6. `GET /api/user/preferences/:email`: Get user preferences
-7. `POST /api/user/preferences`: Update user preferences
-8. `DELETE /api/user/preferences/:email`: Reset user preferences
-
-
-Convenient curl to add credit for test 
-
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"email":"mohamed.bennekrouf@gmail.com","amount":500}' \
-  http://127.0.0.1:9090/api/user/credits
-
-## License
-
-MIT
+The scripts in [`test/`](test) are manual curl and grpcurl probes against a
+running store.
