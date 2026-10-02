@@ -10,7 +10,7 @@ const LOW_CREDITS_THRESHOLD: i64 = 50;
 ///
 /// Until now this took no credential at all: anything that could reach the
 /// store could top up any account. It needs the internal secret (gateway) or a
-/// service key with `credits.write` (cvenom).
+/// service key with `credits.write`.
 pub async fn update_credit_balance_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,

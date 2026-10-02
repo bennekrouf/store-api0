@@ -30,7 +30,6 @@ pub async fn get_all_authorized_domains(store: &EndpointStore) -> Result<Vec<Str
             "No domains found in database, returning default system domains"
         );
         return Ok(vec![
-            "https://studio.cvenom.com".to_string(),
             "https://app.api0.ai".to_string(),
             "http://localhost:3000".to_string(),
             "http://localhost:5173".to_string(),
@@ -60,7 +59,6 @@ pub async fn initialize_system_domains(store: &EndpointStore) -> Result<(), Stor
     app_log!(info, "Initializing default system domains");
 
     let system_domains = vec![
-        "https://studio.cvenom.com",
         "https://app.api0.ai",
         "http://localhost:3000",
         "http://localhost:5173",

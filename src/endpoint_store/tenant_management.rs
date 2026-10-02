@@ -57,8 +57,8 @@ pub const NAME_INDEX: &str = "tenants_name_ci_key";
 ///
 /// `consumer` is deliberately absent. A consumer row records that someone uses a
 /// provider's tools through a connector — it is a relationship, not a permission.
-/// Treating it as membership would let any cvenom end-user upload endpoints into
-/// cvenom's namespace or read its settings.
+/// Treating it as membership would let any of a provider's end-users upload
+/// endpoints into that provider's namespace or read its settings.
 pub const MEMBER_ROLES: &[&str] = &["owner", "member", "admin"];
 
 pub async fn get_or_create_personal_tenant(
