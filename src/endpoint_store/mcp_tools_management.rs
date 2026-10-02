@@ -132,6 +132,9 @@ pub async fn upsert_mcp_tool(
                 static_headers_enc = EXCLUDED.static_headers_enc,
                 forward_identity = EXCLUDED.forward_identity,
                 is_active        = true,
+                -- A write here is a hand registration unless the import sync
+                -- marks it right after (see sync_endpoints_as_mcp_tools).
+                from_import      = false,
                 updated_at       = EXCLUDED.updated_at
              RETURNING id, tenant_id, tool_name, backend_url, description,
                        input_schema, cost_credits, timeout_ms, http_verb,
@@ -462,6 +465,7 @@ pub async fn sync_endpoints_as_mcp_tools(
     groups: &[ApiGroupWithEndpoints],
 ) -> Result<usize, StoreError> {
     let mut count = 0usize;
+    let mut synced: Vec<String> = Vec::new();
 
     for group in groups {
         for endpoint in &group.endpoints {
@@ -517,7 +521,10 @@ pub async fn sync_endpoints_as_mcp_tools(
             };
 
             match upsert_mcp_tool(store, tenant_id, &req).await {
-                Ok(_) => count += 1,
+                Ok(_) => {
+                    count += 1;
+                    synced.push(req.tool_name.clone());
+                }
                 Err(e) => {
                     // Non-fatal: log and continue with the remaining endpoints
                     app_log!(
@@ -532,10 +539,32 @@ pub async fn sync_endpoints_as_mcp_tools(
         }
     }
 
+    // Mark what this upload produced, then switch off the workspace's imported
+    // tools it no longer contains — otherwise a removed or renamed endpoint
+    // stays callable from Claude forever. Hand-registered tools (from_import
+    // false) are left alone.
+    let client = store.get_admin_conn().await?;
+    client
+        .execute(
+            "UPDATE mcp_tools SET from_import = true WHERE tenant_id = $1 AND tool_name = ANY($2)",
+            &[&tenant_id, &synced],
+        )
+        .await
+        .to_store_error()?;
+    let retired = client
+        .execute(
+            "UPDATE mcp_tools SET is_active = false, updated_at = NOW()
+              WHERE tenant_id = $1 AND from_import AND is_active AND NOT (tool_name = ANY($2))",
+            &[&tenant_id, &synced],
+        )
+        .await
+        .to_store_error()?;
+
     app_log!(
         info,
         tenant_id = %tenant_id,
         synced = count,
+        retired = retired,
         "Synced imported endpoints to mcp_tools"
     );
     Ok(count)

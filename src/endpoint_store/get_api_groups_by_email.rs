@@ -14,8 +14,20 @@ pub async fn get_api_groups_by_email(
     app_log!(info, email = %email, "Starting to fetch API groups and endpoints");
     let client = store.get_admin_conn().await?;
 
-    app_log!(info, email = %email, "Fetching custom groups and endpoints");
-    let result = fetch_custom_groups_with_endpoints(&client, email).await?;
+    // The API list is the active workspace's, not "everything this email ever
+    // uploaded": someone in two workspaces saw the same list in both, whichever
+    // they switched to. Active = the default tenant, which the workspace
+    // switcher sets — and only if the caller is actually a member of it.
+    let Some(tenant) = crate::endpoint_store::tenant_management::find_default_tenant(store, email).await? else {
+        return Ok(Vec::new());
+    };
+    if !crate::endpoint_store::tenant_management::verify_tenant_access_with_conn(&client, email, &tenant.id).await? {
+        app_log!(warn, email = %email, tenant_id = %tenant.id, "Default tenant is not one the caller belongs to — listing nothing");
+        return Ok(Vec::new());
+    }
+
+    app_log!(info, email = %email, tenant_id = %tenant.id, "Fetching the workspace's groups and endpoints");
+    let result = fetch_custom_groups_with_endpoints(&client, &tenant.id).await?;
 
     app_log!(info,
         group_count = result.len(),
@@ -26,22 +38,22 @@ pub async fn get_api_groups_by_email(
     Ok(result)
 }
 
-/// Fetches custom API groups and endpoints for a specific user
+/// Fetches a workspace's API groups and their endpoints
 async fn fetch_custom_groups_with_endpoints(
     client: &deadpool_postgres::Object,
-    email: &str,
+    tenant_id: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-    app_log!(debug, email = %email, "Fetching custom groups and endpoints");
+    app_log!(debug, tenant_id = %tenant_id, "Fetching the workspace's groups and endpoints");
 
     let groups_query = r#"
         SELECT g.id, g.name, g.description, g.base, g.tenant_id
         FROM api_groups g
-        INNER JOIN user_groups ug ON g.id = ug.group_id
-        WHERE ug.email = $1
+        WHERE g.tenant_id = $1
+        ORDER BY g.name
     "#;
 
     let rows = client
-        .query(groups_query, &[&email])
+        .query(groups_query, &[&tenant_id])
         .await
         .to_store_error()?;
 
@@ -57,7 +69,7 @@ async fn fetch_custom_groups_with_endpoints(
             forward_identity: None,
         };
 
-        let endpoints = fetch_custom_endpoints(client, email, &group.id).await?;
+        let endpoints = fetch_custom_endpoints(client, &group.id).await?;
 
         app_log!(debug,
             group_id = %group.id,
@@ -71,10 +83,9 @@ async fn fetch_custom_groups_with_endpoints(
     Ok(result)
 }
 
-/// Fetches custom endpoints for a specific group and user
+/// Fetches a group's endpoints
 async fn fetch_custom_endpoints(
     client: &deadpool_postgres::Object,
-    email: &str,
     group_id: &str,
 ) -> Result<Vec<Endpoint>, StoreError> {
     let endpoints_query = r#"
@@ -84,24 +95,19 @@ async fn fetch_custom_endpoints(
             string_agg(pa.alternative, ',') as alternatives,
             e.content_type, e.body_template, e.forward_identity
         FROM endpoints e
-        INNER JOIN user_endpoints ue ON e.id = ue.endpoint_id
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
-        WHERE ue.email = $1 AND e.group_id = $2
+        WHERE e.group_id = $1
         GROUP BY 
             e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
             e.content_type, e.body_template, e.forward_identity,
             p.name, p.description, p.required
     "#;
 
-    app_log!(debug,
-        email = %email,
-        group_id = %group_id,
-        "Fetching custom endpoints"
-    );
+    app_log!(debug, group_id = %group_id, "Fetching custom endpoints");
 
     let rows = client
-        .query(endpoints_query, &[&email, &group_id])
+        .query(endpoints_query, &[&group_id])
         .await
         .to_store_error()?;
 

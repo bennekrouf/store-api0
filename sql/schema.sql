@@ -285,6 +285,10 @@ ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS content_type     VARCHAR DEFAULT 
 ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS body_template    TEXT    DEFAULT NULL;
 ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS static_headers   JSONB   DEFAULT NULL;
 ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS forward_identity BOOLEAN NOT NULL DEFAULT TRUE;
+-- Tools synced from an endpoint upload, as opposed to registered by hand. An
+-- upload switches off its workspace's imported tools that the new file no
+-- longer contains; hand-registered tools are never touched.
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS from_import BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Same request-shaping pair on endpoints, so an uploaded endpoint can describe a
 -- body that is not a flat JSON object (a JSON Patch array, say). NULL keeps the
