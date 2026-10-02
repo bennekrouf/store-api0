@@ -690,6 +690,23 @@ CREATE INDEX IF NOT EXISTS idx_idp_auth_requests_created
     ON idp_auth_requests(created_at);
 
 
+-- ── Redeemed OAuth authorization codes ───────────────────────────────────────
+-- The gateway's authorization codes are signed JWTs, so they need no row to be
+-- valid — but without one, a code could be exchanged again and again until it
+-- expired, minting a new API key each time. The gateway records each code's
+-- `jti` here at exchange; the primary key is what refuses the second attempt.
+--
+-- Codes live five minutes. A row only has to outlive its code, and older ones
+-- are swept on the next redemption.
+CREATE TABLE IF NOT EXISTS oauth_code_redemptions (
+    jti         VARCHAR     PRIMARY KEY,
+    redeemed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_code_redemptions_redeemed
+    ON oauth_code_redemptions(redeemed_at);
+
+
 -- ── Consumer memberships ─────────────────────────────────────────────────────
 -- A consumer key (one carrying provider_tenant_id) records that somebody reaches
 -- a provider's tools through a connector. Until now that relationship lived only

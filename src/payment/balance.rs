@@ -1,13 +1,20 @@
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
-use actix_web::{web, HttpResponse, Responder};
+use crate::middleware::service_key::{require_scope, Scope};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::sync::Arc;
 
-// Handler for getting credit balance
+/// GET /api/user/credits/{tenant_id or email}.
+///
+/// Needs the internal secret (gateway) or a service key with `credits.read`.
 pub async fn get_credit_balance_handler(
+    req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     tenant_id: web::Path<String>,
 ) -> impl Responder {
+    if let Err(deny) = require_scope(&req, Scope::CreditsRead) {
+        return deny;
+    }
     let mut tenant_id = tenant_id.into_inner();
     app_log!(info, tenant_id = %tenant_id, "Received HTTP get credit balance request");
 

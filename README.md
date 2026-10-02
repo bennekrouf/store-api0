@@ -45,6 +45,33 @@ An unset or empty `API0_INTERNAL_SECRET` denies every such request rather than
 allowing it, so a misconfigured deployment is loud, not open. The gateway and
 the bridge must be given the same value.
 
+## Service keys
+
+A first-party service that calls the store directly (cvenom) gets a key scoped
+to the routes it needs, never `API0_INTERNAL_SECRET`. It sends
+`X-Service-Key: <key>`; the store keeps only the key's SHA-256:
+
+```bash
+key=$(openssl rand -hex 32)            # give this to the service
+printf %s "$key" | shasum -a 256       # this goes in API0_SERVICE_KEYS
+```
+
+```
+API0_SERVICE_KEYS="cvenom:<sha256 hex>:credits.read,credits.write,email.send"
+```
+
+Several services are separated by `;`. The scopes, and the routes they open:
+
+| Scope | Route |
+|---|---|
+| `credits.read` | `GET /api/user/credits/{tenant or email}` |
+| `credits.write` | `POST /api/user/credits` |
+| `email.send` | `POST /api/internal/email/send` |
+
+Those routes still accept `X-Internal-Secret` from the gateway. A key outside
+its scopes gets 403; a malformed entry is ignored and logged. See
+[`src/middleware/service_key.rs`](src/middleware/service_key.rs).
+
 ## Configuration
 
 `config.yaml` (or `CONFIG_PATH`) sets the two listen addresses and the YAML
@@ -56,6 +83,7 @@ formatter's host and port. Everything else is environment, see
 | `DATABASE_URL` | yes — exits without it | Postgres connection string |
 | `LOG_PATH_API0` | yes — exits without it | log file |
 | `API0_INTERNAL_SECRET` | for any internal route | shared secret with gateway and bridge |
+| `API0_SERVICE_KEYS` | for first-party services | scoped keys, stored as SHA-256 hashes — see below |
 | `API0_ENCRYPTION_KEY` | for stored secrets | AES-256-GCM key sealing secrets at rest: downstream credentials, bot tokens, IdP client secrets, linked keys |
 | `API0_LOG_LEVEL` | no | `trace` · `debug` · `info` (default) · `warn` · `error` |
 | `FIREBASE_PROJECT_ID` | for admin routes | verifies Firebase JWTs |
