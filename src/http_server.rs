@@ -279,6 +279,8 @@ pub async fn start_http_server(
                             .route("/user/messaging-channels", web::put().to(register_channel_handler))
                             .route("/user/messaging-channels", web::get().to(list_channels_handler))
                             .route("/user/messaging-channels/{channel}", web::delete().to(delete_channel_handler))
+                            .route("/user/channel-label", web::put().to(crate::mcp::messaging_channels::set_channel_label_handler))
+                            .route("/internal/link-info/{reference}", web::get().to(crate::mcp::link_info::link_info_handler))
                             .route("/internal/messaging-channels/{channel}/{channel_ref}", web::get().to(channel_for_bridge_handler))
                             .route("/user/tenant-idp", web::delete().to(delete_tenant_idp_handler))
                             // Consumer key generation (B2B2C — internal, requires X-Internal-Secret)

@@ -5,11 +5,13 @@
 //   PUT    /user/messaging-channels               — register (gateway-proxied)
 //   GET    /user/messaging-channels?email=…       — the caller's channels
 //   DELETE /user/messaging-channels/{channel}?email=…
+//   PUT    /user/channel-label                    — name a channel { email, channel, label }
 //   GET    /internal/messaging-channels/{channel}/{channel_ref}  — for the bridge
 
 use crate::app_log;
 use crate::endpoint_store::messaging_channels::{
-    channel_for_bridge, delete_channel, list_channels, register_channel, RegisterChannel,
+    channel_for_bridge, delete_channel, list_channels, register_channel, set_channel_label,
+    RegisterChannel,
 };
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::{EndpointStore, StoreError};
@@ -73,6 +75,45 @@ pub async fn register_channel_handler(
 #[derive(Deserialize)]
 pub struct EmailQuery {
     pub email: String,
+}
+
+/// Longest label accepted. It is a name in a list, not a description.
+const MAX_LABEL_CHARS: usize = 60;
+
+#[derive(Debug, Deserialize)]
+pub struct LabelRequest {
+    pub email: String,
+    pub channel: String,
+    pub label: String,
+}
+
+/// Name one of the caller's workspace's channels, WhatsApp included. The
+/// gateway binds `email` to the signed-in user.
+pub async fn set_channel_label_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<LabelRequest>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let label = body.label.trim();
+    if label.chars().count() > MAX_LABEL_CHARS {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": format!("A label is at most {} characters", MAX_LABEL_CHARS),
+        }));
+    }
+    let tenant = match get_default_tenant(&store, &body.email).await {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
+    match set_channel_label(&store, &tenant.id, &body.channel, label).await {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({"success": true, "channel": body.channel, "label": label})),
+        Ok(false) => HttpResponse::NotFound()
+            .json(serde_json::json!({"success": false, "error": "This workspace has no such channel"})),
+        Err(e) => fail(e),
+    }
 }
 
 pub async fn list_channels_handler(

@@ -9,3 +9,4 @@ pub mod channel_identities;
 pub mod downstream_oauth;
 pub mod messaging_channels;
 pub mod channel_inbound;
+pub mod link_info;
