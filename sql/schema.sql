@@ -176,6 +176,12 @@ END $$;
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
+-- The admin user directory looks people up by email; tenant_users' primary key
+-- leads with tenant_id, so without this every lookup scanned the table.
+CREATE INDEX IF NOT EXISTS idx_tenant_users_email ON tenant_users(email);
+-- When a user first appeared. Unknown (NULL) for users from before this column.
+ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+ALTER TABLE user_preferences ALTER COLUMN created_at SET DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_domains_email ON domains(email);
 CREATE INDEX IF NOT EXISTS idx_domains_verified ON domains(verified);
