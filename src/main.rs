@@ -11,7 +11,6 @@ mod user;
 mod endpoint_store;
 mod middleware;
 mod http_server;
-mod grpc_server;
 
 use infra::config::Config;
 use infra::formatter::YamlFormatter;
@@ -22,22 +21,13 @@ use graflog::init_logging;
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore,
 };
-use crate::grpc_server::EndpointServiceImpl;
-use endpoint::endpoint_service_server::EndpointServiceServer;
 use graflog::LogOption;
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tonic::transport::Server;
-use tonic_reflection::server::Builder;
-use tonic_web::GrpcWebLayer;
-use tower_http::cors::{Any, CorsLayer};
 
-pub mod endpoint {
-    tonic::include_proto!("endpoint");
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -271,10 +261,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "Database connection validated successfully");
 
-    // Initialise Stripe payment service (shared between HTTP and gRPC)
+    // Initialise Stripe payment service
     let stripe_key = config.stripe_secret_key();
     let payment_service = Arc::new(crate::payment::service::PaymentService::new(stripe_key));
-    let http_payment_service = Arc::clone(&payment_service);
+    let http_payment_service = payment_service;
 
     // Start the HTTP server as a separate task
     let http_handle = tokio::spawn(async move {
@@ -297,41 +287,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    // Configure gRPC server
-    let service = EndpointServiceImpl::new(store_arc, &formatter_url, payment_service);
-    let grpc_addr = config.grpc_address().parse()?;
-
-    // Load the file descriptor for reflection
-    let descriptor_set = include_bytes!(concat!(env!("OUT_DIR"), "/endpoint_descriptor.bin"));
-    let reflection_service = Builder::configure()
-        .register_encoded_file_descriptor_set(descriptor_set)
-        .build_v1()?;
-
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_headers(Any)
-        .allow_methods(Any)
-        .expose_headers(Any);
-
-    // Start the gRPC server as a separate task
-    app_log!(info, "Starting gRPC server on {}", grpc_addr);
-    let grpc_handle = tokio::spawn(async move {
-        if let Err(e) = Server::builder()
-            .accept_http1(true)
-            .max_concurrent_streams(128)
-            .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
-            .tcp_nodelay(true)
-            .layer(cors)
-            .layer(GrpcWebLayer::new())
-            .add_service(EndpointServiceServer::new(service))
-            .add_service(reflection_service)
-            .serve(grpc_addr)
-            .await
-        {
-            app_log!(error, "gRPC server error: {}", e);
-        }
-    });
-
     // Create a shutdown signal
     let shutdown = async {
         tokio::signal::ctrl_c()
@@ -342,10 +297,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "All services started successfully");
 
-    // Wait for either server to finish or for the shutdown signal
+    // Wait for the server to finish or for the shutdown signal
     tokio::select! {
         _ = http_handle => app_log!(info, "HTTP server has shut down"),
-        _ = grpc_handle => app_log!(info, "gRPC server has shut down"),
         _ = shutdown => app_log!(info, "Shutdown signal received"),
     }
 

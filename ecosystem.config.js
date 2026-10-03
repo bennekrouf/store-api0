@@ -15,7 +15,6 @@ module.exports = {
         exec_mode: "fork",
         env: {
             NODE_ENV: "production",
-            PORT: 50055,
             DATABASE_URL: process.env.DATABASE_URL,
             API0_INTERNAL_SECRET: process.env.API0_INTERNAL_SECRET,
             API0_ENCRYPTION_KEY: process.env.API0_ENCRYPTION_KEY,
