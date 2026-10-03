@@ -42,35 +42,4 @@ impl EndpointStore {
             created_at: now,
         })
     }
-
-    pub async fn get_reference_data(
-        &self,
-        email: &str,
-    ) -> Result<Vec<ReferenceData>, StoreError> {
-        let client = self.get_admin_conn().await?;
-
-        let rows = client
-            .query(
-                "SELECT id, email, name, data, created_at
-            FROM reference_data
-            WHERE email = $1
-            ORDER BY created_at DESC",
-                &[&email],
-            )
-            .await
-            .to_store_error()?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(ReferenceData {
-                id: row.get("id"),
-                email: row.get("email"),
-                name: row.get("name"),
-                data: row.get("data"),
-                created_at: row.get("created_at"),
-            });
-        }
-
-        Ok(result)
-    }
 }

@@ -15,7 +15,6 @@ pub mod db_helpers;
 mod delete_user_api_group;
 mod errors;
 mod get_api_groups_by_email;
-mod get_create_user_api_groups;
 mod manage_single_endpoint;
 use crate::endpoint_store::db_helpers::ResultExt;
 mod delete_user_endpoint;
@@ -191,13 +190,6 @@ impl EndpointStore {
             .collect();
 
         Ok(filtered_groups)
-    }
-
-    pub async fn get_or_create_user_api_groups(
-        &self,
-        email: &str,
-    ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-        get_create_user_api_groups::get_or_create_user_api_groups(self, email).await
     }
 
     pub async fn get_api_groups_by_email(

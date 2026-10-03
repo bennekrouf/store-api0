@@ -7,7 +7,6 @@ This document provides a comprehensive list of all endpoints exposed by the api0
 ## Base URLs
 
 - **HTTP Server**: `http://127.0.0.1:9090`
-- **gRPC Server**: `127.0.0.1:50055`
 
 ## Authentication
 
@@ -64,18 +63,6 @@ X-API-Key: sk_live_yourApiKeyHere
 
 The backend connects to a YAML formatter service:
 - **Formatter Service**: `http://localhost:6001/format-yaml`
-
-## gRPC Services
-
-The backend also exposes the following gRPC services:
-
-| Service | Method | Description |
-|---------|--------|-------------|
-| `endpoint.EndpointService` | `GetApiGroups` | Stream API groups for a user |
-| `endpoint.EndpointService` | `UploadApiGroups` | Upload API groups configuration |
-| `endpoint.EndpointService` | `GetUserPreferences` | Get user preferences |
-| `endpoint.EndpointService` | `UpdateUserPreferences` | Update user preferences |
-| `endpoint.EndpointService` | `ResetUserPreferences` | Reset user preferences |
 
 ## Detailed Endpoint Specifications
 

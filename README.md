@@ -19,18 +19,17 @@ The gateway talks to the store over HTTP only (`gateway-api0/src/store`).
 
 ## What runs
 
-`cargo run` starts two servers in one process:
+`cargo run` starts one HTTP server (actix-web) on `server.http` in
+`config.yaml` — `127.0.0.1:5007` by default. Every route is registered in
+[`src/http_server.rs`](src/http_server.rs), grouped and commented by purpose;
+read it rather than a list here, which would go stale.
 
-- **HTTP (actix-web)** on `server.http` in `config.yaml` — `127.0.0.1:5007` by
-  default. This is the real interface. Every route is registered in
-  [`src/http_server.rs`](src/http_server.rs), grouped and commented by purpose;
-  read it rather than a list here, which would go stale.
-- **gRPC (tonic, with gRPC-Web and reflection)** on `server.grpc` —
-  `0.0.0.0:50057` by default. It serves the older `EndpointService` from
-  [`endpoint_service.proto`](endpoint_service.proto) (API groups, user
-  preferences, payments). Nothing in this tree calls it any more.
+There used to be a gRPC server beside it, serving an older `EndpointService`
+on every interface with no authentication. Nothing called it, and it was
+removed on 3 Oct 2026. A `grpc:` section left in an old `config.yaml` is
+ignored.
 
-Both share one `EndpointStore` over Postgres. On every start the store applies
+The store keeps everything in Postgres. On every start the store applies
 [`sql/schema.sql`](sql/schema.sql) and the row-level security policies in
 [`sql/rls.sql`](sql/rls.sql).
 
@@ -127,5 +126,4 @@ cargo build
 cargo test            # integration tests need TEST_DATABASE_URL
 ```
 
-The scripts in [`test/`](test) are manual curl and grpcurl probes against a
-running store.
+The scripts in [`test/`](test) are manual curl probes against a running store.

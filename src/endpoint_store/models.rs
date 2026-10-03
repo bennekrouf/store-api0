@@ -5,7 +5,7 @@
 // This module re-exports them under their historical paths.
 //
 // Some re-exports are unused inside the store itself but are part of the
-// module's public surface (grpc/http handlers and tests reach for them).
+// module's public surface (http handlers and tests reach for them).
 #![allow(unused_imports)]
 
 pub use api0_types::catalog::{
