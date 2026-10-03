@@ -22,6 +22,8 @@ pub struct ChannelSummary {
     pub display_ref: String,
     pub system_prompt: String,
     pub created_at: String,
+    /// The workspace's own name for this channel; empty when unnamed.
+    pub label: String,
 }
 
 /// What the bridge needs to serve a channel.
@@ -70,7 +72,7 @@ pub async fn register_channel(
                 display_ref    = EXCLUDED.display_ref,
                 webhook_secret = EXCLUDED.webhook_secret,
                 system_prompt  = EXCLUDED.system_prompt
-             RETURNING channel, channel_ref, tenant_id, display_ref, system_prompt, created_at",
+             RETURNING channel, channel_ref, tenant_id, display_ref, system_prompt, created_at, label",
             &[
                 &req.channel,
                 &req.channel_ref,
@@ -132,7 +134,7 @@ pub async fn list_channels(
     let client = store.get_admin_conn().await?;
     let rows = client
         .query(
-            "SELECT channel, channel_ref, tenant_id, display_ref, system_prompt, created_at
+            "SELECT channel, channel_ref, tenant_id, display_ref, system_prompt, created_at, label
              FROM messaging_channels WHERE tenant_id = $1 ORDER BY channel",
             &[&tenant_id],
         )
@@ -175,5 +177,32 @@ fn row_to_summary(row: tokio_postgres::Row) -> ChannelSummary {
         display_ref:   row.get(3),
         system_prompt: row.get(4),
         created_at:    row.get::<_, chrono::DateTime<Utc>>(5).to_rfc3339(),
+        label:         row.get(6),
     }
+}
+
+/// Name one of a workspace's channels. `false` when the workspace has no such
+/// channel. Telegram and other bridge channels live in `messaging_channels`,
+/// WhatsApp in its own table.
+pub async fn set_channel_label(
+    store: &EndpointStore,
+    tenant_id: &str,
+    channel: &str,
+    label: &str,
+) -> Result<bool, StoreError> {
+    let client = store.get_admin_conn().await?;
+    let updated = if channel == "whatsapp" {
+        client
+            .execute("UPDATE whatsapp_channels SET label = $2 WHERE tenant_id = $1", &[&tenant_id, &label])
+            .await
+    } else {
+        client
+            .execute(
+                "UPDATE messaging_channels SET label = $3 WHERE tenant_id = $1 AND channel = $2",
+                &[&tenant_id, &channel, &label],
+            )
+            .await
+    }
+    .to_store_error()?;
+    Ok(updated > 0)
 }

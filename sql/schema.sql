@@ -808,6 +808,11 @@ CREATE TABLE IF NOT EXISTS messaging_channels (
     UNIQUE (channel, tenant_id)
 );
 
+-- A workspace's own name for each connected channel ("Support bot", "Sales
+-- WhatsApp"), shown in its dashboard. Empty means unnamed.
+ALTER TABLE messaging_channels ADD COLUMN IF NOT EXISTS label VARCHAR NOT NULL DEFAULT '';
+ALTER TABLE whatsapp_channels  ADD COLUMN IF NOT EXISTS label VARCHAR NOT NULL DEFAULT '';
+
 -- What a tenant tells the model about its own tools, returned as `instructions`
 -- in the MCP initialize result, after the guidance api0 generates from the
 -- tenant's tool groups. Plain text, written by the tenant — for example which

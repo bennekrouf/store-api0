@@ -38,6 +38,9 @@ pub struct ToolGroupSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct McpInstructionsContext {
     pub tenant_id: String,
+    /// The workspace's own name — what an MCP client shows for the server, so
+    /// a customer's connector is called by their name rather than api0's.
+    pub tenant_name: Option<String>,
     /// The tenant's own text. `None` when it has not written any.
     pub custom: Option<String>,
     pub groups: Vec<ToolGroupSummary>,
@@ -143,9 +146,16 @@ pub async fn get_mcp_instructions_context(
         .collect();
 
     let custom = get_tenant_instructions(store, tenant_id).await?;
+    let tenant_name: Option<String> = client
+        .query_opt("SELECT name FROM tenants WHERE id = $1", &[&tenant_id])
+        .await
+        .to_store_error()?
+        .map(|row| row.get::<_, String>(0))
+        .filter(|n| !n.trim().is_empty());
 
     Ok(McpInstructionsContext {
         tenant_id: tenant_id.to_string(),
+        tenant_name,
         custom,
         groups,
         ungrouped_tools,

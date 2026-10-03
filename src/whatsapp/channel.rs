@@ -109,7 +109,7 @@ pub async fn get_channel(
     };
 
     match client.query_opt(
-        "SELECT phone_number_id, system_prompt, created_at, app_secret IS NOT NULL
+        "SELECT phone_number_id, system_prompt, created_at, app_secret IS NOT NULL, label
            FROM whatsapp_channels WHERE tenant_id = $1",
         &[&tenant.id],
     ).await {
@@ -127,6 +127,7 @@ pub async fn get_channel(
                     "created_at":      created_at.to_rfc3339(),
                     // Whether one is stored — never the secret.
                     "has_app_secret":  row.get::<_, bool>(3),
+                    "label":           row.get::<_, &str>(4),
                 }
             }))
         }
