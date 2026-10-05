@@ -3,7 +3,7 @@
 // The platform-wide view of how every tenant is wired up.
 //
 // Internal (X-Internal-Secret):
-//   GET /api/internal/tenants/overview
+//   GET /api/internal/tenants/overview?q=&view=&page=&page_size=&export=
 //
 // This exists because the settings that decide whether a tenant actually works
 // are spread across four tables, and until now the only way to see them together
@@ -37,15 +37,178 @@ fn check_internal_secret(req: &HttpRequest) -> bool {
         .unwrap_or(false)
 }
 
-/// GET /api/internal/tenants/overview
+/// Paging and filtering for the overview. Every tenant is diagnosed on each
+/// call — that is what makes the summary counts and the "needs attention"
+/// filter cover the whole platform — but only the requested page carries its
+/// member list, which is the part that grows with the user base.
+#[derive(Debug, serde::Deserialize)]
+pub struct OverviewQuery {
+    /// Matches name, id, MCP client id or an owner's email.
+    pub q: Option<String>,
+    /// in_use (default) | attention | risk | empty | all
+    pub view: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+    /// Set to 1 for every matching tenant in one page (the dashboard's copy).
+    pub export: Option<u8>,
+}
+
+const MAX_PAGE_SIZE: i64 = 200;
+const MAX_EXPORT_ROWS: i64 = 10_000;
+
+/// The columns diagnosis needs, for one tenant.
+struct TenantFacts {
+    name: String,
+    mcp_client_id: Option<String>,
+    google_client_id: Option<String>,
+    allow_api0_signin: bool,
+    member_count: i64,
+    group_count: i64,
+    endpoint_count: i64,
+    mcp_tool_count: i64,
+    api_key_count: i64,
+    consumer_count: i64,
+    has_downstream_auth: bool,
+    has_shared_credential: bool,
+}
+
+fn filled(v: &Option<String>) -> bool {
+    v.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+}
+
+impl TenantFacts {
+    /// Will the gateway mint an OAuth code for this tenant?
+    fn can_sign_in(&self) -> bool {
+        filled(&self.google_client_id) || self.allow_api0_signin
+    }
+
+    /// Meant to be connected to at all. A personal tenant nobody has touched is
+    /// unused, not misconfigured — flagging those buries the ones that matter.
+    fn in_use(&self) -> bool {
+        filled(&self.mcp_client_id)
+            || self.endpoint_count > 0
+            || self.mcp_tool_count > 0
+            || self.group_count > 0
+    }
+
+    /// Holds nothing at all: what "Hide empty" hides and the prune offers.
+    fn is_empty(&self) -> bool {
+        !filled(&self.mcp_client_id)
+            && self.group_count == 0
+            && self.endpoint_count == 0
+            && self.mcp_tool_count == 0
+            && self.api_key_count == 0
+            && self.consumer_count == 0
+            && !self.has_downstream_auth
+    }
+}
+
+/// What is wrong with a tenant, worst first, as `{severity, text}`.
+fn diagnose(t: &TenantFacts, leaks: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let mut push = |severity: &str, text: String| {
+        out.push(serde_json::json!({"severity": severity, "text": text}));
+    };
+
+    // A shared credential plus open sign-in: a stranger who connects borrows it.
+    if t.allow_api0_signin && t.has_shared_credential {
+        push(
+            "risk",
+            "Any api0 account can connect, and this tenant holds a shared downstream \
+             credential — whoever connects borrows it. Use a Google Client ID, or switch \
+             to per-user credentials."
+                .into(),
+        );
+    }
+
+    // forward_identity defaults to on, so a third-party tool leaks until somebody
+    // remembers to switch it off — and nothing fails while it does.
+    if !leaks.is_empty() {
+        let mut hosts: Vec<&str> = leaks.iter().filter_map(|l| l["host"].as_str()).collect();
+        let mut seen = HashSet::new();
+        hosts.retain(|h| seen.insert(*h));
+        let mut sample: Vec<&str> = leaks.iter().take(3).filter_map(|l| l["tool"].as_str()).collect();
+        let more = if leaks.len() > 3 { format!(", +{} more", leaks.len() - 3) } else { String::new() };
+        push(
+            "risk",
+            format!(
+                "{} tool{} send api0's internal secret and the caller's email to {} ({}{}). \
+                 Set forward_identity: false on them.",
+                leaks.len(),
+                if leaks.len() == 1 { "" } else { "s" },
+                hosts.join(", "),
+                sample.join(", "),
+                more
+            ),
+        );
+    }
+
+    if t.allow_api0_signin && t.member_count == 0 {
+        push(
+            "risk",
+            "Open to any api0 account but has no members — nobody is meant to be using it.".into(),
+        );
+    }
+
+    if t.name.contains('@') {
+        push("warn", "Named after an email address — rename it to something readable.".into());
+    }
+
+    if !t.in_use() {
+        return out;
+    }
+
+    if !filled(&t.mcp_client_id) {
+        push("warn", "No Client ID — Claude has nothing to name this workspace with.".into());
+    } else if !t.can_sign_in() {
+        push(
+            "warn",
+            "No sign-in method — the OAuth step is refused (\"no sign-in method configured\").".into(),
+        );
+    }
+
+    if t.endpoint_count == 0 && t.mcp_tool_count == 0 {
+        push("warn", "No endpoints and no registered tools — a connector would list nothing.".into());
+    }
+
+    out
+}
+
+fn has_risk(findings: &[serde_json::Value]) -> bool {
+    findings.iter().any(|f| f["severity"] == "risk")
+}
+
+/// Whether a tenant belongs in `view`. Unknown views fall back to in_use.
+fn in_view(view: &str, facts: &TenantFacts, findings: &[serde_json::Value]) -> bool {
+    match view {
+        "all" => true,
+        "empty" => facts.is_empty(),
+        "attention" => !findings.is_empty(),
+        "risk" => has_risk(findings),
+        _ => !facts.is_empty(),
+    }
+}
+
+/// GET /api/internal/tenants/overview?q=&view=&page=&page_size=&export=
 pub async fn tenants_overview(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
+    query: web::Query<OverviewQuery>,
 ) -> impl Responder {
     if !check_internal_secret(&req) {
         return HttpResponse::Unauthorized()
             .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
     }
+
+    let needle = query.q.as_deref().map(str::trim).unwrap_or("").to_lowercase();
+    let view = query.view.as_deref().map(str::trim).unwrap_or("in_use").to_string();
+    let export = query.export == Some(1);
+    let page_size = if export {
+        MAX_EXPORT_ROWS
+    } else {
+        query.page_size.unwrap_or(50).clamp(1, MAX_PAGE_SIZE)
+    };
+    let page = if export { 1 } else { query.page.unwrap_or(1).max(1) };
 
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
@@ -58,7 +221,8 @@ pub async fn tenants_overview(
 
     // One row per tenant, with the counts that answer "is anything actually
     // there?" — subqueries rather than joins so a tenant with no groups, no
-    // members or no tools still appears rather than dropping out.
+    // members or no tools still appears rather than dropping out. No member
+    // lists here: those are fetched for the returned page only.
     let rows = client
         .query(
             "SELECT
@@ -78,32 +242,27 @@ pub async fn tenants_overview(
                  (SELECT count(*) FROM mcp_tools m
                    WHERE m.tenant_id = t.id AND m.is_active = true),
                  (SELECT count(*) FROM api_keys k WHERE k.tenant_id = t.id),
-                 EXISTS (SELECT 1 FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
+                 d.tenant_id IS NOT NULL,
                  (SELECT string_agg(tu2.email, ', ' ORDER BY tu2.email)
                     FROM tenant_users tu2
                    WHERE tu2.tenant_id = t.id AND tu2.role = 'owner'),
                  -- Security profile. Never the credential itself, only its shape:
                  -- which mode, and whether the pieces that mode needs are present.
-                 (SELECT d.auth_mode FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.per_user_scheme FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.per_user_header FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.per_user_verify_url FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.bearer_token IS NOT NULL FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.service_account_json IS NOT NULL FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.custom_headers IS NOT NULL FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 (SELECT d.updated_at FROM tenant_downstream_auth d WHERE d.tenant_id = t.id),
-                 -- Members, as a JSON array so roles survive the trip.
-                 (SELECT COALESCE(
-                     json_agg(json_build_object('email', tu3.email, 'role', tu3.role)
-                              ORDER BY tu3.role, tu3.email),
-                     '[]'::json)
-                    FROM tenant_users tu3 WHERE tu3.tenant_id = t.id),
+                 d.auth_mode,
+                 d.per_user_scheme,
+                 d.per_user_header,
+                 d.per_user_verify_url,
+                 d.bearer_token IS NOT NULL,
+                 d.service_account_json IS NOT NULL,
+                 d.custom_headers IS NOT NULL,
+                 d.updated_at,
                  -- Consumers reach this tenant's tools through a connector but
                  -- have no authority over it, so they are counted separately.
                  (SELECT count(*) FROM tenant_users tu4
                    WHERE tu4.tenant_id = t.id AND tu4.role = 'consumer')
              FROM tenants t
-             ORDER BY t.created_at ASC",
+             LEFT JOIN tenant_downstream_auth d ON d.tenant_id = t.id
+             ORDER BY lower(t.name), t.id",
             &[],
         )
         .await
@@ -128,66 +287,143 @@ pub async fn tenants_overview(
         }
     };
 
-    let tenants: Vec<serde_json::Value> = rows
+    // Diagnose everyone, count, then keep the matches.
+    let (mut empty, mut attention, mut risk) = (0i64, 0i64, 0i64);
+    let mut matching: Vec<serde_json::Value> = Vec::new();
+    for r in &rows {
+        let id: String = r.get(0);
+        let tenant_leaks = leaks.remove(&id).unwrap_or_default();
+        let has_bearer = r.get::<_, Option<bool>>(18).unwrap_or(false);
+        let has_sa = r.get::<_, Option<bool>>(19).unwrap_or(false);
+        let has_headers = r.get::<_, Option<bool>>(20).unwrap_or(false);
+        let facts = TenantFacts {
+            name: r.get(1),
+            mcp_client_id: r.get(4),
+            google_client_id: r.get(5),
+            allow_api0_signin: r.get(6),
+            member_count: r.get(7),
+            group_count: r.get(8),
+            endpoint_count: r.get(9),
+            mcp_tool_count: r.get(10),
+            api_key_count: r.get(11),
+            has_downstream_auth: r.get(12),
+            consumer_count: r.get(22),
+            has_shared_credential: has_bearer || has_sa || has_headers,
+        };
+        let findings = diagnose(&facts, &tenant_leaks);
+        empty += facts.is_empty() as i64;
+        attention += !findings.is_empty() as i64;
+        risk += has_risk(&findings) as i64;
+
+        if !in_view(&view, &facts, &findings) {
+            continue;
+        }
+        let owners: Option<String> = r.get(13);
+        if !needle.is_empty()
+            && ![Some(&facts.name), Some(&id), facts.mcp_client_id.as_ref(), owners.as_ref()]
+                .iter()
+                .flatten()
+                .any(|f| f.to_lowercase().contains(&needle))
+        {
+            continue;
+        }
+
+        matching.push(serde_json::json!({
+            "id": id,
+            "name": facts.name,
+            "credit_balance": r.get::<_, i64>(2),
+            "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+            "mcp_client_id": facts.mcp_client_id,
+            "google_client_id": facts.google_client_id,
+            "allow_api0_signin": facts.allow_api0_signin,
+            // The gateway refuses to mint an OAuth code unless one of the two
+            // sign-in methods is set. Precomputed so the dashboard shows the
+            // same verdict the gateway will reach, rather than its own guess.
+            "can_sign_in": facts.can_sign_in(),
+            "member_count": facts.member_count,
+            "group_count": facts.group_count,
+            "endpoint_count": facts.endpoint_count,
+            "mcp_tool_count": facts.mcp_tool_count,
+            "api_key_count": facts.api_key_count,
+            // Whether a shared downstream credential exists — never its value.
+            "has_downstream_auth": facts.has_downstream_auth,
+            "owners": owners,
+            // 'none' when the tenant has no row at all, which is what the
+            // gateway falls back to anyway.
+            "auth_mode": r.get::<_, Option<String>>(14).unwrap_or_else(|| "none".to_string()),
+            "per_user_scheme": r.get::<_, Option<String>>(15),
+            "per_user_header": r.get::<_, Option<String>>(16),
+            "per_user_verify_url": r.get::<_, Option<String>>(17),
+            "has_bearer_token": has_bearer,
+            "has_service_account": has_sa,
+            "has_custom_headers": has_headers,
+            "auth_updated_at": r
+                .get::<_, Option<chrono::DateTime<chrono::Utc>>>(21)
+                .map(|t| t.to_rfc3339()),
+            "consumer_count": facts.consumer_count,
+            // Tools that send api0's identity headers (internal secret, the
+            // caller's email) to a host outside `first_party_hosts`.
+            "identity_leaks": tenant_leaks,
+            "findings": findings,
+        }));
+    }
+
+    let total = matching.len() as i64;
+    let start = ((page - 1) * page_size).min(total) as usize;
+    let end = (start as i64 + page_size).min(total) as usize;
+    let mut tenants: Vec<serde_json::Value> = matching.drain(start..end).collect();
+
+    // Owners, admins and members of the page's tenants. Consumers are only
+    // counted: there can be thousands, and the user directory lists them.
+    let ids: Vec<String> = tenants
         .iter()
-        .map(|r| {
-            let id: String = r.get(0);
-            let tenant_leaks = leaks.remove(&id).unwrap_or_default();
-            let mcp_client_id: Option<String> = r.get(4);
-            let google_client_id: Option<String> = r.get(5);
-            let allow_api0_signin: bool = r.get(6);
-
-            let has_google = google_client_id
-                .as_deref()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-
-            serde_json::json!({
-                "id": id,
-                "name": r.get::<_, String>(1),
-                "credit_balance": r.get::<_, i64>(2),
-                "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
-                "mcp_client_id": mcp_client_id,
-                "google_client_id": google_client_id,
-                "allow_api0_signin": allow_api0_signin,
-                // The gateway refuses to mint an OAuth code unless one of the two
-                // sign-in methods is set. Precomputed so the dashboard shows the
-                // same verdict the gateway will reach, rather than its own guess.
-                "can_sign_in": has_google || allow_api0_signin,
-                "member_count": r.get::<_, i64>(7),
-                "group_count": r.get::<_, i64>(8),
-                "endpoint_count": r.get::<_, i64>(9),
-                "mcp_tool_count": r.get::<_, i64>(10),
-                "api_key_count": r.get::<_, i64>(11),
-                // Whether a shared downstream credential exists — never its value.
-                "has_downstream_auth": r.get::<_, bool>(12),
-                "owners": r.get::<_, Option<String>>(13),
-                // 'none' when the tenant has no row at all, which is what the
-                // gateway falls back to anyway.
-                "auth_mode": r.get::<_, Option<String>>(14).unwrap_or_else(|| "none".to_string()),
-                "per_user_scheme": r.get::<_, Option<String>>(15),
-                "per_user_header": r.get::<_, Option<String>>(16),
-                "per_user_verify_url": r.get::<_, Option<String>>(17),
-                "has_bearer_token": r.get::<_, Option<bool>>(18).unwrap_or(false),
-                "has_service_account": r.get::<_, Option<bool>>(19).unwrap_or(false),
-                "has_custom_headers": r.get::<_, Option<bool>>(20).unwrap_or(false),
-                "auth_updated_at": r
-                    .get::<_, Option<chrono::DateTime<chrono::Utc>>>(21)
-                    .map(|t| t.to_rfc3339()),
-                "members": r.get::<_, serde_json::Value>(22),
-                "consumer_count": r.get::<_, i64>(23),
-                // Tools that send api0's identity headers (internal secret, the
-                // caller's email) to a host outside `first_party_hosts`.
-                "identity_leaks": tenant_leaks,
-            })
-        })
+        .filter_map(|t| t["id"].as_str().map(str::to_string))
         .collect();
+    let mut members: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    if !ids.is_empty() {
+        match client
+            .query(
+                "SELECT tenant_id, email, role FROM tenant_users
+                  WHERE tenant_id = ANY($1) AND role <> 'consumer'
+                  ORDER BY role, email",
+                &[&ids],
+            )
+            .await
+        {
+            Ok(rows) => {
+                for r in rows {
+                    members
+                        .entry(r.get(0))
+                        .or_default()
+                        .push(serde_json::json!({"email": r.get::<_, String>(1), "role": r.get::<_, String>(2)}));
+                }
+            }
+            Err(e) => {
+                app_log!(error, error = %e, "tenants_overview: member query failed");
+                return HttpResponse::InternalServerError()
+                    .json(serde_json::json!({"success": false, "error": "DB error"}));
+            }
+        }
+    }
+    for t in &mut tenants {
+        let id = t["id"].as_str().unwrap_or_default().to_string();
+        t["members"] = serde_json::Value::Array(members.remove(&id).unwrap_or_default());
+    }
 
-    app_log!(info, count = tenants.len(), "Served the tenant overview");
+    app_log!(info, total = rows.len(), matching = total, "Served the tenant overview");
 
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "tenants": tenants,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": {
+            "tenants": rows.len(),
+            "empty": empty,
+            "attention": attention,
+            "risk": risk,
+        },
         "first_party_hosts": own_hosts,
     }))
 }
@@ -326,6 +562,65 @@ mod identity_leak_tests {
 
     fn own() -> Vec<String> {
         vec!["api0.ai".to_string(), "example.com".to_string()]
+    }
+
+    fn facts() -> TenantFacts {
+        TenantFacts {
+            name: "Acme".into(),
+            mcp_client_id: None,
+            google_client_id: None,
+            allow_api0_signin: false,
+            member_count: 1,
+            group_count: 0,
+            endpoint_count: 0,
+            mcp_tool_count: 0,
+            api_key_count: 0,
+            consumer_count: 0,
+            has_downstream_auth: false,
+            has_shared_credential: false,
+        }
+    }
+
+    #[test]
+    fn an_untouched_tenant_is_empty_and_not_flagged() {
+        let t = facts();
+        assert!(t.is_empty());
+        assert!(diagnose(&t, &[]).is_empty());
+        assert!(in_view("all", &t, &[]));
+        assert!(in_view("empty", &t, &[]));
+        assert!(!in_view("in_use", &t, &[]));
+        assert!(!in_view("whatever", &t, &[]), "unknown views fall back to in_use");
+    }
+
+    #[test]
+    fn open_sign_in_with_a_shared_credential_is_a_risk() {
+        let t = TenantFacts { allow_api0_signin: true, has_shared_credential: true, ..facts() };
+        let f = diagnose(&t, &[]);
+        assert!(has_risk(&f));
+        assert!(in_view("risk", &t, &f) && in_view("attention", &t, &f));
+    }
+
+    #[test]
+    fn a_wired_tenant_without_tools_needs_attention_but_is_no_risk() {
+        let t = TenantFacts { mcp_client_id: Some("acme".into()), allow_api0_signin: false, ..facts() };
+        let f = diagnose(&t, &[]);
+        let texts: Vec<&str> = f.iter().filter_map(|x| x["text"].as_str()).collect();
+        assert!(texts.iter().any(|x| x.starts_with("No sign-in method")));
+        assert!(texts.iter().any(|x| x.starts_with("No endpoints")));
+        assert!(!has_risk(&f));
+        assert!(in_view("attention", &t, &f) && !in_view("risk", &t, &f));
+    }
+
+    #[test]
+    fn leaks_name_each_host_once() {
+        let leaks: Vec<serde_json::Value> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|t| serde_json::json!({"tool": t, "host": "dev.azure.com"}))
+            .collect();
+        let f = diagnose(&facts(), &leaks);
+        let text = f[0]["text"].as_str().unwrap();
+        assert_eq!(text.matches("dev.azure.com").count(), 1);
+        assert!(text.contains("4 tools") && text.contains("a, b, c, +1 more"));
     }
 
     #[test]
