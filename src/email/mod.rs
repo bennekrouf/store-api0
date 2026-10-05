@@ -35,6 +35,17 @@ fn check_internal_secret(req: &HttpRequest) -> bool {
         .unwrap_or(false)
 }
 
+/// One URL path segment, percent-encoded: a client id is chosen by the
+/// workspace, so it is not trusted to be URL- or HTML-safe as written.
+fn path_segment(raw: &str) -> String {
+    raw.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{:02X}", b),
+        })
+        .collect()
+}
+
 // ── EmailKind ─────────────────────────────────────────────────────────────────
 
 pub enum EmailKind {
@@ -52,7 +63,8 @@ pub enum EmailKind {
     ProviderConnected { provider: String },
     /// Someone was added to, or invited into, a workspace. Every field but
     /// `has_account` is user-supplied text and is escaped when rendered.
-    WorkspaceInvite { workspace: String, role: String, invited_by: String, has_account: bool },
+    /// `link_ref` names the workspace's Get started page (/link/<link_ref>).
+    WorkspaceInvite { workspace: String, role: String, invited_by: String, has_account: bool, link_ref: String },
     // ── Tier 3 — engagement ──────────────────────────────────────────────────
     Nudge { name: String, credits: i64 },
     WinBack { name: String },
@@ -99,8 +111,8 @@ impl EmailKind {
             Self::MonthlyDigest { month, .. }                => format!("Your api0 usage summary — {}", month),
             Self::ProviderConnected { provider }             => format!("{} connected to api0", provider),
             Self::WorkspaceInvite { workspace, has_account, .. } => {
-                if *has_account { format!("You've been added to {} on api0", workspace) }
-                else            { format!("You're invited to join {} on api0", workspace) }
+                if *has_account { format!("You've been added to {}", workspace) }
+                else            { format!("You're invited to join {}", workspace) }
             }
             Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
@@ -241,19 +253,30 @@ impl EmailKind {
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">View Dashboard</a></p>"#
             ),
 
-            Self::WorkspaceInvite { workspace, role, invited_by, has_account } => {
+            Self::WorkspaceInvite { workspace, role, invited_by, has_account, link_ref } => {
+                // The button leads to the workspace's own Get started page —
+                // Claude, Telegram, WhatsApp — not to the api0 dashboard, which
+                // only the people running the workspace need.
+                let page = format!("https://app.api0.ai/link/{}", path_segment(link_ref));
                 let (workspace, role, invited_by) =
                     (escape_html(workspace), escape_html(role), escape_html(invited_by));
-                let next = if *has_account {
-                    "<p>It's in your workspace list now: open the dashboard and pick it from the switcher next to your workspace name.</p>"
+                let sign_in = if *has_account {
+                    ""
                 } else {
-                    "<p>Sign in with Google using <strong>this email address</strong> and you'll land in the workspace.</p>"
+                    "<p>Sign in with Google using <strong>this email address</strong> — that is what the invitation is attached to.</p>"
+                };
+                let manage = if role == "owner" || role == "admin" {
+                    "<p style=\"color:#64748B;font-size:13px\">To set the workspace up — tools, bots, members — use the <a href=\"https://app.api0.ai\" style=\"color:#6366F1\">dashboard</a>.</p>"
+                } else {
+                    ""
                 };
                 format!(
                     r#"<h1>Join {workspace}</h1>
-<p><strong>{invited_by}</strong> gave you the <strong>{role}</strong> role in the <strong>{workspace}</strong> workspace on api0.</p>
-{next}
-<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open api0</a></p>
+<p><strong>{invited_by}</strong> gave you the <strong>{role}</strong> role in <strong>{workspace}</strong>.</p>
+<p>The page below shows how to use it from Claude, and from the team's Telegram or WhatsApp bot if it has one.</p>
+{sign_in}
+<p><a href="{page}" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Get started with {workspace}</a></p>
+{manage}
 <p style="color:#64748B;font-size:13px">Not expecting this? You can ignore it — nothing happens unless you sign in.</p>"#
                 )
             }
@@ -578,4 +601,40 @@ pub async fn broadcast_whats_new_handler(
     }
     app_log!(info, "[broadcast] WhatsNew sent to {} users: {}", count, body.feature_title);
     HttpResponse::Ok().json(serde_json::json!({"success":true,"sent_to":count}))
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+
+    fn invite(role: &str, link_ref: &str) -> EmailKind {
+        EmailKind::WorkspaceInvite {
+            workspace: "Oryx <DevOps>".into(),
+            role: role.into(),
+            invited_by: "admin@example.com".into(),
+            has_account: false,
+            link_ref: link_ref.into(),
+        }
+    }
+
+    #[test]
+    fn the_invitation_leads_to_the_workspace_page_not_the_dashboard() {
+        let html = invite("member", "oryx-devops").html_body();
+        assert!(html.contains(r#"href="https://app.api0.ai/link/oryx-devops""#));
+        assert!(html.contains("Get started with Oryx &lt;DevOps&gt;"));
+        assert!(!html.contains("use the <a href=\"https://app.api0.ai\""), "members get no dashboard pointer");
+        assert!(!invite("member", "x").subject().contains("api0"));
+    }
+
+    #[test]
+    fn owners_are_also_pointed_at_the_dashboard() {
+        assert!(invite("owner", "x").html_body().contains(">dashboard</a>"));
+    }
+
+    #[test]
+    fn a_hostile_client_id_cannot_break_out_of_the_link() {
+        let html = invite("member", "a\"><script>/b c").html_body();
+        assert!(html.contains("/link/a%22%3E%3Cscript%3E%2Fb%20c\""));
+        assert!(!html.contains("<script>"));
+    }
 }
