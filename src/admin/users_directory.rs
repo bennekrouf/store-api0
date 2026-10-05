@@ -94,7 +94,14 @@ pub async fn list_users(
                 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
                WHERE tu.email = up.email) AS workspaces,
              (SELECT count(*) FROM api_keys k WHERE k.email = up.email AND k.is_active) AS active_keys,
-             (SELECT max(k.last_used) FROM api_keys k WHERE k.email = up.email) AS last_active,
+             -- Every tool call, from Claude or a messaging bot, is logged with
+             -- the key owner's email, and with the consumer's when a provider
+             -- calls for one. api_keys.last_used is kept in case it is ever written.
+             GREATEST(
+                 (SELECT max(l.timestamp) FROM api_usage_logs l WHERE l.email = up.email),
+                 (SELECT max(l.timestamp) FROM api_usage_logs l WHERE l.consumer_id = up.email),
+                 (SELECT max(k.last_used) FROM api_keys k WHERE k.email = up.email)
+             ) AS last_active,
              (SELECT count(*) FROM channel_identities ci WHERE ci.user_email = up.email) AS linked_channels
          FROM user_preferences up
          WHERE ($1 = '' OR up.email ILIKE '%' || $1 || '%'

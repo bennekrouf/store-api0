@@ -901,3 +901,25 @@ CREATE TABLE IF NOT EXISTS tenant_invites (
     PRIMARY KEY (tenant_id, email)
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_invites_email ON tenant_invites(email);
+
+-- ── User directory: activity and age ────────────────────────────────────────
+-- "Last active" is the latest tool call made as or for the user: every MCP
+-- call — from Claude or a Telegram/WhatsApp bot — lands in api_usage_logs.
+CREATE INDEX IF NOT EXISTS idx_usage_logs_email_ts ON api_usage_logs(email, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_consumer_ts ON api_usage_logs(consumer_id, timestamp DESC);
+
+-- user_preferences.created_at arrived after most users did. Give those the
+-- earliest trace they left (first key, first call, first credit movement,
+-- first channel link); someone with none stays unknown. Runs once in effect:
+-- only NULL rows are touched.
+UPDATE user_preferences up
+   SET created_at = first.at
+  FROM (
+        SELECT e.email, min(e.at) AS at FROM (
+            SELECT email, generated_at AS at FROM api_keys
+            UNION ALL SELECT email, timestamp FROM api_usage_logs
+            UNION ALL SELECT email, created_at FROM credit_transactions
+            UNION ALL SELECT user_email, linked_at FROM channel_identities
+        ) e GROUP BY e.email
+       ) first
+ WHERE up.email = first.email AND up.created_at IS NULL;

@@ -273,7 +273,30 @@ async fn add_or_invite(
     Ok(InviteOutcome::Invited)
 }
 
-fn notify(store: &std::sync::Arc<EndpointStore>, to: &str, workspace: &str, role: &str, invited_by: &str, outcome: InviteOutcome) {
+async fn notify(
+    store: &std::sync::Arc<EndpointStore>,
+    tenant_id: &str,
+    to: &str,
+    workspace: &str,
+    role: &str,
+    invited_by: &str,
+    outcome: InviteOutcome,
+) {
+    // The Get started page is addressed by client id when there is one, as
+    // everywhere else (see mcp/link_info.rs).
+    let link_ref = match store.get_admin_conn().await {
+        Ok(c) => c
+            .query_opt(
+                "SELECT COALESCE(NULLIF(trim(mcp_client_id), ''), id) FROM tenants WHERE id = $1",
+                &[&tenant_id],
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.get::<_, String>(0)),
+        Err(_) => None,
+    }
+    .unwrap_or_else(|| tenant_id.to_string());
     crate::email::send_async(
         store.clone(),
         to.to_string(),
@@ -282,6 +305,7 @@ fn notify(store: &std::sync::Arc<EndpointStore>, to: &str, workspace: &str, role
             role: role.to_string(),
             invited_by: invited_by.to_string(),
             has_account: outcome == InviteOutcome::Added,
+            link_ref,
         },
     );
 }
@@ -318,7 +342,7 @@ pub async fn invite(
 
     app_log!(info, tenant_id = %seat.tenant_id, by = %caller, invitee = %invitee, role = %role,
         outcome = ?outcome, "Workspace invitation");
-    notify(store, &invitee, &seat.tenant_name, role, caller, outcome);
+    notify(store, &seat.tenant_id, &invitee, &seat.tenant_name, role, caller, outcome).await;
     Ok(outcome)
 }
 
@@ -347,7 +371,7 @@ pub async fn admin_add_member(
 
     app_log!(warn, tenant_id = %tenant_id, by = %admin_email, invitee = %invitee, role = %role,
         outcome = ?outcome, "Platform admin added a workspace member");
-    notify(store, &invitee, &name, role, admin_email, outcome);
+    notify(store, tenant_id, &invitee, &name, role, admin_email, outcome).await;
     Ok(outcome)
 }
 
