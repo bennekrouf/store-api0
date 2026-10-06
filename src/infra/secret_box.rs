@@ -99,7 +99,25 @@ pub fn is_configured() -> bool {
     cipher().is_ok()
 }
 
+/// A 32-byte key for one other purpose (signing unsubscribe links, say),
+/// derived from API0_ENCRYPTION_KEY as HMAC-SHA256(master, purpose). Each
+/// purpose gets its own key, and none of them is the sealing key itself, so a
+/// leak of one derived key exposes neither the sealed secrets nor the others.
+pub fn derive_key(purpose: &str) -> Result<[u8; 32]> {
+    use hmac::{Hmac, Mac};
+    let master = master_key()?;
+    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&master)
+        .map_err(|_| anyhow!("could not derive a key"))?;
+    mac.update(purpose.as_bytes());
+    Ok(mac.finalize().into_bytes().into())
+}
+
 fn cipher() -> Result<Aes256Gcm> {
+    let bytes = master_key()?;
+    Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&bytes)))
+}
+
+fn master_key() -> Result<Vec<u8>> {
     let raw = std::env::var("API0_ENCRYPTION_KEY")
         .ok()
         .filter(|k| !k.is_empty())
@@ -116,7 +134,14 @@ fn cipher() -> Result<Aes256Gcm> {
         ));
     }
 
-    Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&bytes)))
+    Ok(bytes)
+}
+
+/// Runs `body` with a test key set, behind the same lock as this module's own
+/// tests, for tests elsewhere that need a key (they share one process variable).
+#[cfg(test)]
+pub(crate) fn with_test_key<T>(body: impl FnOnce() -> T) -> T {
+    tests::with_key(body)
 }
 
 #[cfg(test)]
@@ -127,7 +152,7 @@ mod tests {
     /// rather than racing each other across the test harness's threads.
     static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn with_key<T>(body: impl FnOnce() -> T) -> T {
+    pub(super) fn with_key<T>(body: impl FnOnce() -> T) -> T {
         let _lock = GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
         std::env::set_var("API0_ENCRYPTION_KEY", key);

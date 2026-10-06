@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Wrap the store in an Arc for sharing between servers
     let store_arc = Arc::new(store);
 
-    // ── Email engagement schedulers ───────────────────────────────────────────
+    // ── Daily jobs: email engagement schedulers and retention cleanup ─────────
     {
         let sched_store = Arc::clone(&store_arc);
         tokio::spawn(async move {
@@ -241,6 +241,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             loop {
                 interval.tick().await;
                 run_engagement_schedulers(&sched_store).await;
+                run_retention_cleanup(&sched_store).await;
             }
         });
     }
@@ -305,6 +306,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "Application shutting down");
     Ok(())
+}
+
+/// How long a WhatsApp message that could not be processed is kept for
+/// diagnosis. The privacy policy on api0.ai states this number.
+const FAILED_MESSAGE_RETENTION_DAYS: i32 = 90;
+
+/// Deletes data whose retention period is over. Runs once a day with the
+/// engagement schedulers. (WhatsApp conversation history is cleaned up by the
+/// bridge itself, after 30 days without activity.)
+async fn run_retention_cleanup(store: &Arc<EndpointStore>) {
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => { app_log!(error, "[retention] DB connect failed: {}", e); return; }
+    };
+    match client.execute(
+        "DELETE FROM whatsapp_failed_messages WHERE created_at < NOW() - make_interval(days => $1)",
+        &[&FAILED_MESSAGE_RETENTION_DAYS],
+    ).await {
+        Ok(n) => app_log!(info, deleted = %n, days = %FAILED_MESSAGE_RETENTION_DAYS, "[retention] Deleted old failed WhatsApp messages"),
+        Err(e) => app_log!(error, "[retention] Could not delete old failed WhatsApp messages: {}", e),
+    }
 }
 
 async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {

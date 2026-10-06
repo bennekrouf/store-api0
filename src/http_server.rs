@@ -230,6 +230,8 @@ pub async fn start_http_server(
                             .route("/admin/smtp-config", web::get().to(get_smtp_config_handler))
                             .route("/admin/smtp-config", web::put().to(update_smtp_config_handler))
                             .route("/internal/email/send", web::post().to(send_email_handler))
+                            .route("/internal/email/unsubscribe", web::post().to(crate::email::unsubscribe::unsubscribe_handler))
+                            .route("/internal/email/resubscribe", web::post().to(crate::email::unsubscribe::resubscribe_handler))
                             .route("/admin/broadcast/whats-new", web::post().to(broadcast_whats_new_handler))
                             // Public AI config (no auth — internal network read for ai-uploader)
                             .route("/system/ai-config", web::get().to(get_ai_config_public))

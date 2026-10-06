@@ -923,3 +923,11 @@ UPDATE user_preferences up
         ) e GROUP BY e.email
        ) first
  WHERE up.email = first.email AND up.created_at IS NULL;
+
+-- Addresses that opted out of the optional emails (EmailKind::is_optional):
+-- the digest, nudge, win-back and "what's new". Stored lowercased; see
+-- src/email/unsubscribe.rs.
+CREATE TABLE IF NOT EXISTS email_opt_outs (
+    email      TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
