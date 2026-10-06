@@ -9,17 +9,20 @@
 //
 // Internal endpoints (X-Internal-Secret):
 //   POST /api/internal/email/send
+//   POST /api/internal/email/unsubscribe | resubscribe   (see unsubscribe.rs)
 //   GET  /api/admin/smtp-config
 //   PUT  /api/admin/smtp-config
 
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use lettre::message::header::ContentType;
+use lettre::message::header::{ContentType, HeaderName, HeaderValue};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+pub mod unsubscribe;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,15 @@ impl EmailKind {
         }
     }
 
+    /// Emails a user can opt out of (see unsubscribe.rs). Everything else is
+    /// about their account — receipts, keys, invites, licences — and always sent.
+    pub fn is_optional(&self) -> bool {
+        matches!(
+            self,
+            Self::MonthlyDigest { .. } | Self::Nudge { .. } | Self::WinBack { .. } | Self::WhatsNew { .. }
+        )
+    }
+
     /// The name the email is sent as. Licence emails go to people who bought a
     /// desktop app from mayorana.ch and have never heard of api0.
     fn sender_name(&self) -> &'static str {
@@ -130,7 +142,13 @@ impl EmailKind {
         }
     }
 
+    #[cfg(test)]
     pub fn html_body(&self) -> String {
+        self.html_body_with(None)
+    }
+
+    /// The body, with an unsubscribe link in the footer when one is given.
+    pub fn html_body_with(&self, unsubscribe: Option<&str>) -> String {
         if let Self::LicenseIssued { product_name, how, key, updates_until } = self {
             return wrap_mayorana_layout(&format!(
                 r#"<h1>Thank you for buying {product_name}</h1>
@@ -152,7 +170,7 @@ impl EmailKind {
 <h2>Connect in 2 steps</h2>
 <ol style="padding-left:20px">
   <li>Copy your API key from the dashboard</li>
-  <li>Paste it into your MCP client (Claude Desktop, Cursor, or any MCP-compatible tool) using the server URL <code style="background:#F1F5F9;padding:2px 4px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
+  <li>Paste it into your MCP client (Claude Desktop or any MCP-compatible client) using the server URL <code style="background:#F1F5F9;padding:2px 4px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
 </ol>
 <p>Once connected, your AI assistant can discover and call any API you import — no manual HTTP requests needed.</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open Dashboard</a></p>"#
@@ -295,7 +313,7 @@ impl EmailKind {
 <h2>Connect in 2 steps:</h2>
 <ol style="padding-left:20px">
   <li>Copy your API key from the dashboard</li>
-  <li>Add it to your MCP client (Claude Desktop, Cursor, or any MCP-compatible tool) pointing to <code style="background:#1E293B;padding:2px 6px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
+  <li>Add it to your MCP client (Claude Desktop or any MCP-compatible client) pointing to <code style="background:#1E293B;padding:2px 6px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
 </ol>
 <p>Your AI assistant will then discover and call your imported APIs automatically.</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open Dashboard</a></p>"#
@@ -323,7 +341,7 @@ impl EmailKind {
             Self::LicenseIssued { .. } => unreachable!("rendered above"),
         };
 
-        wrap_layout(&content)
+        wrap_layout(&content, unsubscribe)
     }
 }
 
@@ -336,7 +354,13 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn wrap_layout(content: &str) -> String {
+fn wrap_layout(content: &str, unsubscribe: Option<&str>) -> String {
+    let unsubscribe = unsubscribe
+        .map(|url| format!(
+            r#"<br><a href="{}" style="color:#64748B">Unsubscribe from these emails</a> — account emails such as receipts and key changes are still sent."#,
+            escape_html(url)
+        ))
+        .unwrap_or_default();
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -345,12 +369,12 @@ fn wrap_layout(content: &str) -> String {
 <div style="max-width:600px;margin:24px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
   <div style="background:#0F172A;padding:20px 32px">
     <span style="color:white;font-size:20px;font-weight:bold">api0</span>
-    <span style="color:#64748B;font-size:13px;margin-left:8px">API Platform</span>
+    <span style="color:#64748B;font-size:13px;margin-left:8px">MCP gateway</span>
   </div>
   <div style="padding:32px;color:#1E293B;line-height:1.6">{content}</div>
   <div style="padding:16px 32px;background:#F8FAFC;color:#64748B;font-size:12px;text-align:center">
-    api0 — Programmable API Gateway ·
-    <a href="https://app.api0.ai" style="color:#6366F1">app.api0.ai</a>
+    api0 — MCP gateway ·
+    <a href="https://app.api0.ai" style="color:#6366F1">app.api0.ai</a>{unsubscribe}
   </div>
 </div>
 </body>
@@ -390,15 +414,39 @@ pub fn send_async(store: Arc<EndpointStore>, to: impl Into<String>, kind: EmailK
 // ── Delivery ──────────────────────────────────────────────────────────────────
 
 async fn deliver_internal(store: &EndpointStore, to: &str, kind: &EmailKind) -> anyhow::Result<()> {
+    // Optional emails go only to people who have not opted out, and always
+    // carry the way to opt out. Checked here so no sender can skip it.
+    let unsubscribe = if kind.is_optional() {
+        if unsubscribe::is_opted_out(store, to).await {
+            app_log!(info, kind = %kind.name(), "Skipped optional email: recipient opted out");
+            return Ok(());
+        }
+        Some(unsubscribe::link(to).ok_or_else(|| {
+            anyhow::anyhow!("no unsubscribe link (API0_ENCRYPTION_KEY unset); optional email not sent")
+        })?)
+    } else {
+        None
+    };
+
     let cfg = load_smtp_config(store).await
         .ok_or_else(|| anyhow::anyhow!("SMTP not configured"))?;
 
-    let email = lettre::Message::builder()
+    let mut builder = lettre::Message::builder()
         .from(format!("{} <{}>", kind.sender_name(), cfg.from_addr).parse()?)
         .to(to.parse()?)
         .subject(kind.subject())
-        .header(ContentType::TEXT_HTML)
-        .body(kind.html_body())?;
+        .header(ContentType::TEXT_HTML);
+    if let Some(url) = &unsubscribe {
+        // RFC 2369 and RFC 8058: mail clients show their own unsubscribe
+        // button, which POSTs to the URL without opening a page.
+        builder = builder
+            .raw_header(HeaderValue::new(HeaderName::new_from_ascii_str("List-Unsubscribe"), format!("<{url}>")))
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
+                "List-Unsubscribe=One-Click".to_string(),
+            ));
+    }
+    let email = builder.body(kind.html_body_with(unsubscribe.as_deref()))?;
 
     let creds = Credentials::new(cfg.user.clone(), cfg.password.clone());
     let transport = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)?
@@ -588,7 +636,12 @@ pub async fn broadcast_whats_new_handler(
         Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({"error":format!("{e}")})),
     };
     let rows = client
-        .query("SELECT email FROM user_preferences WHERE email IS NOT NULL AND email != ''", &[])
+        .query(
+            "SELECT email FROM user_preferences up
+              WHERE email IS NOT NULL AND email != ''
+                AND NOT EXISTS (SELECT 1 FROM email_opt_outs o WHERE o.email = lower(up.email))",
+            &[],
+        )
         .await.unwrap_or_default();
 
     let count = rows.len();
