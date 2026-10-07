@@ -2,7 +2,7 @@ use stripe::{
     CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client, CreateCheckoutSession,
     CreateCheckoutSessionAutomaticTax, CreateCheckoutSessionLineItems,
     CreateCheckoutSessionPaymentIntentData, CreatePaymentIntent, Currency, PaymentIntent,
-    PaymentIntentId, PaymentIntentStatus,
+    PaymentIntentId, PaymentIntentStatus, Price, PriceId,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -105,5 +105,10 @@ impl PaymentService {
     pub async fn retrieve_checkout_session(&self, session_id: &str) -> Result<CheckoutSession> {
         let id: CheckoutSessionId = session_id.parse()?;
         Ok(CheckoutSession::retrieve(&self.client, &id, &[]).await?)
+    }
+
+    pub async fn retrieve_price(&self, price_id: &str) -> Result<Price> {
+        let id: PriceId = price_id.parse()?;
+        Ok(Price::retrieve(&self.client, &id, &[]).await?)
     }
 }
