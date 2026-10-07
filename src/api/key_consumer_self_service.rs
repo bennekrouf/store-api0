@@ -50,7 +50,7 @@ pub async fn generate_self_service_key(
     let key_name = body
         .key_name
         .as_deref()
-        .unwrap_or("My Claude MCP Key")
+        .unwrap_or("My MCP key")
         .to_string();
 
     if provider_tenant_id.is_empty() {
