@@ -31,8 +31,9 @@ use chrono::{Days, NaiveDate, Utc};
 use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-use stripe::{CheckoutSession, CheckoutSessionPaymentStatus};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+use stripe::{CheckoutSession, CheckoutSessionPaymentStatus, PriceTaxBehavior};
 
 /// Metadata `purpose` on licence Checkout sessions and their PaymentIntents.
 pub const PURPOSE_LICENSE: &str = "license";
@@ -290,6 +291,71 @@ pub async fn create_checkout_handler(
             }))
         }
     }
+}
+
+/// How long a price read from Stripe is reused. The product pages ask on
+/// every view; a price change shows up on the site within this long.
+const PRICE_TTL: Duration = Duration::from_secs(600);
+
+fn price_cache() -> &'static Mutex<HashMap<String, (Instant, serde_json::Value)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, serde_json::Value)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// GET /api/licenses/price/{product}/{edition} — what the Checkout page will
+/// charge, read from the same Stripe price, so the number shown next to the
+/// buy button is the one charged: { amount (smallest currency unit),
+/// currency, vat_added (Stripe Tax adds VAT on top at checkout) }.
+pub async fn price_handler(
+    req: HttpRequest,
+    payment_service: web::Data<Arc<PaymentService>>,
+    path: web::Path<(String, String)>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let (product, edition) = (path.0.to_lowercase(), path.1.to_lowercase());
+    if product_name(&product, &edition).is_none() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "success": false, "message": "Unknown product",
+        }));
+    }
+    let Ok(price_id) = std::env::var(price_env(&product, &edition)) else {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "success": false, "message": "This product is not on sale yet",
+        }));
+    };
+
+    if let Some((at, body)) = price_cache().lock().unwrap().get(&price_id) {
+        if at.elapsed() < PRICE_TTL {
+            return HttpResponse::Ok().json(body);
+        }
+    }
+
+    let price = match payment_service.retrieve_price(&price_id).await {
+        Ok(price) => price,
+        Err(e) => {
+            app_log!(error, error = %e, product = %product, "Failed to read licence price from Stripe");
+            return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "success": false, "message": "Price unavailable",
+            }));
+        }
+    };
+    let (Some(amount), Some(currency)) = (price.unit_amount, price.currency) else {
+        app_log!(error, product = %product, "Licence price has no fixed amount");
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "success": false, "message": "Price unavailable",
+        }));
+    };
+    let automatic_tax = std::env::var("STRIPE_AUTOMATIC_TAX").as_deref() == Ok("true");
+    let body = serde_json::json!({
+        "success": true,
+        "amount": amount,
+        "currency": currency.to_string(),
+        "vat_added": automatic_tax && price.tax_behavior == Some(PriceTaxBehavior::Exclusive),
+    });
+    price_cache().lock().unwrap().insert(price_id, (Instant::now(), body.clone()));
+    HttpResponse::Ok().json(body)
 }
 
 /// GET /api/licenses/session/{session_id} — the key for the thank-you page.

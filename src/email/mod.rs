@@ -354,6 +354,9 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// The sender's postal address, which CAN-SPAM requires on commercial email.
+const POSTAL_ADDRESS: &str = "Mayorana, Saint-Prex, Switzerland";
+
 fn wrap_layout(content: &str, unsubscribe: Option<&str>) -> String {
     let unsubscribe = unsubscribe
         .map(|url| format!(
@@ -374,7 +377,8 @@ fn wrap_layout(content: &str, unsubscribe: Option<&str>) -> String {
   <div style="padding:32px;color:#1E293B;line-height:1.6">{content}</div>
   <div style="padding:16px 32px;background:#F8FAFC;color:#64748B;font-size:12px;text-align:center">
     api0 — MCP gateway ·
-    <a href="https://app.api0.ai" style="color:#6366F1">app.api0.ai</a>{unsubscribe}
+    <a href="https://app.api0.ai" style="color:#6366F1">app.api0.ai</a>
+    <br>{POSTAL_ADDRESS}{unsubscribe}
   </div>
 </div>
 </body>
@@ -437,14 +441,7 @@ async fn deliver_internal(store: &EndpointStore, to: &str, kind: &EmailKind) -> 
         .subject(kind.subject())
         .header(ContentType::TEXT_HTML);
     if let Some(url) = &unsubscribe {
-        // RFC 2369 and RFC 8058: mail clients show their own unsubscribe
-        // button, which POSTs to the URL without opening a page.
-        builder = builder
-            .raw_header(HeaderValue::new(HeaderName::new_from_ascii_str("List-Unsubscribe"), format!("<{url}>")))
-            .raw_header(HeaderValue::new(
-                HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
-                "List-Unsubscribe=One-Click".to_string(),
-            ));
+        builder = with_list_unsubscribe(builder, url);
     }
     let email = builder.body(kind.html_body_with(unsubscribe.as_deref()))?;
 
@@ -498,6 +495,25 @@ async fn save_config_key(store: &EndpointStore, key: &str, value: &str) -> anyho
     Ok(())
 }
 
+/// RFC 2369 and RFC 8058: mail clients show their own unsubscribe
+/// button, which POSTs to the URL without opening a page.
+fn with_list_unsubscribe(builder: lettre::message::MessageBuilder, url: &str) -> lettre::message::MessageBuilder {
+    builder
+        .raw_header(HeaderValue::new(HeaderName::new_from_ascii_str("List-Unsubscribe"), format!("<{url}>")))
+        .raw_header(HeaderValue::new(
+            HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
+            "List-Unsubscribe=One-Click".to_string(),
+        ))
+}
+
+/// A caller-supplied unsubscribe URL goes into a header verbatim, so it must be
+/// a plain https URL: no whitespace, control characters or angle brackets.
+fn is_valid_unsubscribe_url(url: &str) -> bool {
+    url.starts_with("https://")
+        && url.len() <= 2000
+        && url.chars().all(|c| c.is_ascii_graphic() && c != '<' && c != '>')
+}
+
 // ── POST /api/internal/email/send ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -505,6 +521,19 @@ pub struct SendEmailRequest {
     pub to:        String,
     pub subject:   String,
     pub html_body: String,
+    /// Optional one-click unsubscribe URL, sent as List-Unsubscribe headers.
+    #[serde(default)]
+    pub list_unsubscribe: Option<String>,
+    /// Optional display name for the From header (defaults to "api0"), so a
+    /// product sending through api0 appears under its own name.
+    #[serde(default)]
+    pub from_name: Option<String>,
+}
+
+/// A display name for the From header: short, printable, single-line.
+fn is_valid_from_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty() && name.chars().count() <= 64 && !name.chars().any(|c| c.is_control())
 }
 
 pub async fn send_email_handler(
@@ -525,13 +554,37 @@ pub async fn send_email_handler(
             .json(serde_json::json!({"success":false,"error":"SMTP not configured"})),
     };
 
-    let email = match Message::builder()
-        .from(format!("api0 <{}>", cfg.from_addr).parse().unwrap())
+    if let Some(url) = &body.list_unsubscribe {
+        if !is_valid_unsubscribe_url(url) {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"success":false,"error":"list_unsubscribe must be an https URL"}));
+        }
+    }
+
+    let from_name = match &body.from_name {
+        Some(name) if !is_valid_from_name(name) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"success":false,"error":"from_name must be 1-64 printable characters"}));
+        }
+        Some(name) => name.trim().to_string(),
+        None => "api0".to_string(),
+    };
+    let from_addr: lettre::Address = match cfg.from_addr.parse() {
+        Ok(a) => a,
+        Err(e) => return HttpResponse::InternalServerError()
+            .json(serde_json::json!({"success":false,"error":format!("invalid SMTP from address: {e}")})),
+    };
+
+    let mut builder = Message::builder()
+        // Mailbox::new quotes/encodes the display name, so commas or accents can't break the header.
+        .from(lettre::message::Mailbox::new(Some(from_name), from_addr))
         .to(body.to.parse().unwrap())
         .subject(&body.subject)
-        .header(ContentType::TEXT_HTML)
-        .body(body.html_body.clone())
-    {
+        .header(ContentType::TEXT_HTML);
+    if let Some(url) = &body.list_unsubscribe {
+        builder = with_list_unsubscribe(builder, url);
+    }
+    let email = match builder.body(body.html_body.clone()) {
         Ok(m) => m,
         Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({"success":false,"error":format!("{e}")})),
     };
@@ -689,5 +742,61 @@ mod invite_tests {
         let html = invite("member", "a\"><script>/b c").html_body();
         assert!(html.contains("/link/a%22%3E%3Cscript%3E%2Fb%20c\""));
         assert!(!html.contains("<script>"));
+    }
+}
+
+#[cfg(test)]
+mod send_request_tests {
+    use super::*;
+
+    #[test]
+    fn only_plain_https_urls_are_accepted_as_unsubscribe_headers() {
+        assert!(is_valid_unsubscribe_url("https://api.cvenom.com/email/unsubscribe?token=a.b-c_d"));
+        assert!(!is_valid_unsubscribe_url("http://api.cvenom.com/u"));
+        assert!(!is_valid_unsubscribe_url("https://x.com/u>\r\nBcc: victim@example.com"));
+        assert!(!is_valid_unsubscribe_url("https://x.com/a b"));
+    }
+
+    #[test]
+    fn from_names_must_be_short_single_line_text() {
+        assert!(is_valid_from_name("CVenom"));
+        assert!(is_valid_from_name("Café, Inc."));
+        assert!(!is_valid_from_name("   "));
+        assert!(!is_valid_from_name("CVenom\r\nBcc: x@y.z"));
+        assert!(!is_valid_from_name(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn a_from_name_with_a_comma_stays_one_mailbox() {
+        let from = lettre::message::Mailbox::new(Some("Café, Inc.".into()), "no-reply@api0.ai".parse().unwrap());
+        let msg = Message::builder().from(from).to("d@e.f".parse().unwrap()).subject("s")
+            .body(String::from("h")).unwrap();
+        let raw = String::from_utf8(msg.formatted()).unwrap();
+        let from_line = raw.lines().find(|l| l.starts_with("From:")).unwrap();
+        assert!(from_line.ends_with("<no-reply@api0.ai>"), "{from_line}");
+        assert!(!from_line.contains("Café, Inc. <"), "display name must be quoted or encoded: {from_line}");
+    }
+
+    #[test]
+    fn the_request_field_is_optional() {
+        let r: SendEmailRequest = serde_json::from_str(r#"{"to":"a@b.c","subject":"s","html_body":"h"}"#).unwrap();
+        assert!(r.list_unsubscribe.is_none());
+        assert!(r.from_name.is_none());
+        let r: SendEmailRequest = serde_json::from_str(
+            r#"{"to":"a@b.c","subject":"s","html_body":"h","list_unsubscribe":null}"#).unwrap();
+        assert!(r.list_unsubscribe.is_none());
+    }
+
+    #[test]
+    fn the_headers_are_set_on_the_message() {
+        let msg = with_list_unsubscribe(
+            Message::builder().from("a@b.c".parse().unwrap()).to("d@e.f".parse().unwrap()).subject("s"),
+            "https://x.com/u?token=t",
+        )
+        .body(String::from("h"))
+        .unwrap();
+        let raw = String::from_utf8(msg.formatted()).unwrap();
+        assert!(raw.contains("List-Unsubscribe: <https://x.com/u?token=t>"));
+        assert!(raw.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click"));
     }
 }

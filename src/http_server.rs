@@ -211,6 +211,7 @@ pub async fn start_http_server(
                             // Desktop app licences and Stripe webhooks (X-Internal-Secret, gateway-proxied)
                             .route("/licenses/checkout", web::post().to(crate::payment::license::create_checkout_handler))
                             .route("/licenses/session/{session_id}", web::get().to(crate::payment::license::session_license_handler))
+                            .route("/licenses/price/{product}/{edition}", web::get().to(crate::payment::license::price_handler))
                             .route("/internal/stripe/webhook", web::post().to(crate::payment::webhook::stripe_webhook_handler))
                             // Admin endpoints (Firebase JWT, admin email only)
                             .route("/admin/credits", web::post().to(admin_credit_handler))
