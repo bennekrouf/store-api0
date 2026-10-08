@@ -47,6 +47,7 @@ fn product_name(product: &str, edition: &str) -> Option<&'static str> {
     match (product, edition) {
         ("splitter", "pro") => Some("Splitter Pro"),
         ("gitagent", "pro") => Some("GitAgent Pro"),
+        ("spreadwatch", "pro") => Some("Spreadwatch Pro"),
         _ => None,
     }
 }
@@ -59,6 +60,9 @@ fn activation_html(product: &str) -> &'static str {
              (in versions before 0.1.14, click the <strong>Splitter</strong> name there), then paste the key in."
         }
         "gitagent" => "open GitAgent, click <strong>Get Pro…</strong> in the top bar and paste the key in.",
+        "spreadwatch" => {
+            "open Spreadwatch, click <strong>Get Pro…</strong> at the right of the tab bar and paste the key in."
+        }
         _ => "open the app and paste the key into its licence window.",
     }
 }
@@ -451,6 +455,9 @@ mod tests {
         assert_eq!(product_name("gitagent", "pro"), Some("GitAgent Pro"));
         assert_eq!(product_name("splitter", "free"), None);
         assert!(activation_html("gitagent").contains("top bar"));
+        assert_eq!(product_name("spreadwatch", "pro"), Some("Spreadwatch Pro"));
+        assert!(activation_html("spreadwatch").contains("tab bar"));
+        assert_eq!(price_env("spreadwatch", "pro"), "LICENSE_PRICE_SPREADWATCH_PRO");
         assert_eq!(price_env("splitter", "pro"), "LICENSE_PRICE_SPLITTER_PRO");
     }
 
