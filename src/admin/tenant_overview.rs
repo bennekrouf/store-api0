@@ -127,7 +127,7 @@ fn diagnose(t: &TenantFacts, leaks: &[serde_json::Value]) -> Vec<serde_json::Val
         let mut hosts: Vec<&str> = leaks.iter().filter_map(|l| l["host"].as_str()).collect();
         let mut seen = HashSet::new();
         hosts.retain(|h| seen.insert(*h));
-        let mut sample: Vec<&str> = leaks.iter().take(3).filter_map(|l| l["tool"].as_str()).collect();
+        let sample: Vec<&str> = leaks.iter().take(3).filter_map(|l| l["tool"].as_str()).collect();
         let more = if leaks.len() > 3 { format!(", +{} more", leaks.len() - 3) } else { String::new() };
         push(
             "risk",

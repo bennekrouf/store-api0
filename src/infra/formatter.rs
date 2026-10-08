@@ -1,3 +1,4 @@
+use crate::admin::model_config::UploaderLlm;
 use graflog::{app_log, app_span};
 use reqwest::multipart::{Form, Part};
 use std::error::Error;
@@ -7,6 +8,19 @@ use tempfile::NamedTempFile;
 #[derive(Clone)]
 pub struct YamlFormatter {
     formatter_url: String,
+}
+
+/// The provider, model and key go with the file, so the uploader formats with
+/// what the super admin chose in the dashboard and needs no key of its own.
+/// Fields come before the file: the uploader reads them in order.
+fn form_with(llm: &UploaderLlm, part: Part) -> Form {
+    let mut form = Form::new()
+        .text("provider", llm.provider.clone())
+        .text("model", llm.model.clone());
+    if let Some(key) = &llm.api_key {
+        form = form.text("api_key", key.clone());
+    }
+    form.part("file", part)
 }
 
 impl YamlFormatter {
@@ -28,6 +42,7 @@ impl YamlFormatter {
         &self,
         content: &[u8],
         filename: &str,
+        llm: &UploaderLlm,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         app_span!(
             "format_yaml_file",
@@ -44,7 +59,7 @@ impl YamlFormatter {
         // Create a multipart form with the content directly
         let part = Part::bytes(content.to_vec()).file_name(filename.to_string());
 
-        let form = Form::new().part("file", part);
+        let form = form_with(llm, part);
         // Send the request to the formatter service
         let client = reqwest::Client::new();
         let response = client
@@ -74,6 +89,7 @@ impl YamlFormatter {
         &self,
         content: &[u8],
         filename: &str,
+        llm: &UploaderLlm,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         app_span!(
             "format_reference_data",
@@ -82,8 +98,8 @@ impl YamlFormatter {
         );
 
         let part = Part::bytes(content.to_vec()).file_name(filename.to_string());
-        let form = Form::new().part("file", part);
-        
+        let form = form_with(llm, part);
+
         // Construct the URL for reference data formatting
         // Assuming the formatter_url is something like "http://localhost:6666/format-yaml"
         // We need to change the endpoint to "/format-reference-data"

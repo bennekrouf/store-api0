@@ -1,30 +1,31 @@
 // src/admin/model_config.rs
 //
-// Admin endpoints for managing AI model configuration.
+// The AI provider and model behind the YAML import (the ai-uploader service).
 //
 //   GET  /api/admin/config/models  — requires X-Internal-Secret (gateway-facing)
 //   PUT  /api/admin/config/models  — requires X-Internal-Secret (gateway-facing)
 //   GET  /api/system/ai-config     — no auth (internal network, read-only, for ai-uploader)
+//
+// The gateway restricts the admin routes to the super admin. API keys are the
+// shared ones in assistant_config.rs, set in the dashboard: the store hands the
+// chosen provider, model and key to the uploader with every request
+// (`uploader_llm`), so the uploader's host needs no key of its own. A key in the
+// uploader's environment still works, as a fallback.
 
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
-const VALID_PROVIDERS: &[&str] = &["cohere", "deepseek", "claude"];
+// DeepSeek is the default; Mistral the alternative.
+const VALID_PROVIDERS: &[&str] = &["deepseek", "mistral"];
 
-const VALID_COHERE_MODELS: &[&str] = &[
-    "command-r7b-12-2024",
-    "command-r-08-2024",
-    "command-a-03-2025",
-];
 const VALID_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"];
-const VALID_CLAUDE_MODELS: &[&str] = &[
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4-7",
-];
+const VALID_MISTRAL_MODELS: &[&str] = &["mistral-medium-latest"];
+
+const DEFAULT_PROVIDER: &str = "deepseek";
+const DEFAULT_MODEL: &str = "deepseek-chat";
 
 fn check_internal_secret(req: &HttpRequest) -> bool {
     let expected = match std::env::var("API0_INTERNAL_SECRET") {
@@ -38,10 +39,14 @@ fn check_internal_secret(req: &HttpRequest) -> bool {
         .unwrap_or(false)
 }
 
-async fn read_ai_config(store: &EndpointStore) -> (String, String) {
+fn default_ai_config() -> (String, String) {
+    (DEFAULT_PROVIDER.into(), DEFAULT_MODEL.into())
+}
+
+pub(crate) async fn read_ai_config(store: &EndpointStore) -> (String, String) {
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
-        Err(_) => return ("cohere".into(), "command-r7b-12-2024".into()),
+        Err(_) => return default_ai_config(),
     };
     let rows = match client
         .query(
@@ -51,11 +56,11 @@ async fn read_ai_config(store: &EndpointStore) -> (String, String) {
         .await
     {
         Ok(r) => r,
-        Err(_) => return ("cohere".into(), "command-r7b-12-2024".into()),
+        Err(_) => return default_ai_config(),
     };
 
-    let mut provider = "cohere".to_string();
-    let mut model = "command-r7b-12-2024".to_string();
+    let mut provider = DEFAULT_PROVIDER.to_string();
+    let mut model = DEFAULT_MODEL.to_string();
     for row in rows {
         let key: &str = row.get(0);
         let value: &str = row.get(1);
@@ -65,23 +70,41 @@ async fn read_ai_config(store: &EndpointStore) -> (String, String) {
             _ => {}
         }
     }
+    // A provider saved before Cohere and Claude were dropped falls back to the
+    // default rather than handing the uploader a model nobody serves.
+    if !VALID_PROVIDERS.contains(&provider.as_str()) {
+        return default_ai_config();
+    }
     (provider, model)
 }
 
-#[derive(Debug, Serialize)]
-pub struct ModelConfigResponse {
-    pub success: bool,
-    pub config: ModelConfigEntry,
-    pub available_models: serde_json::Value,
-    /// Providers this server has an API key for. `null` when the uploader could
-    /// not be reached — which the dashboard must treat as "unknown", not "none".
-    pub usable_providers: Option<Vec<String>>,
+fn models_for(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "deepseek" => VALID_DEEPSEEK_MODELS,
+        "mistral" => VALID_MISTRAL_MODELS,
+        _ => &[],
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ModelConfigEntry {
+/// What the uploader is to use for one request. `api_key` is `None` when the
+/// super admin has not set one in the dashboard; the uploader then falls back
+/// to its own environment.
+pub struct UploaderLlm {
     pub provider: String,
     pub model: String,
+    pub api_key: Option<String>,
+}
+
+pub async fn uploader_llm(store: &EndpointStore) -> UploaderLlm {
+    let (provider, model) = read_ai_config(store).await;
+    let api_key = match crate::admin::assistant_config::api_key(store, &provider).await {
+        Ok(k) => k,
+        Err(e) => {
+            app_log!(error, error = %e, provider = %provider, "Could not read the YAML import's API key");
+            None
+        }
+    };
+    UploaderLlm { provider, model, api_key }
 }
 
 pub async fn get_model_config(
@@ -93,33 +116,54 @@ pub async fn get_model_config(
             .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
     }
     let (provider, model) = read_ai_config(&store).await;
-    // None when the uploader could not be reached; the panel then shows every
-    // provider rather than wrongly claiming none work.
-    let usable = usable_providers().await;
-    HttpResponse::Ok().json(ModelConfigResponse {
-        success: true,
-        config: ModelConfigEntry { provider, model },
-        available_models: serde_json::json!({
-            "cohere": VALID_COHERE_MODELS,
-            "deepseek": VALID_DEEPSEEK_MODELS,
-            "claude": VALID_CLAUDE_MODELS,
-        }),
-        usable_providers: usable,
-    })
+    let in_dashboard = match crate::admin::assistant_config::providers_with_key(&store).await {
+        Ok(k) => k,
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read the AI provider keys");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "Could not read the configuration"}));
+        }
+    };
+    // Keys still in the uploader's environment. None when it cannot be asked —
+    // then only the dashboard's keys count.
+    let on_server = usable_providers().await.unwrap_or_default();
+    let providers: Vec<serde_json::Value> = VALID_PROVIDERS
+        .iter()
+        .map(|id| {
+            let label = crate::admin::assistant_config::provider(id).map_or(*id, |p| p.label);
+            let key_source = if in_dashboard.iter().any(|k| k == id) {
+                Some("dashboard")
+            } else if on_server.iter().any(|k| k == id) {
+                Some("server")
+            } else {
+                None
+            };
+            serde_json::json!({
+                "id": id,
+                "label": label,
+                "models": models_for(id),
+                "key_set": key_source.is_some(),
+                "key_source": key_source,
+            })
+        })
+        .collect();
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "provider": provider,
+        "model": model,
+        "providers": providers,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateModelConfigRequest {
-    pub provider: Option<String>,
-    pub model: Option<String>,
+    pub provider: String,
+    pub model: String,
 }
 
-/// Which providers the uploader can actually serve on this deployment.
-///
-/// The API keys are in the uploader's environment and nowhere else, so it is the
-/// only component that can answer. A failure to reach it returns None, and the
-/// caller treats that as "cannot verify" rather than "cannot use" — a health
-/// blip should not block an administrator from changing a setting.
+/// Which providers have a key in the uploader's own environment — the way
+/// keys were given before they could be set in the dashboard. None when the
+/// uploader could not be reached.
 async fn usable_providers() -> Option<Vec<String>> {
     let url = std::env::var("AI_UPLOADER_URL").ok()?;
     let client = reqwest::Client::builder()
@@ -155,6 +199,26 @@ pub async fn update_model_config(
         return HttpResponse::Unauthorized()
             .json(serde_json::json!({"success": false, "error": "Unauthorized"}));
     }
+    let bad = |msg: String| HttpResponse::BadRequest().json(serde_json::json!({"success": false, "error": msg}));
+
+    if !VALID_PROVIDERS.contains(&body.provider.as_str()) {
+        return bad(format!("Unknown provider '{}'. Valid: {}", body.provider, VALID_PROVIDERS.join(", ")));
+    }
+    let models = models_for(&body.provider);
+    if !models.contains(&body.model.as_str()) {
+        return bad(format!("'{}' is not a {} model: {}", body.model, body.provider, models.join(", ")));
+    }
+
+    // A provider without a key saves fine and then fails every import, in a
+    // log nobody reads — so it is refused here.
+    let in_dashboard = crate::admin::assistant_config::providers_with_key(&store)
+        .await
+        .unwrap_or_default()
+        .contains(&body.provider);
+    if !in_dashboard && !usable_providers().await.unwrap_or_default().contains(&body.provider) {
+        app_log!(warn, provider = %body.provider, "Refused a YAML import provider with no API key");
+        return bad(format!("Add a {} API key before choosing it", body.provider));
+    }
 
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
@@ -164,87 +228,29 @@ pub async fn update_model_config(
                 .json(serde_json::json!({"success": false, "error": "Database error"}));
         }
     };
-
-    if let Some(ref provider) = body.provider {
-        if !VALID_PROVIDERS.contains(&provider.as_str()) {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "success": false,
-                "error": format!("Invalid provider '{}'. Valid: {:?}", provider, VALID_PROVIDERS),
-            }));
-        }
-
-        // Being in VALID_PROVIDERS says the uploader has code for it. It does not
-        // say this machine has a key. Saving one without a key is how the whole
-        // AI import path came to be broken since July with nothing on screen to
-        // say so, so it is refused here rather than discovered in a log.
-        if let Some(usable) = usable_providers().await {
-            if !usable.iter().any(|p| p == provider) {
-                app_log!(warn, provider = %provider, "Refused a provider with no API key configured");
-                return HttpResponse::BadRequest().json(serde_json::json!({
-                    "success": false,
-                    "error": format!(
-                        "'{}' has no API key on this server. Set its key in the uploader's environment first. Available now: {}",
-                        provider,
-                        if usable.is_empty() { "none".to_string() } else { usable.join(", ") }
-                    ),
-                }));
-            }
-        }
+    for (key, value) in [("ai_uploader.provider", &body.provider), ("ai_uploader.model", &body.model)] {
         if let Err(e) = client
             .execute(
                 "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
-                &[&"ai_uploader.provider", provider],
+                &[&key, value],
             )
             .await
         {
-            app_log!(error, "Failed to update provider: {}", e);
+            app_log!(error, "Failed to update {}: {}", key, e);
             return HttpResponse::InternalServerError()
                 .json(serde_json::json!({"success": false, "error": "Update failed"}));
         }
     }
 
-    if let Some(ref model) = body.model {
-        let valid_for_provider = match body.provider.as_deref() {
-            Some("deepseek") => VALID_DEEPSEEK_MODELS,
-            Some("claude") => VALID_CLAUDE_MODELS,
-            Some("cohere") => VALID_COHERE_MODELS,
-            _ => &[], // no provider in request — skip model validation
-        };
-        if !valid_for_provider.is_empty() && !valid_for_provider.contains(&model.as_str()) {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "success": false,
-                "error": format!("Invalid model '{}'. Valid: {:?}", model, valid_for_provider),
-            }));
-        }
-        if let Err(e) = client
-            .execute(
-                "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
-                &[&"ai_uploader.model", model],
-            )
-            .await
-        {
-            app_log!(error, "Failed to update model: {}", e);
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"success": false, "error": "Update failed"}));
-        }
-    }
-
-    app_log!(
-        info,
-        provider = ?body.provider, model = ?body.model,
-        "Admin updated AI model config"
-    );
-    HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Updated"}))
+    app_log!(info, provider = %body.provider, model = %body.model, "YAML import provider changed");
+    HttpResponse::Ok().json(serde_json::json!({"success": true, "provider": body.provider, "model": body.model}))
 }
 
-// Public read-only endpoint for internal services (ai-uploader, no auth).
+// Public read-only endpoint for internal services (ai-uploader, no auth). Never
+// carries a key: the store sends that with each formatting request.
 pub async fn get_ai_config_public(store: web::Data<Arc<EndpointStore>>) -> impl Responder {
     let (provider, model) = read_ai_config(&store).await;
-    // None when the uploader could not be reached; the panel then shows every
-    // provider rather than wrongly claiming none work.
-    let usable = usable_providers().await;
     HttpResponse::Ok().json(serde_json::json!({
         "provider": provider,
         "model": model,
