@@ -588,7 +588,82 @@ pub async fn resync_tenant_tools(store: &EndpointStore, tenant_id: &str) {
     }
 }
 
+/// Schema keyword carrying a parameter's name on the wire, when the argument the
+/// model sees had to be renamed. The gateway maps it back and strips it from
+/// `tools/list`.
+pub const WIRE_NAME_KEY: &str = "x-api0-name";
+
+/// Longest property name MCP clients accept.
+const MAX_ARG_NAME: usize = 64;
+
+fn is_arg_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+fn is_valid_arg_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= MAX_ARG_NAME && name.chars().all(is_arg_name_char)
+}
+
+/// The argument name a client will accept for a parameter's real name.
+///
+/// MCP clients take property names matching `[A-Za-z0-9_.-]{1,64}`, but plenty of
+/// APIs name their parameters otherwise: OData's `$filter`/`$top`, JSON:API's
+/// `filter[status]`. Each run of other characters becomes one `_`, then the
+/// edges are trimmed: `$filter` → `filter`, `page[size]` → `page_size`.
+fn safe_arg_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if is_arg_name_char(c) {
+            out.push(c);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let mut out = out.trim_matches('_').to_string();
+    out.truncate(MAX_ARG_NAME);
+    if out.is_empty() {
+        "param".to_string()
+    } else {
+        out
+    }
+}
+
+/// Argument names for `params`, in order. Names that are already valid keep
+/// their spelling; the rest are made safe, with a numeric suffix when that
+/// collides — `filter` and `$filter` on one endpoint become `filter`, `filter_2`.
+fn arg_names(params: &[crate::endpoint_store::models::Parameter]) -> Vec<String> {
+    let mut taken: std::collections::HashSet<String> = params
+        .iter()
+        .filter(|p| is_valid_arg_name(&p.name))
+        .map(|p| p.name.clone())
+        .collect();
+
+    params
+        .iter()
+        .map(|p| {
+            if is_valid_arg_name(&p.name) {
+                return p.name.clone();
+            }
+            let base = safe_arg_name(&p.name);
+            let mut candidate = base.clone();
+            let mut n = 2;
+            while taken.contains(&candidate) {
+                let suffix = format!("_{}", n);
+                let mut stem = base.clone();
+                stem.truncate(MAX_ARG_NAME - suffix.len());
+                candidate = format!("{}{}", stem, suffix);
+                n += 1;
+            }
+            taken.insert(candidate.clone());
+            candidate
+        })
+        .collect()
+}
+
 /// Build a minimal JSON Schema from a list of endpoint parameters.
+///
+/// A parameter whose name a client would reject is exposed under a safe
+/// argument name, its real one kept under [`WIRE_NAME_KEY`].
 fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> String {
     if params.is_empty() {
         return r#"{"type":"object","properties":{}}"#.to_string();
@@ -597,7 +672,7 @@ fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> St
     let mut properties = serde_json::Map::new();
     let mut required: Vec<serde_json::Value> = Vec::new();
 
-    for p in params {
+    for (p, arg_name) in params.iter().zip(arg_names(params)) {
         let mut prop = serde_json::Map::new();
         prop.insert("type".into(), serde_json::Value::String("string".into()));
         if !p.description.is_empty() {
@@ -618,11 +693,13 @@ fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> St
                 ),
             );
         }
-        properties.insert(p.name.clone(), serde_json::Value::Object(prop));
-
-        if p.required == "true" {
-            required.push(serde_json::Value::String(p.name.clone()));
+        if arg_name != p.name {
+            prop.insert(WIRE_NAME_KEY.into(), serde_json::Value::String(p.name.clone()));
         }
+        if p.required == "true" {
+            required.push(serde_json::Value::String(arg_name.clone()));
+        }
+        properties.insert(arg_name, serde_json::Value::Object(prop));
     }
 
     let schema = if required.is_empty() {
@@ -675,5 +752,61 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
         is_active:        row.get(13),
         created_at:       row.get::<_, chrono::DateTime<Utc>>(14).to_rfc3339(),
         updated_at:       row.get::<_, chrono::DateTime<Utc>>(15).to_rfc3339(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::endpoint_store::models::Parameter;
+
+    fn param(name: &str, required: bool) -> Parameter {
+        Parameter {
+            name: name.into(),
+            description: String::new(),
+            required: required.to_string(),
+            alternatives: vec![],
+        }
+    }
+
+    fn schema(params: &[Parameter]) -> serde_json::Value {
+        serde_json::from_str(&build_input_schema(params)).unwrap()
+    }
+
+    #[test]
+    fn a_valid_name_is_exposed_unchanged_with_no_wire_name() {
+        let s = schema(&[param("user_id", true)]);
+        assert!(s["properties"]["user_id"].get(WIRE_NAME_KEY).is_none());
+        assert_eq!(s["required"], serde_json::json!(["user_id"]));
+    }
+
+    #[test]
+    fn an_odata_option_is_renamed_and_keeps_its_wire_name() {
+        let s = schema(&[param("$filter", true), param("$top", false)]);
+        assert_eq!(s["properties"]["filter"][WIRE_NAME_KEY], "$filter");
+        assert_eq!(s["properties"]["top"][WIRE_NAME_KEY], "$top");
+        assert!(s["properties"].get("$filter").is_none());
+        assert_eq!(s["required"], serde_json::json!(["filter"]));
+    }
+
+    #[test]
+    fn bracketed_names_collapse_to_underscores() {
+        assert_eq!(safe_arg_name("filter[status]"), "filter_status");
+        assert_eq!(safe_arg_name("page[size]"), "page_size");
+        assert_eq!(safe_arg_name("$$$"), "param");
+    }
+
+    #[test]
+    fn a_rename_never_takes_an_existing_parameters_name() {
+        let names = arg_names(&[param("$filter", false), param("filter", false)]);
+        assert_eq!(names, vec!["filter_2".to_string(), "filter".to_string()]);
+    }
+
+    #[test]
+    fn long_names_are_cut_to_what_clients_accept() {
+        let long = format!("${}", "a".repeat(80));
+        let names = arg_names(&[param(&long, false)]);
+        assert_eq!(names[0].len(), MAX_ARG_NAME);
+        assert!(is_valid_arg_name(&names[0]));
     }
 }
