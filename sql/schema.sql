@@ -432,9 +432,20 @@ CREATE TABLE IF NOT EXISTS assistant_llm_keys (
 
 -- Default AI uploader config (idempotent)
 INSERT INTO system_config (key, value) VALUES
-    ('ai_uploader.provider', 'cohere'),
-    ('ai_uploader.model',    'command-r7b-12-2024')
+    ('ai_uploader.provider', 'deepseek'),
+    ('ai_uploader.model',    'deepseek-chat')
 ON CONFLICT (key) DO NOTHING;
+
+-- Cohere and Claude were dropped (DeepSeek default, Mistral alternative): move a
+-- deployment still on either to the default.
+UPDATE system_config SET value = 'deepseek', updated_at = NOW()
+ WHERE key = 'ai_uploader.provider' AND value IN ('cohere', 'claude');
+UPDATE system_config SET value = 'deepseek-chat', updated_at = NOW()
+ WHERE key = 'ai_uploader.model' AND (value LIKE 'command-%' OR value LIKE 'claude-%');
+UPDATE system_config SET value = 'deepseek', updated_at = NOW()
+ WHERE key = 'assistant.provider' AND value = 'claude';
+UPDATE system_config SET value = 'deepseek-chat', updated_at = NOW()
+ WHERE key = 'assistant.model' AND value LIKE 'claude-%';
 
 -- ── Platform-level user roles ───────────────────────────────────────────────
 -- Roles: super_admin, admin, user (default)

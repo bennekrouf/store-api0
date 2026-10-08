@@ -3,6 +3,10 @@
 // The AI provider behind the messaging assistant (Telegram, WhatsApp): one
 // platform-wide setting the super admin chooses, used for every workspace.
 //
+// The provider API keys kept here are api0's, shared by every AI feature: the
+// YAML import (model_config.rs) reads them too, so a key is entered once, in
+// the dashboard, and never in a server's environment.
+//
 //   GET    /api/admin/config/assistant               provider, model, which keys are set
 //   PUT    /api/admin/config/assistant               { provider?, model? }
 //   PUT    /api/admin/config/assistant/keys/{prov}   { api_key }
@@ -14,8 +18,9 @@
 // returned by an admin route — only "set" or "not set". The bridge's internal
 // read is the one place a key leaves, decrypted, on the internal network.
 //
-// Every provider here speaks Anthropic's Messages API (DeepSeek through its
-// Anthropic-compatible endpoint), so the bridge needs one client, not one each.
+// Every provider here speaks the OpenAI-style chat-completions API, tool calls
+// included, at `{base_url}/v1/chat/completions` — so the bridge needs one
+// client, not one each. DeepSeek is the default; Mistral the alternative.
 
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
@@ -30,29 +35,29 @@ use std::sync::Arc;
 const KEY_TENANT: &str = "platform";
 const KEY_PURPOSE: &str = "assistant_llm_key";
 
-struct Provider {
-    id: &'static str,
-    label: &'static str,
+pub(crate) struct Provider {
+    pub id: &'static str,
+    pub label: &'static str,
     base_url: &'static str,
     models: &'static [&'static str],
 }
 
-const PROVIDERS: &[Provider] = &[
-    Provider {
-        id: "claude",
-        label: "Anthropic Claude",
-        base_url: "https://api.anthropic.com",
-        models: &["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-7"],
-    },
+pub(crate) const PROVIDERS: &[Provider] = &[
     Provider {
         id: "deepseek",
         label: "DeepSeek",
-        base_url: "https://api.deepseek.com/anthropic",
+        base_url: "https://api.deepseek.com",
         models: &["deepseek-chat", "deepseek-reasoner"],
+    },
+    Provider {
+        id: "mistral",
+        label: "Mistral",
+        base_url: "https://api.mistral.ai",
+        models: &["mistral-medium-latest"],
     },
 ];
 
-fn provider(id: &str) -> Option<&'static Provider> {
+pub(crate) fn provider(id: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
@@ -77,7 +82,7 @@ async fn read_choice(store: &EndpointStore) -> Result<Option<(String, String)>, 
     Ok(prov.zip(model))
 }
 
-async fn providers_with_key(store: &EndpointStore) -> Result<Vec<String>, String> {
+pub(crate) async fn providers_with_key(store: &EndpointStore) -> Result<Vec<String>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     Ok(client
         .query("SELECT provider FROM assistant_llm_keys ORDER BY provider", &[])
@@ -86,6 +91,21 @@ async fn providers_with_key(store: &EndpointStore) -> Result<Vec<String>, String
         .iter()
         .map(|r| r.get(0))
         .collect())
+}
+
+/// A provider's API key, decrypted, or `None` when the super admin has not set
+/// one. Only ever handed to an internal service — never to an admin route.
+pub(crate) async fn api_key(store: &EndpointStore, provider: &str) -> Result<Option<String>, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let sealed: Option<Vec<u8>> = client
+        .query_opt("SELECT key_enc FROM assistant_llm_keys WHERE provider = $1", &[&provider])
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|r| r.get(0));
+    sealed
+        .map(|s| secret_box::open(&s, &SecretContext { tenant_id: KEY_TENANT, purpose: KEY_PURPOSE }))
+        .transpose()
+        .map_err(|e| format!("could not decrypt the {} key: {}", provider, e))
 }
 
 fn error(status: actix_web::http::StatusCode, msg: impl Into<String>) -> HttpResponse {
@@ -249,14 +269,21 @@ pub async fn delete_assistant_key(
         return deny;
     }
     let id = path.into_inner();
-    // The active provider's key cannot be removed: that would stop every bot.
+    // A key in use cannot be removed: that would stop every bot, or every
+    // AI-assisted import.
     if let Ok(Some((active, _))) = read_choice(&store).await {
         if active == id {
             return error(
                 actix_web::http::StatusCode::BAD_REQUEST,
-                "This provider is in use — choose another one before removing its key",
+                "The messaging assistant uses this provider — choose another one there before removing its key",
             );
         }
+    }
+    if crate::admin::model_config::read_ai_config(&store).await.0 == id {
+        return error(
+            actix_web::http::StatusCode::BAD_REQUEST,
+            "The YAML import uses this provider — choose another one there before removing its key",
+        );
     }
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
@@ -290,28 +317,12 @@ pub async fn internal_assistant_config(req: HttpRequest, store: web::Data<Arc<En
     let Some(p) = provider(&id) else {
         return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false }));
     };
-    let client = match store.get_admin_conn().await {
-        Ok(c) => c,
-        Err(_) => return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Database unavailable"),
-    };
-    let sealed: Option<Vec<u8>> = match client
-        .query_opt("SELECT key_enc FROM assistant_llm_keys WHERE provider = $1", &[&p.id])
-        .await
-    {
-        Ok(row) => row.map(|r| r.get(0)),
+    let api_key = match api_key(&store, p.id).await {
+        Ok(Some(k)) => k,
+        Ok(None) => return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false })),
         Err(e) => {
-            app_log!(error, error = %e, "Could not read an assistant API key");
+            app_log!(error, error = %e, "Could not read the assistant API key");
             return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the key");
-        }
-    };
-    let Some(sealed) = sealed else {
-        return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false }));
-    };
-    let api_key = match secret_box::open(&sealed, &SecretContext { tenant_id: KEY_TENANT, purpose: KEY_PURPOSE }) {
-        Ok(k) => k,
-        Err(e) => {
-            app_log!(error, error = %e, "Could not decrypt the assistant API key");
-            return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not decrypt the key");
         }
     };
     HttpResponse::Ok().json(serde_json::json!({
@@ -329,12 +340,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_provider_has_models_and_an_anthropic_style_endpoint() {
+    fn deepseek_and_mistral_are_the_only_providers() {
         for p in PROVIDERS {
             assert!(!p.models.is_empty(), "{} has no models", p.id);
             assert!(p.base_url.starts_with("https://"), "{} base_url", p.id);
         }
-        assert!(provider("deepseek").is_some());
+        assert_eq!(PROVIDERS[0].id, "deepseek", "the first provider is the default");
+        assert!(provider("mistral").is_some());
+        assert!(provider("claude").is_none());
         assert!(provider("openai").is_none());
     }
 }

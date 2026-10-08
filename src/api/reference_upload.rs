@@ -119,7 +119,11 @@ pub async fn upload_reference_data(
 
     // Call ai-uploader to format/extract data
     let formatted_bytes = match formatter
-        .format_reference_data(&file_bytes, &upload_data.file_name)
+        .format_reference_data(
+            &file_bytes,
+            &upload_data.file_name,
+            &crate::admin::model_config::uploader_llm(&store).await,
+        )
         .await
     {
         Ok(bytes) => bytes,

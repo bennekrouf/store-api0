@@ -162,7 +162,7 @@ pub async fn upload_api_config(
 
     // Format the content if it's YAML and formatter is available.
     // Skip AI formatting when the content is already in api0 format, because the
-    // Cohere model has a limited output-token budget and will truncate large specs,
+    // AI model has a limited output-token budget and will truncate large specs,
     // leaving only a partial set of endpoints in the database.
     let already_in_api0_format = is_already_api0_format(&file_content);
 
@@ -172,7 +172,11 @@ pub async fn upload_api_config(
                 || upload_data.file_name.ends_with(".yml"))
         {
             match formatter
-                .format_yaml(file_content.as_bytes(), &upload_data.file_name)
+                .format_yaml(
+                    file_content.as_bytes(),
+                    &upload_data.file_name,
+                    &crate::admin::model_config::uploader_llm(&store).await,
+                )
                 .await
             {
                 Ok(formatted) => match String::from_utf8(formatted) {
