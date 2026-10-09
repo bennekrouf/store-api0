@@ -47,6 +47,7 @@ fn product_name(product: &str, edition: &str) -> Option<&'static str> {
     match (product, edition) {
         ("splitter", "pro") => Some("Splitter Pro"),
         ("gitagent", "pro") => Some("GitAgent Pro"),
+        ("small-video", "pro") => Some("Small Video Pro"),
         ("spreadwatch", "pro") => Some("Spreadwatch Pro"),
         _ => None,
     }
@@ -60,6 +61,7 @@ fn activation_html(product: &str) -> &'static str {
              (in versions before 0.1.14, click the <strong>Splitter</strong> name there), then paste the key in."
         }
         "gitagent" => "open GitAgent, click <strong>Get Pro…</strong> in the top bar and paste the key in.",
+        "small-video" => "open Small Video, click <strong>Get Pro…</strong> in the sidebar and paste the key in.",
         "spreadwatch" => {
             "open Spreadwatch, click <strong>Get Pro…</strong> at the right of the tab bar and paste the key in."
         }
@@ -67,8 +69,11 @@ fn activation_html(product: &str) -> &'static str {
     }
 }
 
+/// `small-video` → `SMALL_VIDEO`: the name has to be a valid shell variable,
+/// since store.env is read with `source`.
 fn price_env(product: &str, edition: &str) -> String {
-    format!("LICENSE_PRICE_{}_{}", product.to_uppercase(), edition.to_uppercase())
+    let var = |s: &str| s.to_uppercase().replace('-', "_");
+    format!("LICENSE_PRICE_{}_{}", var(product), var(edition))
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -459,6 +464,8 @@ mod tests {
         assert!(activation_html("spreadwatch").contains("tab bar"));
         assert_eq!(price_env("spreadwatch", "pro"), "LICENSE_PRICE_SPREADWATCH_PRO");
         assert_eq!(price_env("splitter", "pro"), "LICENSE_PRICE_SPLITTER_PRO");
+        assert_eq!(product_name("small-video", "pro"), Some("Small Video Pro"));
+        assert_eq!(price_env("small-video", "pro"), "LICENSE_PRICE_SMALL_VIDEO_PRO");
     }
 
     /// `TEST_DATABASE_URL=postgres://… cargo test -- --ignored license_db`
