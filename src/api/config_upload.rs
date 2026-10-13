@@ -95,6 +95,19 @@ fn is_already_api0_format(content: &str) -> bool {
         .is_some()
 }
 
+/// Identity of an endpoint for duplicate detection: its verb and full URL.
+///
+/// The verb is part of it because `GET /users` and `POST /users` are distinct
+/// operations on the same URL. Trailing slashes and case are ignored, so
+/// `https://API.x.com/` + `users/` matches `https://api.x.com` + `/users`.
+fn endpoint_url_key(verb: &str, base: &str, path: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    let path = path.trim().trim_matches('/');
+    format!("{} {}/{}", verb.trim(), base, path)
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
 pub async fn upload_api_config(
     store: web::Data<Arc<EndpointStore>>,
     formatter: web::Data<Arc<YamlFormatter>>,
@@ -132,6 +145,7 @@ pub async fn upload_api_config(
                 message: format!("Invalid file content: {}", e),
                 imported_count: 0,
                 group_count: 0,
+                duplicates_skipped: 0,
             });
         }
     };
@@ -152,6 +166,7 @@ pub async fn upload_api_config(
                     message: "File content is empty or not valid text".to_string(),
                     imported_count: 0,
                     group_count: 0,
+                    duplicates_skipped: 0,
                 });
             }
 
@@ -229,6 +244,7 @@ pub async fn upload_api_config(
                         message: format!("Invalid YAML format: {}", e),
                         imported_count: 0,
                         group_count: 0,
+                        duplicates_skipped: 0,
                     });
                 }
             }
@@ -246,6 +262,7 @@ pub async fn upload_api_config(
                         message: format!("Invalid JSON format: {}", e),
                         imported_count: 0,
                         group_count: 0,
+                        duplicates_skipped: 0,
                     });
                 }
             }
@@ -257,6 +274,7 @@ pub async fn upload_api_config(
                     .to_string(),
             imported_count: 0,
             group_count: 0,
+            duplicates_skipped: 0,
         });
         };
 
@@ -268,11 +286,17 @@ pub async fn upload_api_config(
             message: "No API groups found in the file".to_string(),
             imported_count: 0,
             group_count: 0,
+            duplicates_skipped: 0,
         });
     }
 
     // Process groups and endpoints
     let mut processed_groups = Vec::new();
+    // The import replaces the workspace's endpoints, so a duplicate can only come
+    // from the payload itself — typically the LLM formatter emitting the same
+    // operation twice, or under two groups. The first occurrence wins.
+    let mut seen_urls = std::collections::HashSet::new();
+    let mut duplicate_count = 0;
     for mut group in api_storage.api_groups {
         // Generate ID for group if missing
         if group.group.id.trim().is_empty() {
@@ -302,6 +326,19 @@ pub async fn upload_api_config(
             // repeating it on every endpoint.
             if endpoint.forward_identity.is_none() {
                 endpoint.forward_identity = group.group.forward_identity;
+            }
+
+            let key = endpoint_url_key(&endpoint.verb, &endpoint.base, &endpoint.path);
+            if !seen_urls.insert(key) {
+                app_log!(info,
+                    verb = %endpoint.verb,
+                    base = %endpoint.base,
+                    path = %endpoint.path,
+                    endpoint_id = %endpoint.id,
+                    "Skipping duplicate endpoint URL in import"
+                );
+                duplicate_count += 1;
+                continue;
             }
 
             endpoint.group_id = group.group.id.clone();
@@ -375,12 +412,20 @@ pub async fn upload_api_config(
 
             HttpResponse::Ok().json(UploadResponse {
                 success: true,
-                message: format!(
-                    "API groups and endpoints successfully imported ({} MCP tools synced)",
-                    synced
-                ),
+                message: if duplicate_count > 0 {
+                    format!(
+                        "API groups and endpoints successfully imported ({} MCP tools synced, {} duplicate endpoint URLs skipped)",
+                        synced, duplicate_count
+                    )
+                } else {
+                    format!(
+                        "API groups and endpoints successfully imported ({} MCP tools synced)",
+                        synced
+                    )
+                },
                 imported_count: endpoint_count as i32,
                 group_count: group_count as i32,
+                duplicates_skipped: duplicate_count,
             })
         }
         Err(e) => {
@@ -401,7 +446,37 @@ pub async fn upload_api_config(
                 message: format!("Failed to import API groups: {}", e),
                 imported_count: 0,
                 group_count: 0,
+                duplicates_skipped: 0,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endpoint_url_key;
+
+    #[test]
+    fn same_url_with_slash_and_case_differences_collides() {
+        assert_eq!(
+            endpoint_url_key("GET", "https://API.x.com/", "users/"),
+            endpoint_url_key("get", "https://api.x.com", "/users"),
+        );
+    }
+
+    #[test]
+    fn different_verbs_on_same_url_are_distinct() {
+        assert_ne!(
+            endpoint_url_key("GET", "https://api.x.com", "/users"),
+            endpoint_url_key("POST", "https://api.x.com", "/users"),
+        );
+    }
+
+    #[test]
+    fn root_path_matches_bare_base() {
+        assert_eq!(
+            endpoint_url_key("GET", "https://api.x.com", "/"),
+            endpoint_url_key("GET", "https://api.x.com/", ""),
+        );
     }
 }
