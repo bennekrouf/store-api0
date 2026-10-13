@@ -101,6 +101,7 @@ pub async fn validate_api_key(
             tenant_id: None,
             provider_tenant_id: None,
             message: "No API key provided".to_string(),
+            ..Default::default()
         });
     }
 
@@ -116,6 +117,7 @@ pub async fn validate_api_key(
             tenant_id: None,
             provider_tenant_id: None,
             message: "Too many validation attempts — try again later".to_string(),
+            ..Default::default()
         });
     }
 
@@ -138,6 +140,7 @@ pub async fn validate_api_key(
                 tenant_id: Some(tenant_id),
                 provider_tenant_id,
                 message: "API key is valid".to_string(),
+                ..Default::default()
             })
         }
         Ok(None) => {
@@ -151,6 +154,7 @@ pub async fn validate_api_key(
                 tenant_id: None,
                 provider_tenant_id: None,
                 message: "Invalid API key".to_string(),
+                ..Default::default()
             })
         }
         Err(e) => {
@@ -166,6 +170,7 @@ pub async fn validate_api_key(
                 tenant_id: None,
                 provider_tenant_id: None,
                 message: "Validation error".to_string(),
+                ..Default::default()
             })
         }
     }

@@ -37,12 +37,14 @@ pub async fn get_user_preferences_with_conn(
                 email: email.to_string(),
                 hidden_defaults,
                 default_tenant_id: r.get(1),
+                ..Default::default()
             })
         }
         None => Ok(UserPreferences {
             email: email.to_string(),
             hidden_defaults: Vec::new(),
             default_tenant_id: None,
+            ..Default::default()
         }),
     }
 }
@@ -54,8 +56,8 @@ pub async fn update_user_preferences(
     action: &str,
     endpoint_id: &str,
 ) -> Result<(), StoreError> {
-    let mut client = store.get_admin_conn().await?;
-    update_user_preferences_with_conn(&mut client, email, action, endpoint_id).await
+    let client = store.get_admin_conn().await?;
+    update_user_preferences_with_conn(&client, email, action, endpoint_id).await
 }
 
 pub async fn update_user_preferences_with_conn(

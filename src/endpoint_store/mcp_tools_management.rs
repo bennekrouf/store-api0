@@ -271,6 +271,7 @@ pub async fn list_mcp_tools(
                 description: pr.get(1),
                 required: pr.get::<_, bool>(2).to_string(),
                 alternatives: vec![], // skipped for speed in list
+                ..Default::default()
             });
         }
         
@@ -397,6 +398,7 @@ pub async fn get_mcp_tool(
                     description: pr.get(1),
                     required: pr.get::<_, bool>(2).to_string(),
                     alternatives: vec![],
+                    ..Default::default()
                 });
             }
             
@@ -766,6 +768,7 @@ mod tests {
             description: String::new(),
             required: required.to_string(),
             alternatives: vec![],
+            ..Default::default()
         }
     }
 

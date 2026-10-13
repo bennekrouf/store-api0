@@ -123,6 +123,7 @@ async fn get_or_create_personal_tenant_locked(
             name: row.get(1),
             credit_balance: row.get(2),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+            ..Default::default()
         });
     }
 
@@ -209,6 +210,7 @@ async fn get_or_create_personal_tenant_locked(
             name: row.get(1),
             credit_balance: row.get(2),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+            ..Default::default()
         });
     }
 
@@ -256,6 +258,7 @@ async fn get_or_create_personal_tenant_locked(
         name,
         credit_balance: old_balance,
         created_at: now.to_rfc3339(),
+        ..Default::default()
     })
 }
 
@@ -286,6 +289,7 @@ pub async fn find_default_tenant(
         name: r.get(1),
         credit_balance: r.get(2),
         created_at: r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+        ..Default::default()
     }))
 }
 
@@ -320,6 +324,7 @@ pub async fn get_tenant_by_mcp_client_id(
             name:           r.get(1),
             credit_balance: r.get(2),
             created_at:     r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+            ..Default::default()
         };
         let google_client_id: Option<String> = r.get(4);
         let allow_api0_signin: bool = r.get(5);
@@ -505,6 +510,7 @@ pub async fn list_user_tenants_with_conn(
                 name: row.get(1),
                 credit_balance: row.get(2),
                 created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+                ..Default::default()
             },
             role: row.get(4),
             active: row.get(5),
@@ -550,6 +556,7 @@ pub async fn set_active_tenant(
         name: row.get(1),
         credit_balance: row.get(2),
         created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+        ..Default::default()
     }))
 }
 

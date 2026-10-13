@@ -42,22 +42,20 @@ pub async fn revoke_api_key_handler(
                 tokio::spawn(async move {
                     if let Ok(client) = store2.get_admin_conn().await {
                         // Get owner email
-                        if let Ok(row) = client.query_opt(
+                        if let Ok(Some(r)) = client.query_opt(
                             "SELECT email FROM tenant_users WHERE tenant_id = $1 AND role = 'owner' LIMIT 1",
                             &[&tid],
                         ).await {
-                            if let Some(r) = row {
-                                let email: &str = r.get(0);
-                                // Get key prefix for display
-                                let prefix = client
-                                    .query_opt("SELECT key_prefix FROM api_keys WHERE id = $1", &[&kid])
-                                    .await
-                                    .ok()
-                                    .flatten()
-                                    .map(|r| r.get::<_, String>(0))
-                                    .unwrap_or_else(|| kid[..8.min(kid.len())].to_string());
-                                send_async(store2, email.to_string(), EmailKind::KeyRevoked { key_prefix: prefix });
-                            }
+                            let email: &str = r.get(0);
+                            // Get key prefix for display
+                            let prefix = client
+                                .query_opt("SELECT key_prefix FROM api_keys WHERE id = $1", &[&kid])
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|r| r.get::<_, String>(0))
+                                .unwrap_or_else(|| kid[..8.min(kid.len())].to_string());
+                            send_async(store2, email.to_string(), EmailKind::KeyRevoked { key_prefix: prefix });
                         }
                     }
                 });

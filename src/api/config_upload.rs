@@ -66,7 +66,7 @@ fn decode_content(content: &str) -> Result<Vec<u8>, String> {
 
         // Try adding padding
         let mut padded_content = cleaned_content.clone();
-        while padded_content.len() % 4 != 0 {
+        while !padded_content.len().is_multiple_of(4) {
             padded_content.push('=');
         }
 
@@ -146,6 +146,7 @@ pub async fn upload_api_config(
                 imported_count: 0,
                 group_count: 0,
                 duplicates_skipped: 0,
+                ..Default::default()
             });
         }
     };
@@ -167,6 +168,7 @@ pub async fn upload_api_config(
                     imported_count: 0,
                     group_count: 0,
                     duplicates_skipped: 0,
+                    ..Default::default()
                 });
             }
 
@@ -245,6 +247,7 @@ pub async fn upload_api_config(
                         imported_count: 0,
                         group_count: 0,
                         duplicates_skipped: 0,
+                        ..Default::default()
                     });
                 }
             }
@@ -263,6 +266,7 @@ pub async fn upload_api_config(
                         imported_count: 0,
                         group_count: 0,
                         duplicates_skipped: 0,
+                        ..Default::default()
                     });
                 }
             }
@@ -275,6 +279,7 @@ pub async fn upload_api_config(
             imported_count: 0,
             group_count: 0,
             duplicates_skipped: 0,
+            ..Default::default()
         });
         };
 
@@ -287,6 +292,7 @@ pub async fn upload_api_config(
             imported_count: 0,
             group_count: 0,
             duplicates_skipped: 0,
+            ..Default::default()
         });
     }
 
@@ -348,6 +354,7 @@ pub async fn upload_api_config(
         processed_groups.push(ApiGroupWithEndpoints {
             group: group.group,
             endpoints: processed_endpoints,
+            ..Default::default()
         });
     }
 
@@ -426,6 +433,7 @@ pub async fn upload_api_config(
                 imported_count: endpoint_count as i32,
                 group_count: group_count as i32,
                 duplicates_skipped: duplicate_count,
+                ..Default::default()
             })
         }
         Err(e) => {
@@ -447,6 +455,7 @@ pub async fn upload_api_config(
                 imported_count: 0,
                 group_count: 0,
                 duplicates_skipped: 0,
+                ..Default::default()
             })
         }
     }

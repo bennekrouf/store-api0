@@ -41,7 +41,7 @@ pub async fn log_api_usage(
                 // Minimum 1 credit if tokens > 0
                 let total_tokens = usage.total_tokens;
                 let cost = if total_tokens > 0 {
-                    (total_tokens as i64 / 50).max(1)
+                    (total_tokens / 50).max(1)
                 } else {
                     0
                 };
@@ -98,6 +98,7 @@ pub async fn log_api_usage(
                 success: true,
                 message: "API usage logged successfully".to_string(),
                 log_id: Some(log_id),
+                ..Default::default()
             })
         }
         Err(e) => {
@@ -110,6 +111,7 @@ pub async fn log_api_usage(
                 success: false,
                 message: format!("Failed to log API usage: {}", e),
                 log_id: None,
+                ..Default::default()
             })
         }
     }
