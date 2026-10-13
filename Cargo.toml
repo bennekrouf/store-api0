@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-api0-types = { git = "https://github.com/bennekrouf/api0-types", rev = "ddc8f6f5ea1eb08f99fe794630d515c6be7cad09" }
+api0-types = { git = "https://github.com/bennekrouf/api0-types", rev = "78e890885aee9e71cc5300cf4b15e792a36be58b" }
 chrono = { version = "0.4.39", features = ["serde"] }
 futures = "0.3.31"
 serde = { version = "1.0.217", features = ["derive"] }
