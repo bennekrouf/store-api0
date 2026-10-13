@@ -40,6 +40,7 @@ impl EndpointStore {
             name: name.to_string(),
             data: data.clone(),
             created_at: now,
+            ..Default::default()
         })
     }
 }

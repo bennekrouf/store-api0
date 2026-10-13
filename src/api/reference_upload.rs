@@ -52,7 +52,7 @@ fn decode_content(content: &str) -> Result<Vec<u8>, String> {
         
         // Try padding
         let mut padded = cleaned_content.clone();
-        while padded.len() % 4 != 0 {
+        while !padded.len().is_multiple_of(4) {
             padded.push('=');
         }
         if let Ok(bytes) = general_purpose::STANDARD.decode(&padded) {
@@ -81,6 +81,7 @@ pub async fn upload_reference_data(
                 success: false,
                 message: format!("Invalid file content: {}", e),
                 data: None,
+                ..Default::default()
             });
         }
     };
@@ -103,6 +104,7 @@ pub async fn upload_reference_data(
                         success: true,
                         message: "Reference data uploaded successfully".to_string(),
                         data: Some(ref_data),
+                        ..Default::default()
                     });
                 }
                 Err(e) => {
@@ -111,6 +113,7 @@ pub async fn upload_reference_data(
                         success: false,
                         message: format!("Failed to save to database: {}", e),
                         data: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -133,6 +136,7 @@ pub async fn upload_reference_data(
                 success: false,
                 message: format!("Failed to extract data: {}", e),
                 data: None,
+                ..Default::default()
             });
         }
     };
@@ -147,6 +151,7 @@ pub async fn upload_reference_data(
                 success: false,
                 message: format!("Failed to parse extracted data: {}", e),
                 data: None,
+                ..Default::default()
             });
         }
     };
@@ -162,6 +167,7 @@ pub async fn upload_reference_data(
                 success: true,
                 message: "Reference data uploaded successfully".to_string(),
                 data: Some(ref_data),
+                ..Default::default()
             })
         }
         Err(e) => {
@@ -170,6 +176,7 @@ pub async fn upload_reference_data(
                 success: false,
                 message: format!("Failed to save to database: {}", e),
                 data: None,
+                ..Default::default()
             })
         }
     }

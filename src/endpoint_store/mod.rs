@@ -185,6 +185,7 @@ impl EndpointStore {
             .map(|group| ApiGroupWithEndpoints {
                 group: group.group,
                 endpoints: group.endpoints,
+                ..Default::default()
             })
             .filter(|group| !group.endpoints.is_empty())
             .collect();
@@ -430,6 +431,7 @@ impl EndpointStore {
                 model_used: row.get(16),
                 metadata,
                 consumer_id: row.get(18),
+                ..Default::default()
             });
         }
 

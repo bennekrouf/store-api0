@@ -1,4 +1,10 @@
 // src/main.rs
+
+// api0-types structs are built with `..Default::default()` even when every
+// field is set, so a field added there does not break this crate. Clippy calls
+// that update needless; here it is the point.
+#![allow(clippy::needless_update)]
+
 mod admin;
 mod api;
 mod whatsapp;
@@ -14,7 +20,6 @@ mod http_server;
 
 use infra::config::Config;
 use infra::formatter::YamlFormatter;
-use chrono;
 use graflog::app_log;
 use graflog::init_logging;
 
@@ -164,7 +169,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     for endpoint in endpoints {
                         groups_map
                             .entry(endpoint.base.clone())
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(endpoint);
                     }
 
@@ -207,15 +212,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             base,
                             tenant_id: "".to_string(),
                             forward_identity: None,
+                            ..Default::default()
                         };
 
                         api_groups.push(ApiGroupWithEndpoints {
                             group,
                             endpoints: processed_endpoints,
+                            ..Default::default()
                         });
                     }
 
-                    ApiStorage { api_groups }
+                    ApiStorage { api_groups, ..Default::default() }
                 }
             };
 
@@ -437,7 +444,7 @@ async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {
 }
 
 fn ensure_database_url() {
-    if let Err(_) = dotenvy::dotenv() {
+    if dotenvy::dotenv().is_err() {
         // .env file not found, that's okay
     }
 
