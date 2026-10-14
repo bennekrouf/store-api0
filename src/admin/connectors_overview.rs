@@ -9,14 +9,15 @@
 // Three connectors, three different traces:
 //
 //   claude    — MCP tool calls in api_usage_logs, minus the ones the bridge makes
-//               with a linked person's key (those belong to WhatsApp/Telegram).
+//               with a linked person's key (those belong to the messaging channels).
 //               Only tool calls are logged, so a client that connects and lists
 //               tools but never calls one looks idle here.
 //   whatsapp  — whatsapp_channels, sessions keyed "whatsapp:<phone>" (or a bare
 //               phone, from before keys were namespaced), dead letters.
 //   telegram  — messaging_channels, sessions keyed "telegram:<id>", dead letters.
+//   teams     — messaging_channels, sessions keyed "teams:<aad object id>", dead letters.
 //
-// For both messaging channels, channel_inbound dates the last delivery at the
+// For every messaging channel, channel_inbound dates the last delivery at the
 // bridge's door, whether or not anything came of it.
 //
 // A session is written only at the end of a turn that succeeded, and a dead
@@ -120,7 +121,8 @@ bridge_calls AS (
 ),
 sessions AS (
     SELECT tenant_id,
-           CASE WHEN customer_phone LIKE 'telegram:%' THEN 'telegram' ELSE 'whatsapp' END AS channel,
+           -- Keys are <channel>:<id>; a bare phone predates namespacing and is WhatsApp's.
+           CASE WHEN customer_phone LIKE '%:%' THEN split_part(customer_phone, ':', 1) ELSE 'whatsapp' END AS channel,
            max(last_active)                                                    AS last_success,
            count(*) FILTER (WHERE last_active > now() - interval '7 days')     AS conversations_7d
       FROM whatsapp_sessions
@@ -203,7 +205,13 @@ SELECT t.id,
        mis.actual_tenant_id, mist.name, mis.last_at, mis.calls_7d,
        -- last delivery at the bridge's door
        wib.last_inbound_at, wib.last_unlinked_at,
-       tib.last_inbound_at, tib.last_unlinked_at
+       tib.last_inbound_at, tib.last_unlinked_at,
+       -- teams
+       tm.channel_ref, tm.display_ref, tm.created_at,
+       tms.last_success, COALESCE(tms.conversations_7d, 0),
+       tmf.last_failure, COALESCE(tmf.failures_24h, 0), tmf.last_failure_type, tmf.last_failure_detail,
+       COALESCE(tmi.linked, 0), COALESCE(tmb.tool_calls_7d, 0),
+       tmib.last_inbound_at, tmib.last_unlinked_at
   FROM tenants t
   JOIN tools              ON tools.tenant_id = t.id
   LEFT JOIN mcp           ON mcp.tenant_id = t.id
@@ -220,6 +228,12 @@ SELECT t.id,
   LEFT JOIN misrouted     mis ON mis.home_tenant_id = t.id
   LEFT JOIN channel_inbound wib ON wib.tenant_id = t.id AND wib.channel = 'whatsapp'
   LEFT JOIN channel_inbound tib ON tib.tenant_id = t.id AND tib.channel = 'telegram'
+  LEFT JOIN messaging_channels tm ON tm.tenant_id = t.id AND tm.channel = 'teams'
+  LEFT JOIN sessions      tms ON tms.tenant_id = t.id AND tms.channel = 'teams'
+  LEFT JOIN failures      tmf ON tmf.tenant_id = t.id AND tmf.channel = 'teams'
+  LEFT JOIN identities    tmi ON tmi.tenant_id = t.id AND tmi.channel = 'teams'
+  LEFT JOIN bridge_calls  tmb ON tmb.tenant_id = t.id AND tmb.channel = 'teams'
+  LEFT JOIN channel_inbound tmib ON tmib.tenant_id = t.id AND tmib.channel = 'teams'
   LEFT JOIN tenants       mist ON mist.id = mis.actual_tenant_id
  -- Only tenants with a door, or traffic through one — a misrouted hint counts,
  -- since that is the one time a tenant with nothing else to show is worth
@@ -233,6 +247,9 @@ SELECT t.id,
     OR ts.tenant_id IS NOT NULL
     OR wf.tenant_id IS NOT NULL
     OR tf.tenant_id IS NOT NULL
+    OR tm.tenant_id IS NOT NULL
+    OR tms.tenant_id IS NOT NULL
+    OR tmf.tenant_id IS NOT NULL
     OR mis.home_tenant_id IS NOT NULL
  ORDER BY t.name";
 
@@ -311,6 +328,11 @@ pub async fn connectors_overview(
             let (tg_ok, tg_fail): (Ts, Ts) = (r.get(24), r.get(26));
             let tg_status = messaging_status(tg_bot.is_some(), tg_ok, tg_fail, now);
 
+            // ── teams ───────────────────────────────────────────────────────
+            let tm_app: Option<String> = r.get(40);
+            let (tm_ok, tm_fail): (Ts, Ts) = (r.get(43), r.get(45));
+            let tm_status = messaging_status(tm_app.is_some(), tm_ok, tm_fail, now);
+
             serde_json::json!({
                 "tenant_id": r.get::<_, String>(0),
                 "tenant_name": r.get::<_, String>(1),
@@ -365,6 +387,24 @@ pub async fn connectors_overview(
                     "tool_calls_7d": r.get::<_, i64>(31),
                     "last_inbound_at": rfc(r.get(38)),
                     "last_unlinked_at": rfc(r.get(39)),
+                },
+                "teams": {
+                    "status": tm_status,
+                    "configured": tm_app.is_some(),
+                    "display_ref": r.get::<_, Option<String>>(41).filter(|s| !s.is_empty()),
+                    // The App ID is public — it is in the messaging endpoint URL.
+                    "channel_ref": tm_app,
+                    "configured_at": rfc(r.get(42)),
+                    "last_success_at": rfc(tm_ok),
+                    "conversations_7d": r.get::<_, i64>(44),
+                    "last_failure_at": rfc(tm_fail),
+                    "failures_24h": r.get::<_, i64>(46),
+                    "last_failure_type": r.get::<_, Option<String>>(47),
+                    "last_failure_detail": r.get::<_, Option<String>>(48),
+                    "linked_identities": r.get::<_, i64>(49),
+                    "tool_calls_7d": r.get::<_, i64>(50),
+                    "last_inbound_at": rfc(r.get(51)),
+                    "last_unlinked_at": rfc(r.get(52)),
                 },
             })
         })
