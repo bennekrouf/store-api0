@@ -1,0 +1,7 @@
+# The one place the Rust version is set: local builds and CI both read it, so
+# clippy reports the same lints on your machine as on the runner. To upgrade,
+# bump `channel` and fix whatever clippy then reports.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

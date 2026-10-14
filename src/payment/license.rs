@@ -1,6 +1,6 @@
 // src/payment/license.rs
 //
-// Licences for the desktop apps sold on mayorana.ch (Splitter first).
+// Licences for the desktop apps sold on mayorana.ch (TrackCut first).
 //
 // A buyer pays on a Stripe Checkout page; the licence is issued when the
 // session is paid, whichever comes first of:
@@ -43,12 +43,16 @@ const UPDATES_DAYS: u64 = 365;
 
 /// What can be sold: (product, edition) → the display name. The Stripe price
 /// for each comes from LICENSE_PRICE_<PRODUCT>_<EDITION>.
+///
+/// `product` is the id inside every key sold, so it outlives a rename: TrackCut,
+/// Polishcast and SpreadRadar are still `splitter`, `small-video` and
+/// `spreadwatch` here and in the apps' key check.
 fn product_name(product: &str, edition: &str) -> Option<&'static str> {
     match (product, edition) {
-        ("splitter", "pro") => Some("Splitter Pro"),
+        ("splitter", "pro") => Some("TrackCut Pro"),
         ("gitagent", "pro") => Some("GitAgent Pro"),
-        ("small-video", "pro") => Some("Small Video Pro"),
-        ("spreadwatch", "pro") => Some("Spreadwatch Pro"),
+        ("small-video", "pro") => Some("Polishcast Pro"),
+        ("spreadwatch", "pro") => Some("SpreadRadar Pro"),
         _ => None,
     }
 }
@@ -57,15 +61,25 @@ fn product_name(product: &str, edition: &str) -> Option<&'static str> {
 fn activation_html(product: &str) -> &'static str {
     match product {
         "splitter" => {
-            "open Splitter and click <strong>Get Pro…</strong> at the top of the file list \
+            "open TrackCut and click <strong>Get Pro…</strong> at the top of the file list \
              (in versions before 0.1.14, click the <strong>Splitter</strong> name there), then paste the key in."
         }
         "gitagent" => "open GitAgent, click <strong>Get Pro…</strong> in the top bar and paste the key in.",
-        "small-video" => "open Small Video, click <strong>Get Pro…</strong> in the sidebar and paste the key in.",
+        "small-video" => "open Polishcast, click <strong>Get Pro…</strong> in the sidebar and paste the key in.",
         "spreadwatch" => {
-            "open Spreadwatch, click <strong>Get Pro…</strong> at the right of the tab bar and paste the key in."
+            "open SpreadRadar, click <strong>Get Pro…</strong> at the right of the tab bar and paste the key in."
         }
         _ => "open the app and paste the key into its licence window.",
+    }
+}
+
+/// The app's page on the site, under its current name.
+fn site_slug(product: &str) -> &str {
+    match product {
+        "splitter" => "trackcut",
+        "small-video" => "polishcast",
+        "spreadwatch" => "spreadradar",
+        other => other,
     }
 }
 
@@ -277,8 +291,8 @@ pub async fn create_checkout_handler(
         }));
     };
     let site = std::env::var("LICENSE_SITE_URL").unwrap_or_else(|_| "https://mayorana.ch/en/apps".into());
-    let success_url = format!("{}/{}/thanks?session_id={{CHECKOUT_SESSION_ID}}", site, product);
-    let cancel_url = format!("{}/{}", site, product);
+    let success_url = format!("{}/{}/thanks?session_id={{CHECKOUT_SESSION_ID}}", site, site_slug(&product));
+    let cancel_url = format!("{}/{}", site, site_slug(&product));
     let metadata = HashMap::from([
         ("purpose".to_string(), PURPOSE_LICENSE.to_string()),
         ("product".to_string(), product.clone()),
@@ -435,7 +449,7 @@ mod tests {
         assert!(String::from_utf8(json).unwrap().contains(r#""updates_until":"2027-09-27""#));
     }
 
-    /// The same key is checked by Splitter's own tests (splitter-core, license.rs):
+    /// The same key is checked by TrackCut's own tests (trackcut-core, license.rs):
     /// if either side changes the format, one of them fails.
     pub const FIXTURE_KEY: &str = "eyJ2IjoxLCJpZCI6ImxpY19maXh0dXJlIiwicHJvZHVjdCI6InNwbGl0dGVyIiwiZWRpdGlvbiI6InBybyIsImVtYWlsIjoiYW5uYUBiYW5kLmNoIiwiaXNzdWVkIjoiMjAyNi0wOS0yNyIsInVwZGF0ZXNfdW50aWwiOiIyMDI3LTA5LTI3In0.pgBj4R164hG5dGk-jfLUKINF7zOBSPO8to5PImF8QoDp4dRHGgX67ORXy_eC9Pyd9CqUxGj_r6_ETd1oHWI3BQ";
 
@@ -456,15 +470,17 @@ mod tests {
 
     #[test]
     fn only_known_products_are_for_sale() {
-        assert_eq!(product_name("splitter", "pro"), Some("Splitter Pro"));
+        assert_eq!(product_name("splitter", "pro"), Some("TrackCut Pro"));
         assert_eq!(product_name("gitagent", "pro"), Some("GitAgent Pro"));
         assert_eq!(product_name("splitter", "free"), None);
         assert!(activation_html("gitagent").contains("top bar"));
-        assert_eq!(product_name("spreadwatch", "pro"), Some("Spreadwatch Pro"));
+        assert_eq!(product_name("spreadwatch", "pro"), Some("SpreadRadar Pro"));
         assert!(activation_html("spreadwatch").contains("tab bar"));
         assert_eq!(price_env("spreadwatch", "pro"), "LICENSE_PRICE_SPREADWATCH_PRO");
         assert_eq!(price_env("splitter", "pro"), "LICENSE_PRICE_SPLITTER_PRO");
-        assert_eq!(product_name("small-video", "pro"), Some("Small Video Pro"));
+        assert_eq!(product_name("small-video", "pro"), Some("Polishcast Pro"));
+        assert_eq!(site_slug("small-video"), "polishcast");
+        assert_eq!(site_slug("gitagent"), "gitagent");
         assert_eq!(price_env("small-video", "pro"), "LICENSE_PRICE_SMALL_VIDEO_PRO");
     }
 
@@ -499,7 +515,7 @@ mod tests {
         let (a, b) = (a.unwrap(), b.unwrap());
         assert_eq!(a.key, b.key, "the webhook and the thank-you page get the same licence");
         assert_eq!(a.email, "anna@band.ch");
-        assert_eq!(a.product_name, "Splitter Pro");
+        assert_eq!(a.product_name, "TrackCut Pro");
 
         let unpaid = CheckoutSession { payment_status: CheckoutSessionPaymentStatus::Unpaid, ..session.clone() };
         assert!(matches!(issue_for_session(&store, &unpaid).await, Err(IssueError::NotIssuable(_))));

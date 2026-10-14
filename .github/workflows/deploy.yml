@@ -21,8 +21,9 @@ jobs:
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      # Installs the toolchain rust-toolchain.toml names, clippy included.
+      - name: Install Rust
+        run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -34,6 +35,10 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      # Lints fail the build, so a warning never reaches master — or the deploy.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Build release binary
         run: cargo build --release
