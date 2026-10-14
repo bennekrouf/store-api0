@@ -305,13 +305,7 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 [[package]]
 name = "api0-types"
 version = "0.1.0"
-<<<<<<< HEAD
-source = "git+https://github.com/bennekrouf/api0-types?rev=78e890885aee9e71cc5300cf4b15e792a36be58b#78e890885aee9e71cc5300cf4b15e792a36be58b"
-||||||| 0e73f43
-source = "git+https://github.com/bennekrouf/api0-types?rev=ddc8f6f5ea1eb08f99fe794630d515c6be7cad09#ddc8f6f5ea1eb08f99fe794630d515c6be7cad09"
-=======
 source = "git+https://github.com/bennekrouf/api0-types?rev=5f43efa6d329a1c096bf617d7039391eaa61dfe2#5f43efa6d329a1c096bf617d7039391eaa61dfe2"
->>>>>>> origin/master
 dependencies = [
  "chrono",
  "serde",
