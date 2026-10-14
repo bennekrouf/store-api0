@@ -109,6 +109,7 @@ pub async fn get_api_keys_status(
             balance,
             tenant_id: tenant_id.to_string(),
             tenant_name: _tenant_name,
+            ..Default::default()
         });
     }
 
@@ -135,6 +136,7 @@ pub async fn get_api_keys_status(
                 .get::<_, Option<chrono::DateTime<chrono::Utc>>>(4)
                 .map(|dt| dt.to_rfc3339()),
             usage_count: row.get::<_, i64>(5),
+            ..Default::default()
         });
     }
 
@@ -145,6 +147,7 @@ pub async fn get_api_keys_status(
         balance,
         tenant_id: tenant_id.to_string(),
         tenant_name: _tenant_name,
+        ..Default::default()
     })
 }
 
@@ -290,6 +293,7 @@ pub async fn get_api_key_usage(
             .get::<_, Option<chrono::DateTime<chrono::Utc>>>(4)
             .map(|dt| dt.to_rfc3339()),
         usage_count: r.get::<_, i64>(5),
+        ..Default::default()
     }))
 }
 
@@ -383,6 +387,7 @@ pub async fn get_credit_transactions(
             action_type: row.get::<_, String>(5),
             description: row.get::<_, Option<String>>(6),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(7).to_rfc3339(),
+            ..Default::default()
         }
     }).collect())
 }

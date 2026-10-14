@@ -109,29 +109,6 @@ pub async fn save_credential(
     Ok(row_to_summary(row))
 }
 
-pub async fn list_credentials(
-    store: &EndpointStore,
-    tenant_id: &str,
-    user_email: &str,
-) -> Result<Vec<CredentialSummary>, StoreError> {
-    let user_email = user_email.to_lowercase();
-    let client = store.get_conn(Some(tenant_id)).await?;
-
-    let rows = client
-        .query(
-            "SELECT tenant_id, user_email, kind, label, expires_at,
-                    verified_identity, created_at, updated_at
-             FROM user_downstream_credentials
-             WHERE tenant_id = $1 AND user_email = $2
-             ORDER BY kind",
-            &[&tenant_id, &user_email],
-        )
-        .await
-        .to_store_error()?;
-
-    Ok(rows.into_iter().map(row_to_summary).collect())
-}
-
 /// A tenant this user may hold a credential in, and whether they hold one.
 #[derive(Debug, Clone, Serialize)]
 pub struct TenantCredentialSlot {

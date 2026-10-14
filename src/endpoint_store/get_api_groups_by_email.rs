@@ -77,6 +77,7 @@ async fn fetch_custom_groups_with_endpoints(
             base: row.get(3),
             tenant_id: row.get::<_, Option<String>>(4).unwrap_or_default(),
             forward_identity: None,
+            ..Default::default()
         };
 
         let endpoints = fetch_custom_endpoints(client, &group.id).await?;
@@ -87,7 +88,7 @@ async fn fetch_custom_groups_with_endpoints(
             "Added endpoints to custom group"
         );
 
-        result.push(ApiGroupWithEndpoints { group, endpoints });
+        result.push(ApiGroupWithEndpoints { group, endpoints, ..Default::default() });
     }
 
     Ok(result)
@@ -159,6 +160,7 @@ async fn fetch_custom_endpoints(
                 content_type,
                 body_template,
                 forward_identity,
+                ..Default::default()
             }
         });
 
@@ -179,6 +181,7 @@ async fn fetch_custom_endpoints(
                 description: desc,
                 required: req.to_string(),
                 alternatives,
+                ..Default::default()
             });
         }
     }

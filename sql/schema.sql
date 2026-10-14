@@ -863,7 +863,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_tx_stripe_intent
     ON credit_transactions(stripe_payment_intent_id)
     WHERE stripe_payment_intent_id IS NOT NULL;
 
--- Licences for the desktop apps sold on mayorana.ch (Splitter first). Not
+-- Licences for the desktop apps sold on mayorana.ch (TrackCut first). Not
 -- tenant data: a buyer has no api0 account, only the email Stripe Checkout
 -- collected, so the table is outside RLS and read with the admin connection.
 --   key            the signed licence the app verifies offline (see payment::license)
