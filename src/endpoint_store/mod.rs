@@ -443,6 +443,20 @@ impl EndpointStore {
         api_key_management::update_credit_balance_with_conn(&client, tenant_id, email, amount, action_type, description).await
     }
 
+    /// Whether `email` already has a credit transaction of `action_type` on this tenant.
+    pub async fn has_credit_transaction(&self, tenant_id: &str, email: &str, action_type: &str) -> Result<bool, StoreError> {
+        let client = self.get_conn(Some(tenant_id)).await?;
+        let row = client
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM credit_transactions \
+                 WHERE tenant_id = $1 AND email = $2 AND action_type = $3)",
+                &[&tenant_id, &email, &action_type],
+            )
+            .await
+            .to_store_error()?;
+        Ok(row.get(0))
+    }
+
     pub async fn get_credit_balance(&self, tenant_id: &str) -> Result<i64, StoreError> {
         api_key_management::get_credit_balance(self, tenant_id).await
     }
