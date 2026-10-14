@@ -7,7 +7,7 @@
 // `ref` is the workspace's OAuth client id or its tenant id, so every workspace
 // has a page even before it chose a client id. `link_ref` is what its page
 // address should use: the client id when set (readable), else the tenant id.
-// Nothing here is secret — a bot's username is public — but it is internal so
+// Nothing here is secret — a bot's username or App ID is public — but it is internal so
 // that only the gateway and the bridge shape what is shown.
 //
 // It is also the workspace's "Get started" page: how to reach its tools from
@@ -89,6 +89,17 @@ pub async fn link_info_handler(
         .flatten()
         .map(|r| r.get::<_, String>(0))
         .filter(|b| !b.is_empty());
+    // A Teams bot is reached by its App ID (a chat link names it); the name is
+    // what the workspace called it when connecting.
+    let teams_bot = client
+        .query_opt(
+            "SELECT channel_ref, display_ref FROM messaging_channels WHERE tenant_id = $1 AND channel = 'teams'",
+            &[&tenant_id],
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|r| serde_json::json!({ "app_id": r.get::<_, String>(0), "name": r.get::<_, String>(1) }));
     let whatsapp = client
         .query_opt("SELECT 1 FROM whatsapp_channels WHERE tenant_id = $1", &[&tenant_id])
         .await
@@ -110,6 +121,7 @@ pub async fn link_info_handler(
         "claude_ready": claude_ready,
         "can_use": can_use,
         "telegram_bot": telegram_bot,
+        "teams_bot": teams_bot,
         "whatsapp": whatsapp,
     }))
 }

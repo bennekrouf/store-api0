@@ -32,7 +32,7 @@ pub struct InsertFailedMessage {
     pub error_type: String,
     pub error_detail: String,
     pub payload: Option<serde_json::Value>,
-    /// "whatsapp" | "telegram". Optional so a bridge that predates it still
+    /// "whatsapp" | "telegram" | "teams". Optional so a bridge that predates it still
     /// dead-letters; its rows read back as WhatsApp's.
     pub channel: Option<String>,
 }
@@ -91,7 +91,7 @@ pub async fn insert_failed_message(
 #[derive(Deserialize)]
 pub struct ListQuery {
     pub limit: Option<i64>,
-    /// Only this channel's failures ("whatsapp" | "telegram"). Rows from before
+    /// Only this channel's failures ("whatsapp" | "telegram" | "teams"). Rows from before
     /// the channel column are WhatsApp's.
     pub channel: Option<String>,
 }

@@ -789,7 +789,7 @@ CREATE TABLE IF NOT EXISTS channel_link_codes (
 -- channel's tenant, and sealed by infra::secret_box — the bridge reads it back
 -- through one internal route and uses it exactly as Claude uses its own key.
 CREATE TABLE IF NOT EXISTS channel_identities (
-    channel      VARCHAR     NOT NULL,          -- 'whatsapp' | 'telegram' | …
+    channel      VARCHAR     NOT NULL,          -- 'whatsapp' | 'telegram' | 'teams' | …
     external_id  VARCHAR     NOT NULL,          -- phone number, chat user id, …
     tenant_id    VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     user_email   VARCHAR     NOT NULL,
@@ -848,7 +848,7 @@ ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS app_secret TEXT;
 -- webhook set up in Meta or registered with Telegram is really being called.
 CREATE TABLE IF NOT EXISTS channel_inbound (
     tenant_id        VARCHAR     NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    channel          VARCHAR     NOT NULL,          -- 'whatsapp' | 'telegram'
+    channel          VARCHAR     NOT NULL,          -- 'whatsapp' | 'telegram' | 'teams'
     last_inbound_at  TIMESTAMPTZ NOT NULL,
     last_unlinked_at TIMESTAMPTZ,                   -- last one from an unlinked sender
     PRIMARY KEY (tenant_id, channel)
