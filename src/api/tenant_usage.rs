@@ -4,13 +4,13 @@
 //
 // Returns governance stats for the tenant that owns `email`:
 //   - MCP summary KPIs (total MCP calls, success/fail, avg latency, unique consumers/tools)
-//   - total_credit: Real financial/top-up events in the same window
-//   - unified paginated `events` array: MCP tool calls UNION ALL important Tenant events,
+//   - total_credit: credit events in the same window
+//   - unified paginated `events` array: MCP tool calls UNION ALL credit events,
 //     each row tagged with source = "mcp" | "event"
 //
 // MCP rows come from api_usage_logs.
-// Event rows come from credit_transactions WHERE action_type = 'topup' or 'stripe_topup'
-// (Internal deductions like 'cv_generation' are excluded to avoid noise in the protocol monitor).
+// Event rows come from credit_transactions: top-ups, welcome grants and spending
+// (e.g. 'cv_generation', 'translate', 'mcp_tool_call').
 //
 // hours = 0  → all time (no timestamp filter)
 // hours > 0  → last N hours
@@ -76,8 +76,7 @@ const WEB_SEL: &str =
         ct.email                       AS web_user,
         ct.description
      FROM credit_transactions ct
-     WHERE ct.tenant_id = $1
-       AND ct.action_type IN ('topup', 'stripe_topup', 'welcome')";
+     WHERE ct.tenant_id = $1";
 
 pub async fn get_tenant_stats(
     store: web::Data<Arc<EndpointStore>>,
@@ -188,13 +187,13 @@ pub async fn get_tenant_stats(
         let res = if hours == 0 {
             client.query_one(
                 "SELECT COUNT(*)::BIGINT FROM credit_transactions \
-                 WHERE tenant_id = $1 AND action_type IN ('topup', 'stripe_topup', 'welcome')",
+                 WHERE tenant_id = $1",
                 &[&tenant_id],
             ).await
         } else {
             client.query_one(
                 "SELECT COUNT(*)::BIGINT FROM credit_transactions \
-                 WHERE tenant_id = $1 AND action_type IN ('topup', 'stripe_topup', 'welcome') \
+                 WHERE tenant_id = $1 \
                    AND created_at >= NOW() - make_interval(hours => $2)",
                 &[&tenant_id, &hours],
             ).await

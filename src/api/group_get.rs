@@ -20,9 +20,25 @@ pub async fn get_api_groups(
     let email = email.into_inner().to_lowercase();
     app_log!(info, email = %email, "Received HTTP get API groups request");
 
-    // Check if this is a new user by looking for existing API keys
-    let (is_new_user, current_balance) = match store.get_api_keys_status(&email).await {
-        Ok(status) => {
+    // Key status is keyed by tenant id, not email: resolve the tenant first.
+    let tenant_id = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
+        Ok(t) => Some(t.id),
+        Err(e) => {
+            app_log!(error, error = %e, email = %email, "Failed to resolve tenant");
+            None
+        }
+    };
+
+    // Check if this is a new user by looking for existing API keys.
+    // When the check fails the user is NOT treated as new, so no credit is granted.
+    let status = match &tenant_id {
+        Some(t) => store.get_api_keys_status(t).await.map_err(|e| {
+            app_log!(warn, error = %e, email = %email, "Failed to check API key status");
+        }).ok(),
+        None => None,
+    };
+    let (is_new_user, current_balance) = match &status {
+        Some(status) => {
             app_log!(info,
                 email = %email,
                 has_keys = status.has_keys,
@@ -32,14 +48,7 @@ pub async fn get_api_groups(
             );
             (!status.has_keys, status.balance)
         }
-        Err(e) => {
-            app_log!(warn,
-                error = %e,
-                email = %email,
-                "Failed to check API key status, assuming new user"
-            );
-            (true, 0) // Assume new user if we can't check
-        }
+        None => (false, 0),
     };
 
     app_log!(info,
@@ -57,20 +66,19 @@ pub async fn get_api_groups(
         credit_balance: current_balance,
     };
 
-    // Add default credit for new users (without creating an API key)
-    if is_new_user && current_balance == 0 {
-        app_log!(info, email = %email, "New user detected, adding $5 default credit");
-
-        let tenant_id = match crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await {
-            Ok(t) => t.id,
+    // Add default credit for new users (without creating an API key), once per email
+    if let (true, 0, Some(tenant_id)) = (is_new_user, current_balance, &tenant_id) {
+        let already_welcomed = match store.has_credit_transaction(tenant_id, &email, "welcome").await {
+            Ok(v) => v,
             Err(e) => {
-                 app_log!(error, error = %e, email = %email, "Failed to resolve tenant for welcome credit");
-                 "".to_string()
+                app_log!(warn, error = %e, email = %email, "Failed to check for a previous welcome credit");
+                true // Never grant when we can't check
             }
         };
 
-        if !tenant_id.is_empty() {
-            match store.update_credit_balance(&tenant_id, &email, 500, "welcome", None).await {
+        if !already_welcomed {
+            app_log!(info, email = %email, "New user detected, adding $5 default credit");
+            match store.update_credit_balance(tenant_id, &email, 500, "welcome", None).await {
                 Ok(new_balance) => {
                     app_log!(info,
                         email = %email,
