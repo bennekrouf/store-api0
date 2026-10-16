@@ -53,6 +53,7 @@ fn product_name(product: &str, edition: &str) -> Option<&'static str> {
         ("gitagent", "pro") => Some("GitAgent Pro"),
         ("small-video", "pro") => Some("PolishCast Pro"),
         ("spreadwatch", "pro") => Some("SpreadRadar Pro"),
+        ("jobscout", "pro") => Some("JobScout Pro"),
         _ => None,
     }
 }
@@ -69,6 +70,7 @@ fn activation_html(product: &str) -> &'static str {
         "spreadwatch" => {
             "open SpreadRadar, click <strong>Get Pro…</strong> at the right of the tab bar and paste the key in."
         }
+        "jobscout" => "open JobScout, click <strong>Get Pro…</strong> at the bottom of the sidebar and paste the key in.",
         _ => "open the app and paste the key into its licence window.",
     }
 }
