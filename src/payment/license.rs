@@ -45,13 +45,13 @@ const UPDATES_DAYS: u64 = 365;
 /// for each comes from LICENSE_PRICE_<PRODUCT>_<EDITION>.
 ///
 /// `product` is the id inside every key sold, so it outlives a rename: TrackCut,
-/// Polishcast and SpreadRadar are still `splitter`, `small-video` and
+/// PolishCast and SpreadRadar are still `splitter`, `small-video` and
 /// `spreadwatch` here and in the apps' key check.
 fn product_name(product: &str, edition: &str) -> Option<&'static str> {
     match (product, edition) {
         ("splitter", "pro") => Some("TrackCut Pro"),
         ("gitagent", "pro") => Some("GitAgent Pro"),
-        ("small-video", "pro") => Some("Polishcast Pro"),
+        ("small-video", "pro") => Some("PolishCast Pro"),
         ("spreadwatch", "pro") => Some("SpreadRadar Pro"),
         _ => None,
     }
@@ -65,7 +65,7 @@ fn activation_html(product: &str) -> &'static str {
              (in versions before 0.1.14, click the <strong>Splitter</strong> name there), then paste the key in."
         }
         "gitagent" => "open GitAgent, click <strong>Get Pro…</strong> in the top bar and paste the key in.",
-        "small-video" => "open Polishcast, click <strong>Get Pro…</strong> in the sidebar and paste the key in.",
+        "small-video" => "open PolishCast, click <strong>Get Pro…</strong> in the sidebar and paste the key in.",
         "spreadwatch" => {
             "open SpreadRadar, click <strong>Get Pro…</strong> at the right of the tab bar and paste the key in."
         }
@@ -478,7 +478,7 @@ mod tests {
         assert!(activation_html("spreadwatch").contains("tab bar"));
         assert_eq!(price_env("spreadwatch", "pro"), "LICENSE_PRICE_SPREADWATCH_PRO");
         assert_eq!(price_env("splitter", "pro"), "LICENSE_PRICE_SPLITTER_PRO");
-        assert_eq!(product_name("small-video", "pro"), Some("Polishcast Pro"));
+        assert_eq!(product_name("small-video", "pro"), Some("PolishCast Pro"));
         assert_eq!(site_slug("small-video"), "polishcast");
         assert_eq!(site_slug("gitagent"), "gitagent");
         assert_eq!(price_env("small-video", "pro"), "LICENSE_PRICE_SMALL_VIDEO_PRO");
