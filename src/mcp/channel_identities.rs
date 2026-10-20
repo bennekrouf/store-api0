@@ -132,7 +132,8 @@ pub async fn resolve_handler(
     }
     match resolve_identity(&store, &query.channel, &query.external_id, &query.tenant_id).await {
         Ok(Some(id)) => HttpResponse::Ok().json(serde_json::json!({
-            "success": true, "user_email": id.user_email, "api_key": id.api_key
+            "success": true, "user_email": id.user_email, "api_key": id.api_key,
+            "api_key_id": id.api_key_id
         })),
         Ok(None) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "Not linked"})),

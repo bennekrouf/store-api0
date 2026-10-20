@@ -15,6 +15,9 @@
 //   payment_intent.succeeded    → api0 credits (payment::topup)
 //   checkout.session.completed  → desktop app licence (payment::license)
 //   charge.refunded             → licence revoked, when fully refunded
+//   checkout.session.completed (subscription mode), invoice.paid,
+//   invoice.payment_failed, customer.subscription.created/updated/deleted
+//                               → monthly plan subscription (payment::subscription)
 // Anything else, or an event for a payment that is neither, is acknowledged
 // with 200 and ignored. 500 only when Stripe should retry.
 
@@ -24,6 +27,7 @@ use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::payment::license::{self, IssueError};
 use crate::payment::service::PaymentService;
+use crate::payment::subscription;
 use crate::payment::topup::{self, TopUp, TopUpError};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use hmac::{Hmac, Mac};
@@ -104,6 +108,13 @@ pub async fn stripe_webhook_handler(
             on_checkout_completed(&store, &payment_service, object_id).await
         }
         "charge.refunded" => on_charge_refunded(&store, object).await,
+        "invoice.paid" | "invoice.payment_failed" => match object["subscription"].as_str() {
+            Some(sub_id) => on_subscription_changed(&store, &payment_service, sub_id).await,
+            None => false,
+        },
+        "customer.subscription.created" | "customer.subscription.updated" | "customer.subscription.deleted" => {
+            on_subscription_changed(&store, &payment_service, object_id).await
+        }
         _ => false,
     };
 
@@ -154,6 +165,12 @@ async fn on_checkout_completed(store: &Arc<EndpointStore>, stripe: &PaymentServi
             return true;
         }
     };
+    if session.mode == stripe::CheckoutSessionMode::Subscription {
+        return match session.subscription.as_ref() {
+            Some(sub) => on_subscription_changed(store, stripe, sub.id().as_str()).await,
+            None => false,
+        };
+    }
     match license::issue_for_session(store, &session).await {
         Ok(_) => false,
         // Not a licence session, or paid by a method that settles later: its
@@ -161,6 +178,18 @@ async fn on_checkout_completed(store: &Arc<EndpointStore>, stripe: &PaymentServi
         Err(IssueError::NotIssuable(_)) => false,
         Err(e) => {
             app_log!(error, error = %e, session_id = %session_id, "Webhook: licence could not be issued");
+            true
+        }
+    }
+}
+
+/// Returns whether Stripe should retry. A subscription that is not a plan
+/// subscription is skipped inside sync, and counts as handled.
+async fn on_subscription_changed(store: &EndpointStore, stripe: &PaymentService, subscription_id: &str) -> bool {
+    match subscription::sync_by_id(store, stripe, subscription_id).await {
+        Ok(()) => false,
+        Err(e) => {
+            app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: plan subscription could not be synced");
             true
         }
     }

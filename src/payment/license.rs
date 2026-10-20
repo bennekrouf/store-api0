@@ -28,7 +28,7 @@ use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{Days, NaiveDate, Utc};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -106,7 +106,7 @@ pub struct LicensePayload {
 /// The signing key, from LICENSE_SIGNING_KEY: the 32-byte Ed25519 seed,
 /// standard base64. Generate one with `openssl rand -base64 32`; the matching
 /// public key goes into the app.
-fn signing_key() -> Result<SigningKey, String> {
+pub(crate) fn signing_key() -> Result<SigningKey, String> {
     let b64 = std::env::var("LICENSE_SIGNING_KEY")
         .map_err(|_| "LICENSE_SIGNING_KEY is not set".to_string())?;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -126,6 +126,28 @@ pub fn encode_key(payload: &LicensePayload, key: &SigningKey) -> String {
         URL_SAFE_NO_PAD.encode(&json),
         URL_SAFE_NO_PAD.encode(signature.to_bytes())
     )
+}
+
+/// The payload of a key this store signed, whatever its version (a v1 app
+/// licence and a v2 plan key share the format and the signing key), or why it
+/// is not one. Says nothing about whether it still stands: a refund only shows
+/// in the table.
+pub fn verify_signed<T: serde::de::DeserializeOwned>(key: &str) -> Result<T, String> {
+    verify_key_with(key, &signing_key()?.verifying_key())
+}
+
+fn verify_key_with<T: serde::de::DeserializeOwned>(key: &str, verifier: &ed25519_dalek::VerifyingKey) -> Result<T, String> {
+    let (payload_b64, sig_b64) = key.trim().split_once('.').ok_or("not a licence key")?;
+    let json = URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| "not a licence key")?;
+    let sig: [u8; 64] = URL_SAFE_NO_PAD
+        .decode(sig_b64)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or("not a licence key")?;
+    verifier
+        .verify(&json, &Signature::from_bytes(&sig))
+        .map_err(|_| "licence signature does not verify")?;
+    serde_json::from_slice(&json).map_err(|_| "licence payload is unreadable".to_string())
 }
 
 pub struct Issued {
@@ -206,10 +228,10 @@ pub async fn issue_for_session(
     let inserted = client
         .execute(
             "INSERT INTO licenses \
-             (id, product, edition, email, stripe_session_id, stripe_payment_intent_id, key, updates_until, issued_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
+             (id, product, product_name, edition, email, stripe_session_id, stripe_payment_intent_id, key, updates_until, issued_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
              ON CONFLICT (stripe_session_id) DO NOTHING",
-            &[&payload.id, &payload.product, &payload.edition, &email, &session_id, &intent_id, &key, &payload.updates_until],
+            &[&payload.id, &payload.product, &name, &payload.edition, &email, &session_id, &intent_id, &key, &payload.updates_until],
         )
         .await
         .map_err(|e| IssueError::Store(e.to_string()))?;
@@ -428,6 +450,28 @@ pub async fn session_license_handler(
 mod tests {
     use super::*;
     use ed25519_dalek::{Signature, Verifier};
+
+    #[test]
+    fn a_key_verifies_and_a_tampered_one_does_not() {
+        let signer = SigningKey::from_bytes(&[7u8; 32]);
+        let check = |k: &str| verify_key_with::<LicensePayload>(k, &signer.verifying_key());
+        let payload = LicensePayload {
+            v: 1,
+            id: "lic_1".into(),
+            product: "gitagent".into(),
+            edition: "pro".into(),
+            email: "a@b.c".into(),
+            issued: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            updates_until: NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+        };
+        let key = encode_key(&payload, &signer);
+        assert_eq!(check(&key).unwrap(), payload);
+
+        let other = encode_key(&LicensePayload { email: "x@y.z".into(), ..payload }, &SigningKey::from_bytes(&[8u8; 32]));
+        let forged = format!("{}.{}", other.split_once('.').unwrap().0, key.split_once('.').unwrap().1);
+        assert!(check(&forged).is_err());
+        assert!(check("nonsense").is_err());
+    }
 
     #[test]
     fn key_is_payload_and_signature_that_verify() {
