@@ -42,6 +42,8 @@ pub struct ChannelIdentity {
 pub struct ResolvedIdentity {
     pub user_email: String,
     pub api_key: String,
+    /// The key's id — what the usage ledger records a call against.
+    pub api_key_id: String,
 }
 
 pub fn new_code() -> String {
@@ -165,7 +167,7 @@ pub async fn resolve_identity(
 
     let row = client
         .query_opt(
-            "SELECT user_email, api_key_enc FROM channel_identities
+            "SELECT user_email, api_key_enc, api_key_id FROM channel_identities
              WHERE channel = $1 AND external_id = $2 AND tenant_id = $3",
             &[&channel, &external_id, &tenant_id],
         )
@@ -184,7 +186,7 @@ pub async fn resolve_identity(
             StoreError::Database("linked key could not be read".into())
         })?;
 
-    Ok(Some(ResolvedIdentity { user_email: row.get(0), api_key }))
+    Ok(Some(ResolvedIdentity { user_email: row.get(0), api_key, api_key_id: row.get(2) }))
 }
 
 pub async fn list_identities(

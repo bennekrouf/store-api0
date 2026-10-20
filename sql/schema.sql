@@ -884,6 +884,76 @@ CREATE TABLE IF NOT EXISTS licenses (
 CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(email);
 CREATE INDEX IF NOT EXISTS idx_licenses_payment_intent ON licenses(stripe_payment_intent_id);
 
+-- What was bought, under the app's current name ("TrackCut Pro"). `product`
+-- stays the id signed into the key ("splitter"), which the apps check and a
+-- rename cannot change. Rows from before this column are named here once.
+ALTER TABLE licenses ADD COLUMN IF NOT EXISTS product_name VARCHAR;
+UPDATE licenses SET product_name = CASE product
+        WHEN 'splitter'    THEN 'TrackCut Pro'
+        WHEN 'gitagent'    THEN 'GitAgent Pro'
+        WHEN 'small-video' THEN 'PolishCast Pro'
+        WHEN 'spreadwatch' THEN 'SpreadRadar Pro'
+        WHEN 'jobscout'    THEN 'JobScout Pro'
+    END
+    WHERE product_name IS NULL AND edition = 'pro';
+
+-- ── Monthly plans: every desktop app, plus AI credits ────────────────────────
+-- The plans on sale, set by the super admin in the dashboard (payment::plans).
+-- The Stripe price is created by the store whenever the amount or currency
+-- changes; the old one is archived, and subscribers already on it keep it.
+--   monthly_credits  the AI credits each paid month brings; unused ones lapse
+CREATE TABLE IF NOT EXISTS plans (
+    id                VARCHAR     PRIMARY KEY,
+    name              VARCHAR     NOT NULL,
+    description       TEXT        NOT NULL DEFAULT '',
+    price_cents       BIGINT      NOT NULL,
+    currency          VARCHAR     NOT NULL DEFAULT 'eur',
+    monthly_credits   BIGINT      NOT NULL,
+    stripe_product_id VARCHAR,
+    stripe_price_id   VARCHAR,
+    active            BOOLEAN     NOT NULL DEFAULT TRUE,
+    sort_order        INTEGER     NOT NULL DEFAULT 0,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Two plans to start from; inactive until the super admin reviews and saves
+-- them, which is also what creates their Stripe prices.
+INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, active, sort_order) VALUES
+    ('starter', 'Starter', 'Every desktop app in Pro, and 500 AI credits a month.', 1900, 'eur', 500, FALSE, 1),
+    ('pro',     'Pro',     'Every desktop app in Pro, and 2,000 AI credits a month.', 4900, 'eur', 2000, FALSE, 2)
+ON CONFLICT (id) DO NOTHING;
+
+-- One row per Stripe subscription, kept in step by the webhooks
+-- (payment::subscription). The month's credits live here, not in
+-- tenants.credit_balance: they reset with every paid period, and the API
+-- credits a tenant buys never do.
+--   period_start/end      the paid month Stripe reports
+--   credits_granted/used  this period's allowance; a new period sets used to 0
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id                   VARCHAR     PRIMARY KEY,
+    tenant_id            VARCHAR     NOT NULL REFERENCES tenants(id),
+    email                VARCHAR     NOT NULL,
+    plan_id              VARCHAR     NOT NULL REFERENCES plans(id),
+    stripe_customer_id   VARCHAR     NOT NULL,
+    status               VARCHAR     NOT NULL,
+    cancel_at_period_end BOOLEAN     NOT NULL DEFAULT FALSE,
+    period_start         TIMESTAMPTZ NOT NULL,
+    period_end           TIMESTAMPTZ NOT NULL,
+    credits_granted      BIGINT      NOT NULL DEFAULT 0,
+    credits_used         BIGINT      NOT NULL DEFAULT 0,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_email ON subscriptions(email);
+
+-- What an AI call costs in plan credits: ceil(tokens × multiplier ÷ tokens_per_credit),
+-- at least 1. The multipliers are a JSON object, model → factor; a model not in
+-- it counts as 1.
+INSERT INTO system_config (key, value) VALUES
+    ('plans.tokens_per_credit', '10000'),
+    ('plans.model_multipliers', '{"deepseek-reasoner": 3, "mistral-medium-latest": 2}')
+ON CONFLICT (key) DO NOTHING;
+
 -- ── Tenant names are unique, ignoring case ───────────────────────────────────
 -- "solanize" and "Solanize" are two workspaces nobody can tell apart. The store
 -- checks before every write (tenant_management::NAME_TAKEN_SQL); this index is
@@ -942,3 +1012,30 @@ CREATE TABLE IF NOT EXISTS email_opt_outs (
     email      TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ── LLM provider: usage ─────────────────────────────────────────────────────
+-- A tenant named by LLM_PROVIDER_TENANT_ID serves chat completions to the
+-- desktop apps (gateway: POST /v1/chat/completions). The app presents a
+-- licence or plan key; the email's monthly plan credits pay (subscriptions).
+-- See payment::llm_wallet.
+-- One row per completion. Not api_usage_logs: a licence is not an api key.
+-- license_id is the licence id, or the subscription id for a plan key.
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id               VARCHAR     PRIMARY KEY,
+    tenant_id        VARCHAR     NOT NULL,        -- the provider tenant
+    license_id       VARCHAR     NOT NULL,
+    email            VARCHAR     NOT NULL,
+    product          VARCHAR     NOT NULL,
+    provider         VARCHAR     NOT NULL,        -- upstream: deepseek, mistral
+    model            VARCHAR     NOT NULL,
+    input_tokens     BIGINT      NOT NULL,
+    output_tokens    BIGINT      NOT NULL,
+    total_tokens     BIGINT      NOT NULL,
+    estimated        BOOLEAN     NOT NULL,        -- counted by us, not the provider
+    credits          BIGINT      NOT NULL,
+    status_code      INTEGER     NOT NULL,
+    response_time_ms BIGINT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_email_ts ON llm_usage(email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_ts ON llm_usage(tenant_id, created_at DESC);

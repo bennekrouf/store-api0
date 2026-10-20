@@ -38,8 +38,8 @@ const KEY_PURPOSE: &str = "assistant_llm_key";
 pub(crate) struct Provider {
     pub id: &'static str,
     pub label: &'static str,
-    base_url: &'static str,
-    models: &'static [&'static str],
+    pub base_url: &'static str,
+    pub models: &'static [&'static str],
 }
 
 pub(crate) const PROVIDERS: &[Provider] = &[
@@ -63,7 +63,7 @@ pub(crate) fn provider(id: &str) -> Option<&'static Provider> {
 
 /// The current choice, or `None` when the super admin has not set one (the
 /// bridge then keeps using the key in its own configuration).
-async fn read_choice(store: &EndpointStore) -> Result<Option<(String, String)>, String> {
+pub(crate) async fn read_choice(store: &EndpointStore) -> Result<Option<(String, String)>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let rows = client
         .query("SELECT key, value FROM system_config WHERE key IN ('assistant.provider', 'assistant.model')", &[])

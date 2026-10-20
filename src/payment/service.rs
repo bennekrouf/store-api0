@@ -1,8 +1,11 @@
 use stripe::{
-    CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client, CreateCheckoutSession,
-    CreateCheckoutSessionAutomaticTax, CreateCheckoutSessionLineItems,
-    CreateCheckoutSessionPaymentIntentData, CreatePaymentIntent, Currency, PaymentIntent,
-    PaymentIntentId, PaymentIntentStatus, Price, PriceId,
+    BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client,
+    CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionAutomaticTax,
+    CreateCheckoutSessionLineItems, CreateCheckoutSessionPaymentIntentData,
+    CreateCheckoutSessionSubscriptionData, CreatePaymentIntent, CreatePrice, CreatePriceRecurring,
+    CreatePriceRecurringInterval, CreateProduct, Currency, CustomerId, IdOrCreate, PaymentIntent,
+    PaymentIntentId, PaymentIntentStatus, Price, PriceId, PriceTaxBehavior, Product, ProductId,
+    Subscription, SubscriptionId, UpdatePrice, UpdateProduct,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -110,5 +113,112 @@ impl PaymentService {
     pub async fn retrieve_price(&self, price_id: &str) -> Result<Price> {
         let id: PriceId = price_id.parse()?;
         Ok(Price::retrieve(&self.client, &id, &[]).await?)
+    }
+
+    // ── Monthly plans ───────────────────────────────────────────────────────
+
+    /// A new monthly price for a plan, on its Stripe product (created first
+    /// when `product_id` is `None`). Prices are VAT-inclusive: the amount on the
+    /// plans page is what a buyer pays. Returns (product id, price id).
+    pub async fn create_plan_price(
+        &self,
+        product_id: Option<&str>,
+        name: &str,
+        amount: i64,
+        currency: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<(String, String)> {
+        let currency: Currency = currency.parse().map_err(|_| anyhow::anyhow!("Unknown currency {}", currency))?;
+        let product_id = match product_id {
+            Some(id) => id.to_string(),
+            None => {
+                let mut params = CreateProduct::new(name);
+                params.metadata = Some(metadata.clone());
+                Product::create(&self.client, params).await?.id.to_string()
+            }
+        };
+        let mut params = CreatePrice::new(currency);
+        params.product = Some(IdOrCreate::Id(&product_id));
+        params.unit_amount = Some(amount);
+        params.recurring = Some(CreatePriceRecurring {
+            interval: CreatePriceRecurringInterval::Month,
+            ..Default::default()
+        });
+        params.tax_behavior = Some(PriceTaxBehavior::Inclusive);
+        params.metadata = Some(metadata);
+        let price = Price::create(&self.client, params).await?;
+        Ok((product_id, price.id.to_string()))
+    }
+
+    /// Takes a price off sale. Subscriptions on it carry on.
+    pub async fn archive_price(&self, price_id: &str) -> Result<()> {
+        let id: PriceId = price_id.parse()?;
+        let params = UpdatePrice { active: Some(false), ..Default::default() };
+        Price::update(&self.client, &id, params).await?;
+        Ok(())
+    }
+
+    pub async fn rename_product(&self, product_id: &str, name: &str) -> Result<()> {
+        let id: ProductId = product_id.parse()?;
+        let mut params = UpdateProduct::new();
+        params.name = Some(name);
+        Product::update(&self.client, &id, params).await?;
+        Ok(())
+    }
+
+    /// A hosted Checkout page that starts a monthly subscription. `metadata`
+    /// goes on the session and on the subscription, which is what the webhooks
+    /// read back. An earlier customer is reused, so one person keeps one
+    /// customer (and one portal) across subscriptions.
+    pub async fn create_subscription_checkout(
+        &self,
+        price_id: &str,
+        customer: Option<&str>,
+        email: &str,
+        tenant_id: &str,
+        success_url: &str,
+        cancel_url: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<CheckoutSession> {
+        let mut params = CreateCheckoutSession::new();
+        params.mode = Some(CheckoutSessionMode::Subscription);
+        params.success_url = Some(success_url);
+        params.cancel_url = Some(cancel_url);
+        params.client_reference_id = Some(tenant_id);
+        let customer_id = customer.map(|c| c.parse::<CustomerId>()).transpose()?;
+        match customer_id {
+            Some(id) => params.customer = Some(id),
+            None => params.customer_email = Some(email),
+        }
+        params.line_items = Some(vec![CreateCheckoutSessionLineItems {
+            price: Some(price_id.to_string()),
+            quantity: Some(1),
+            ..Default::default()
+        }]);
+        params.metadata = Some(metadata.clone());
+        params.subscription_data = Some(CreateCheckoutSessionSubscriptionData {
+            metadata: Some(metadata),
+            ..Default::default()
+        });
+        params.allow_promotion_codes = Some(true);
+        if std::env::var("STRIPE_AUTOMATIC_TAX").as_deref() == Ok("true") {
+            params.automatic_tax = Some(CreateCheckoutSessionAutomaticTax {
+                enabled: true,
+                ..Default::default()
+            });
+        }
+        Ok(CheckoutSession::create(&self.client, params).await?)
+    }
+
+    pub async fn retrieve_subscription(&self, subscription_id: &str) -> Result<Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        Ok(Subscription::retrieve(&self.client, &id, &[]).await?)
+    }
+
+    /// Stripe's customer portal: change card, see invoices, cancel.
+    pub async fn create_portal_session(&self, customer_id: &str, return_url: &str) -> Result<String> {
+        let mut params = CreateBillingPortalSession::new(customer_id.parse()?);
+        params.return_url = Some(return_url);
+        Ok(BillingPortalSession::create(&self.client, params).await?.url)
     }
 }
