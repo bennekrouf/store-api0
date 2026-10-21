@@ -214,6 +214,7 @@ pub async fn start_http_server(
                             .route("/plans/subscription/{email}", web::get().to(crate::payment::subscription::subscription_handler))
                             .route("/plans/portal", web::post().to(crate::payment::subscription::portal_handler))
                             .route("/plans/session/{session_id}", web::get().to(crate::payment::subscription::session_handler))
+                            .route("/plans/free", web::post().to(crate::payment::subscription::free_handler))
                             .route("/internal/licence/status", web::post().to(crate::payment::subscription::licence_status_handler))
                             .route("/internal/licence/portal", web::post().to(crate::payment::subscription::licence_portal_handler))
                             .route("/plans/usage/{email}", web::get().to(crate::payment::llm_wallet::usage_handler))

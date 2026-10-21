@@ -884,12 +884,6 @@ CREATE TABLE IF NOT EXISTS plans (
     sort_order        INTEGER     NOT NULL DEFAULT 0,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
--- Two plans to start from; inactive until the super admin reviews and saves
--- them, which is also what creates their Stripe prices.
-INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, active, sort_order) VALUES
-    ('starter', 'Starter', 'Pro in the apps it lists, and 500 AI credits a month.', 1900, 'eur', 500, FALSE, 1),
-    ('pro',     'Pro',     'Pro in the apps it lists, and 2,000 AI credits a month.', 4900, 'eur', 2000, FALSE, 2)
-ON CONFLICT (id) DO NOTHING;
 
 -- One row per Stripe subscription, kept in step by the webhooks
 -- (payment::subscription). The month's credits live here, not in
@@ -929,10 +923,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_licence ON subscriptions(lic
 -- to the paid subscription the same email takes out later.
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_free BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_one_free ON subscriptions(email) WHERE is_free AND licence IS NOT NULL;
--- The free plan: a taste of the apps' AI, no Pro. The super admin sets its credits.
-INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, active, sort_order) VALUES
-    ('free', 'Free', 'A few AI credits every month to try the apps'' AI features.', 0, 'eur', 20, TRUE, 0)
-ON CONFLICT (id) DO NOTHING;
+
+-- ── The default lineup ───────────────────────────────────────────────────────
+-- The apps themselves are the free version; plans are for Pro and AI credits.
+-- Every paid plan makes every app Pro and they differ by credits, as on most
+-- credit-based pricing pages: Basic to get started, Pro for daily use, Max for
+-- heavy AI use. Inactive until the super admin reviews them and saves each one
+-- on sale, which is also what creates its Stripe price.
+--
+-- Free is not an offer: a small monthly allowance of AI credits, no Pro, never
+-- listed on a pricing page. An app hands it out by email (POST /api/plans/free).
+--
+-- Once per database (marker plans.default_lineup): the first seeds, Starter and
+-- Pro with no apps, are replaced if nobody edited or sold them, and the free
+-- allowance is set up, or raised from its first 20 credits if untouched. After
+-- that the super admin's edits are never overwritten.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM system_config WHERE key = 'plans.default_lineup') THEN
+        RETURN;
+    END IF;
+    DELETE FROM plans p
+     WHERE (p.id, p.name, p.price_cents, p.monthly_credits) IN (('starter', 'Starter', 1900, 500), ('pro', 'Pro', 4900, 2000))
+       AND p.products = '{}' AND p.stripe_price_id IS NULL AND NOT p.active
+       AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.plan_id = p.id);
+    INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, products, active, sort_order) VALUES
+        ('basic', 'Basic', 'For getting started.', 1000, 'usd',  500, '{*}', FALSE, 1),
+        ('pro',   'Pro',   'For daily use.',       3000, 'usd', 1750, '{*}', FALSE, 2),
+        ('max',   'Max',   'For heavy AI use.',    6000, 'usd', 4000, '{*}', FALSE, 3),
+        ('free',  'Free',  'A few AI credits every month, to try the apps'' AI. Not sold.', 0, 'usd', 50, '{}', TRUE, 0)
+    ON CONFLICT (id) DO NOTHING;
+    UPDATE plans SET monthly_credits = 50, active = TRUE, updated_at = NOW()
+     WHERE id = 'free' AND price_cents = 0 AND products = '{}' AND monthly_credits = 20;
+    INSERT INTO system_config (key, value) VALUES ('plans.default_lineup', 'basic-pro-max');
+END $$;
 
 -- What an AI call costs in plan credits: ceil(tokens × multiplier ÷ tokens_per_credit),
 -- at least 1. The multipliers are a JSON object, model → factor; a model not in

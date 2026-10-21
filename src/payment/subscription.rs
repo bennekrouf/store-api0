@@ -7,9 +7,9 @@
 //   - pays for AI calls from the plan's monthly credits (/v1/chat/completions).
 // No api0 account is needed: the email and the licence are the identity.
 //
-//   POST /api/plans/checkout                { email, plan_id } → { url } of a Stripe Checkout page,
-//                                           or for a free plan { emailed: true }: the licence
-//                                           goes to that email only, which is what proves it
+//   POST /api/plans/checkout                { email, plan_id } → { url } of a Stripe Checkout page
+//   POST /api/plans/free                    { email } → { emailed: true }: the free allowance's
+//                                           licence, sent to that email only, which proves it
 //   GET  /api/plans/session/{id}            the licence a finished Checkout session bought
 //   GET  /api/plans/subscription/{email}    the current subscription and its credits, or null
 //   POST /api/plans/portal                  { email } → { url } of Stripe's customer portal
@@ -24,9 +24,9 @@
 // month. The AI endpoint reads the licence's credits before a call and
 // charges spend_credits after it.
 //
-// A free plan (price 0) has no Stripe behind it: its subscription is made
-// here, one per email, and the store starts each new month itself when the
-// licence is next checked. When the same email first pays for a plan, the
+// The free allowance (an active plan priced 0, never listed) has no Stripe
+// behind it: its subscription is made here, one per email, and the store
+// starts each new month itself when the licence is next checked. When the same email first pays for a plan, the
 // free licence moves to that subscription, so the number in the apps stays.
 //
 // The webhook (payment::webhook) calls sync_subscription on
@@ -466,7 +466,7 @@ pub async fn checkout_handler(
         return fail(StatusCode::BAD_REQUEST, "Enter the email the licence should go to");
     }
     let plan = match plans::get_plan(&store, &body.plan_id).await {
-        Ok(Some(p)) if p.active && (p.is_free() || p.stripe_price_id.is_some()) => p,
+        Ok(Some(p)) if p.active && !p.is_free() && p.stripe_price_id.is_some() => p,
         Ok(_) => return fail(StatusCode::NOT_FOUND, "Unknown plan"),
         Err(e) => {
             app_log!(error, error = %e, "Could not read a plan for checkout");
@@ -483,19 +483,6 @@ pub async fn checkout_handler(
             app_log!(error, error = %e, "Could not read subscriptions for checkout");
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Checkout could not be started");
         }
-    }
-    if plan.is_free() {
-        return match give_free_plan(&store, &plan, &email).await {
-            Ok(()) => HttpResponse::Ok().json(serde_json::json!({
-                "success": true,
-                "emailed": true,
-                "message": "Your licence number is on its way to that email.",
-            })),
-            Err(e) => {
-                app_log!(error, error = %e, "Could not give a free plan");
-                fail(StatusCode::INTERNAL_SERVER_ERROR, "The free plan could not be set up")
-            }
-        };
     }
     let Some(site) = site_url() else {
         app_log!(error, "PLANS_SITE_URL is not set — cannot start a plan checkout");
@@ -526,6 +513,57 @@ fn plausible_email(email: &str) -> bool {
     match email.split_once('@') {
         Some((user, domain)) => !user.is_empty() && domain.contains('.') && !email.contains(char::is_whitespace),
         None => false,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FreeRequest {
+    pub email: String,
+}
+
+/// POST /api/plans/free — the free allowance, for an app to offer. Answers the
+/// same whether the licence is new or sent again, and never contains it.
+pub async fn free_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<FreeRequest>,
+) -> impl Responder {
+    use actix_web::http::StatusCode;
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let email = body.email.trim().to_lowercase();
+    if !plausible_email(&email) {
+        return fail(StatusCode::BAD_REQUEST, "Enter the email the licence should go to");
+    }
+    match has_live_paid_plan(&store, &email).await {
+        Ok(true) => return fail(StatusCode::CONFLICT, "This email already has a plan: use its licence"),
+        Ok(false) => {}
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read subscriptions for a free licence");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "The free licence could not be sent");
+        }
+    }
+    let plan = match plans::list_plans(&store, true).await {
+        Ok(ps) => ps.into_iter().find(|p| p.is_free()),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read the plans for a free licence");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "The free licence could not be sent");
+        }
+    };
+    let Some(plan) = plan else {
+        return fail(StatusCode::NOT_FOUND, "There are no free credits right now");
+    };
+    match give_free_plan(&store, &plan, &email).await {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "emailed": true,
+            "message": "Your licence number is on its way to that email.",
+        })),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not give a free licence");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "The free licence could not be sent")
+        }
     }
 }
 
