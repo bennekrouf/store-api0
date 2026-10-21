@@ -5,9 +5,10 @@
 // a site lists the active ones on its pricing page. A subscription gets one
 // licence number (payment::subscription) that carries what its plan includes.
 //
-// A plan priced at 0 is free: no Stripe price, the licence is emailed when
-// asked for, and its credits refill every month. Its products are usually
-// none, so it gives a taste of the AI features and no Pro.
+// A plan priced at 0 is the free allowance, not an offer: it is never listed
+// for a pricing page. An app asks for it by email (POST /api/plans/free), the
+// licence is emailed, and its few credits refill every month. Its products are
+// usually none: a taste of the AI features, no Pro.
 //
 //   GET /api/plans                    the active plans, for a pricing page
 //   GET /api/admin/plans              every plan, with Stripe ids, and the credit pricing
@@ -225,14 +226,13 @@ fn public_plan(p: &Plan) -> serde_json::Value {
         "price_cents": p.price_cents,
         "currency": p.currency,
         "monthly_credits": p.monthly_credits,
-        "free": p.is_free(),
         "products": p.products,
         "sort_order": p.sort_order,
     })
 }
 
-/// GET /api/plans — what a pricing page shows. A paid plan is only listed once
-/// it has a Stripe price, so every plan shown can be had; a free one always is.
+/// GET /api/plans — what a pricing page shows: the paid plans with a Stripe
+/// price, so every plan shown can be bought. The free allowance is not one.
 pub async fn public_plans_handler(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
@@ -244,7 +244,7 @@ pub async fn public_plans_handler(req: HttpRequest, store: web::Data<Arc<Endpoin
             return HttpResponse::InternalServerError().json(serde_json::json!({ "success": false, "message": "Plans unavailable" }));
         }
     };
-    let plans: Vec<_> = plans.iter().filter(|p| p.is_free() || p.stripe_price_id.is_some()).map(public_plan).collect();
+    let plans: Vec<_> = plans.iter().filter(|p| !p.is_free() && p.stripe_price_id.is_some()).map(public_plan).collect();
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "plans": plans,
