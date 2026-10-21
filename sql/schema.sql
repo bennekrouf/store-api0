@@ -924,6 +924,15 @@ ALTER TABLE subscriptions ALTER COLUMN tenant_id DROP NOT NULL;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS licence VARCHAR;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS licence_emailed_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_licence ON subscriptions(licence);
+-- A free plan's subscription: no Stripe behind it (stripe_customer_id is ''),
+-- one per email, and the store itself starts each new month. Its licence moves
+-- to the paid subscription the same email takes out later.
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_free BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_one_free ON subscriptions(email) WHERE is_free AND licence IS NOT NULL;
+-- The free plan: a taste of the apps' AI, no Pro. The super admin sets its credits.
+INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, active, sort_order) VALUES
+    ('free', 'Free', 'A few AI credits every month to try the apps'' AI features.', 0, 'eur', 20, TRUE, 0)
+ON CONFLICT (id) DO NOTHING;
 
 -- What an AI call costs in plan credits: ceil(tokens × multiplier ÷ tokens_per_credit),
 -- at least 1. The multipliers are a JSON object, model → factor; a model not in

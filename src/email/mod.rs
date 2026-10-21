@@ -73,7 +73,7 @@ pub enum EmailKind {
     WinBack { name: String },
     WhatsNew { feature_title: String, description: String },
     // ── Plan subscriptions (the desktop apps' licence) ───────────────────────
-    /// `apps`: the apps the plan makes Pro, comma-separated; empty for all.
+    /// `apps`: the apps the plan makes Pro, comma-separated; "*" for all, empty for none.
     LicenceIssued { plan_name: String, licence: String, apps: String, monthly_credits: i64 },
 }
 
@@ -150,14 +150,14 @@ impl EmailKind {
     /// The body, with an unsubscribe link in the footer when one is given.
     pub fn html_body_with(&self, unsubscribe: Option<&str>) -> String {
         if let Self::LicenceIssued { plan_name, licence, apps, monthly_credits } = self {
-            let unlocks = if apps.is_empty() {
-                "every app".to_string()
-            } else {
-                apps.clone()
+            let what = match apps.as_str() {
+                "*" => "to turn on Pro in every app".to_string(),
+                "" => "to use the apps' AI features".to_string(),
+                list => format!("to turn on Pro in {list}"),
             };
             return wrap_mayorana_layout(&format!(
-                r#"<h1>Welcome to {plan_name}</h1>
-<p>Here is your licence number. Paste it into the app's licence window to turn on Pro in {unlocks}.</p>
+                r#"<h1>Your {plan_name} licence</h1>
+<p>Here is your licence number. Paste it into the app's licence window {what}.</p>
 <pre style="font-size:20px;letter-spacing:2px;background:#F1F5F9;padding:12px;border-radius:6px;text-align:center">{licence}</pre>
 <p>It also includes <strong>{monthly_credits} AI credits</strong> every month, used by the apps' AI features. They renew with each paid month.</p>
 <p style="color:#64748B;font-size:13px">Keep this email: the same licence works on every computer you use. You can change or cancel your subscription from the app's licence window.</p>"#
@@ -803,5 +803,29 @@ mod send_request_tests {
         let raw = String::from_utf8(msg.formatted()).unwrap();
         assert!(raw.contains("List-Unsubscribe: <https://x.com/u?token=t>"));
         assert!(raw.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click"));
+    }
+}
+
+#[cfg(test)]
+mod licence_tests {
+    use super::EmailKind;
+
+    fn body(apps: &str) -> String {
+        EmailKind::LicenceIssued {
+            plan_name: "Free".into(),
+            licence: "ABCDE-FGHJK-LMNPQ-RSTUV".into(),
+            apps: apps.into(),
+            monthly_credits: 20,
+        }
+        .html_body()
+    }
+
+    #[test]
+    fn the_licence_email_says_what_the_plan_unlocks() {
+        assert!(body("*").contains("Pro in every app"));
+        assert!(body("gitagent, jobscout").contains("Pro in gitagent, jobscout"));
+        let free = body("");
+        assert!(free.contains("use the apps' AI features") && !free.contains("Pro in"));
+        assert!(free.contains("ABCDE-FGHJK-LMNPQ-RSTUV") && free.contains("20 AI credits"));
     }
 }

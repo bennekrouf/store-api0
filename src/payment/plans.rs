@@ -5,6 +5,10 @@
 // a site lists the active ones on its pricing page. A subscription gets one
 // licence number (payment::subscription) that carries what its plan includes.
 //
+// A plan priced at 0 is free: no Stripe price, the licence is emailed when
+// asked for, and its credits refill every month. Its products are usually
+// none, so it gives a taste of the AI features and no Pro.
+//
 //   GET /api/plans                    the active plans, for a pricing page
 //   GET /api/admin/plans              every plan, with Stripe ids, and the credit pricing
 //   PUT /api/admin/plans/{id}         { name, description, price_cents, currency,
@@ -60,6 +64,13 @@ pub struct Plan {
 
 const PLAN_COLUMNS: &str = "id, name, description, price_cents, currency, monthly_credits, \
                             stripe_product_id, stripe_price_id, active, sort_order, products";
+
+impl Plan {
+    /// Free plans are given, not bought: no Stripe, one per email.
+    pub fn is_free(&self) -> bool {
+        self.price_cents == 0
+    }
+}
 
 fn plan_from_row(r: &tokio_postgres::Row) -> Plan {
     Plan {
@@ -214,13 +225,14 @@ fn public_plan(p: &Plan) -> serde_json::Value {
         "price_cents": p.price_cents,
         "currency": p.currency,
         "monthly_credits": p.monthly_credits,
+        "free": p.is_free(),
         "products": p.products,
         "sort_order": p.sort_order,
     })
 }
 
-/// GET /api/plans — what a pricing page shows. A plan is only listed once it
-/// has a Stripe price, so every plan shown can be bought.
+/// GET /api/plans — what a pricing page shows. A paid plan is only listed once
+/// it has a Stripe price, so every plan shown can be had; a free one always is.
 pub async fn public_plans_handler(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
@@ -232,7 +244,7 @@ pub async fn public_plans_handler(req: HttpRequest, store: web::Data<Arc<Endpoin
             return HttpResponse::InternalServerError().json(serde_json::json!({ "success": false, "message": "Plans unavailable" }));
         }
     };
-    let plans: Vec<_> = plans.iter().filter(|p| p.stripe_price_id.is_some()).map(public_plan).collect();
+    let plans: Vec<_> = plans.iter().filter(|p| p.is_free() || p.stripe_price_id.is_some()).map(public_plan).collect();
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "plans": plans,
@@ -292,9 +304,9 @@ impl PlanInput {
         if !CURRENCIES.contains(&self.currency.as_str()) {
             return Err(format!("Currency must be one of {}", CURRENCIES.join(", ")));
         }
-        // Stripe's own floor is 0.50 in these currencies.
-        if self.price_cents < 50 {
-            return Err("The price must be at least 0.50".into());
+        // 0 is a free plan. Otherwise Stripe's own floor is 0.50 in these currencies.
+        if self.price_cents != 0 && self.price_cents < 50 {
+            return Err("The price must be 0 (free) or at least 0.50".into());
         }
         if self.monthly_credits < 0 {
             return Err("Monthly credits cannot be negative".into());
@@ -367,7 +379,14 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
         .map(|p| p.price_cents != input.price_cents || p.currency != input.currency)
         .unwrap_or(true);
     // Only an active plan needs a price; an inactive one gets it when it goes on sale.
-    if input.active && (price_changed || price_id.is_none()) {
+    // A free plan has no price; one turned free keeps its old one archived.
+    if input.price_cents == 0 {
+        if let Some(old) = price_id.take() {
+            if let Err(e) = stripe.archive_price(&old).await {
+                app_log!(warn, error = %e, price_id = %old, "Could not archive the Stripe price of a plan made free");
+            }
+        }
+    } else if input.active && (price_changed || price_id.is_none()) {
         let metadata = HashMap::from([
             ("purpose".to_string(), PURPOSE_PLAN.to_string()),
             ("plan_id".to_string(), id.to_string()),
