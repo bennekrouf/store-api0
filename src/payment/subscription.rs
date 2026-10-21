@@ -7,7 +7,9 @@
 //   - pays for AI calls from the plan's monthly credits (/v1/chat/completions).
 // No api0 account is needed: the email and the licence are the identity.
 //
-//   POST /api/plans/checkout                { email, plan_id } → { url } of a Stripe Checkout page
+//   POST /api/plans/checkout                { email, plan_id } → { url } of a Stripe Checkout page,
+//                                           or for a free plan { emailed: true }: the licence
+//                                           goes to that email only, which is what proves it
 //   GET  /api/plans/session/{id}            the licence a finished Checkout session bought
 //   GET  /api/plans/subscription/{email}    the current subscription and its credits, or null
 //   POST /api/plans/portal                  { email } → { url } of Stripe's customer portal
@@ -21,6 +23,11 @@
 // (customer portal) raises the allowance at once and lowers it at the next
 // month. The AI endpoint reads the licence's credits before a call and
 // charges spend_credits after it.
+//
+// A free plan (price 0) has no Stripe behind it: its subscription is made
+// here, one per email, and the store starts each new month itself when the
+// licence is next checked. When the same email first pays for a plan, the
+// free licence moves to that subscription, so the number in the apps stays.
 //
 // The webhook (payment::webhook) calls sync_subscription on
 // checkout.session.completed, invoice.paid, invoice.payment_failed and
@@ -183,10 +190,28 @@ async fn licence_where(store: &EndpointStore, condition: &str, value: &str) -> R
 
 /// The licence as typed, or `None` when no subscription has it.
 pub async fn licence_status(store: &EndpointStore, typed: &str) -> Result<Option<LicenceStatus>, String> {
-    match normalise_licence(typed) {
-        Some(licence) => licence_where(store, "s.licence = $1", &licence).await,
-        None => Ok(None),
-    }
+    let Some(licence) = normalise_licence(typed) else {
+        return Ok(None);
+    };
+    start_free_month(store, &licence).await?;
+    licence_where(store, "s.licence = $1", &licence).await
+}
+
+/// A free licence whose month is over starts the next one, with the plan's
+/// credits as they are now. Paid ones are renewed by Stripe instead.
+async fn start_free_month(store: &EndpointStore, licence: &str) -> Result<(), String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    client
+        .execute(
+            "UPDATE subscriptions s SET period_start = NOW(), period_end = NOW() + INTERVAL '1 month', \
+                credits_used = 0, credits_granted = p.monthly_credits, updated_at = NOW() \
+             FROM plans p \
+             WHERE p.id = s.plan_id AND s.is_free AND s.licence = $1 AND s.period_end <= NOW()",
+            &[&licence],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 async fn licence_of_subscription(store: &EndpointStore, subscription_id: &str) -> Result<Option<LicenceStatus>, String> {
@@ -311,6 +336,30 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
         .map_err(|e| e.to_string())?;
     app_log!(info, subscription_id = %sub.id, email = %email, plan = %plan.id, status = %sub.status.as_str(), "Plan subscription synced");
 
+    // A free licence of the same email moves to the first paid subscription,
+    // so the number already pasted into the apps keeps working — but only
+    // once this one is paid, and before its own licence has been emailed.
+    if ["active", "trialing"].contains(&sub.status.as_str()) {
+        let taken = client
+            .query_opt(
+                "UPDATE subscriptions SET licence = NULL, status = 'upgraded', updated_at = NOW() \
+                 WHERE email = $1 AND is_free AND licence IS NOT NULL \
+                   AND EXISTS (SELECT 1 FROM subscriptions WHERE id = $2 AND licence_emailed_at IS NULL) \
+                 RETURNING licence",
+                &[&email, &sub.id.to_string()],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(row) = taken {
+            let licence: String = row.get(0);
+            client
+                .execute("UPDATE subscriptions SET licence = $2 WHERE id = $1", &[&sub.id.to_string(), &licence])
+                .await
+                .map_err(|e| e.to_string())?;
+            app_log!(info, subscription_id = %sub.id, email = %email, "Free licence moved to a paid subscription");
+        }
+    }
+
     // The licence goes out once, when the subscription first turns live: a
     // Checkout still being paid creates the subscription before it is.
     let sql = format!(
@@ -323,12 +372,58 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
     if let Some(row) = fresh {
         let licence: String = row.get(0);
         app_log!(info, subscription_id = %sub.id, email = %email, "Licence issued");
-        send_async(Arc::clone(store), email, EmailKind::LicenceIssued {
-            plan_name: plan.name.clone(),
-            licence,
-            apps: if plans::includes(&plan.products, "*") { String::new() } else { plan.products.join(", ") },
-            monthly_credits: plan.monthly_credits,
-        });
+        send_async(Arc::clone(store), email, licence_email(&plan, licence));
+    }
+    Ok(())
+}
+
+fn licence_email(plan: &plans::Plan, licence: String) -> EmailKind {
+    EmailKind::LicenceIssued {
+        plan_name: plan.name.clone(),
+        licence,
+        apps: if plans::includes(&plan.products, "*") { "*".into() } else { plan.products.join(", ") },
+        monthly_credits: plan.monthly_credits,
+    }
+}
+
+/// How long before the same email can be sent a free licence again.
+const FREE_RESEND_AFTER: &str = "1 hour";
+
+/// A free plan's licence for `email`: made the first time, sent again on
+/// later asks (at most once an hour, so the form cannot flood an inbox).
+/// Only ever emailed — the caller never sees it.
+async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &str) -> Result<(), String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let resend_sql = format!(
+        "UPDATE subscriptions SET licence_emailed_at = NOW() \
+         WHERE email = $1 AND is_free AND licence IS NOT NULL \
+           AND (licence_emailed_at IS NULL OR licence_emailed_at < NOW() - INTERVAL '{FREE_RESEND_AFTER}') \
+         RETURNING licence"
+    );
+    if let Some(row) = client.query_opt(resend_sql.as_str(), &[&email]).await.map_err(|e| e.to_string())? {
+        app_log!(info, email = %email, "Free licence sent again");
+        send_async(Arc::clone(store), email.to_string(), licence_email(plan, row.get(0)));
+        return Ok(());
+    }
+    let id = format!("free_{}", uuid::Uuid::new_v4().simple());
+    let inserted = client
+        .query_opt(
+            "INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, period_start, period_end, \
+                                        credits_granted, credits_used, licence, licence_emailed_at, is_free) \
+             VALUES ($1, $2, $3, '', 'active', NOW(), NOW() + INTERVAL '1 month', $4, 0, $5, NOW(), TRUE) \
+             ON CONFLICT DO NOTHING \
+             RETURNING licence",
+            &[&id, &email, &plan.id, &plan.monthly_credits, &new_licence()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    match inserted {
+        Some(row) => {
+            app_log!(info, email = %email, plan = %plan.id, "Free licence issued");
+            send_async(Arc::clone(store), email.to_string(), licence_email(plan, row.get(0)));
+        }
+        // Already has one, sent within the hour: nothing more to send.
+        None => app_log!(info, email = %email, "Free licence asked for again within the hour; not resent"),
     }
     Ok(())
 }
@@ -370,28 +465,42 @@ pub async fn checkout_handler(
     if !plausible_email(&email) {
         return fail(StatusCode::BAD_REQUEST, "Enter the email the licence should go to");
     }
-    let Some(site) = site_url() else {
-        app_log!(error, "PLANS_SITE_URL is not set — cannot start a plan checkout");
-        return fail(StatusCode::SERVICE_UNAVAILABLE, "Plans are not on sale yet");
-    };
     let plan = match plans::get_plan(&store, &body.plan_id).await {
-        Ok(Some(p)) if p.active && p.stripe_price_id.is_some() => p,
+        Ok(Some(p)) if p.active && (p.is_free() || p.stripe_price_id.is_some()) => p,
         Ok(_) => return fail(StatusCode::NOT_FOUND, "Unknown plan"),
         Err(e) => {
             app_log!(error, error = %e, "Could not read a plan for checkout");
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Checkout could not be started");
         }
     };
-    match current_subscription(&store, &email).await {
-        Ok(Some(s)) if s.live => {
+    // A paid plan already running wins over anything asked for here.
+    match has_live_paid_plan(&store, &email).await {
+        Ok(true) => {
             return fail(StatusCode::CONFLICT, "You already have a plan — change it from Manage subscription");
         }
-        Ok(_) => {}
+        Ok(false) => {}
         Err(e) => {
             app_log!(error, error = %e, "Could not read subscriptions for checkout");
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Checkout could not be started");
         }
     }
+    if plan.is_free() {
+        return match give_free_plan(&store, &plan, &email).await {
+            Ok(()) => HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "emailed": true,
+                "message": "Your licence number is on its way to that email.",
+            })),
+            Err(e) => {
+                app_log!(error, error = %e, "Could not give a free plan");
+                fail(StatusCode::INTERNAL_SERVER_ERROR, "The free plan could not be set up")
+            }
+        };
+    }
+    let Some(site) = site_url() else {
+        app_log!(error, "PLANS_SITE_URL is not set — cannot start a plan checkout");
+        return fail(StatusCode::SERVICE_UNAVAILABLE, "Plans are not on sale yet");
+    };
     let customer = earlier_customer(&store, &email).await;
     let metadata = HashMap::from([
         ("purpose".to_string(), PURPOSE_PLAN.to_string()),
@@ -518,11 +627,24 @@ pub async fn licence_portal_handler(
     }
 }
 
+async fn has_live_paid_plan(store: &EndpointStore, email: &str) -> Result<bool, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let sql = format!(
+        "SELECT EXISTS (SELECT 1 FROM subscriptions \
+                        WHERE email = $1 AND NOT is_free AND status IN {live} AND period_end > NOW())",
+        live = LIVE_STATUSES
+    );
+    let row = client.query_one(sql.as_str(), &[&email]).await.map_err(|e| e.to_string())?;
+    Ok(row.get(0))
+}
+
+/// The Stripe customer behind the email's latest paid subscription.
 async fn earlier_customer(store: &EndpointStore, email: &str) -> Option<String> {
     let client = store.get_admin_conn().await.ok()?;
     client
         .query_opt(
-            "SELECT stripe_customer_id FROM subscriptions WHERE email = $1 ORDER BY created_at DESC LIMIT 1",
+            "SELECT stripe_customer_id FROM subscriptions \
+             WHERE email = $1 AND stripe_customer_id <> '' ORDER BY created_at DESC LIMIT 1",
             &[&email],
         )
         .await
