@@ -863,41 +863,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_tx_stripe_intent
     ON credit_transactions(stripe_payment_intent_id)
     WHERE stripe_payment_intent_id IS NOT NULL;
 
--- Licences for the desktop apps sold on mayorana.ch (TrackCut first). Not
--- tenant data: a buyer has no api0 account, only the email Stripe Checkout
--- collected, so the table is outside RLS and read with the admin connection.
---   key            the signed licence the app verifies offline (see payment::license)
---   updates_until  last release date the licence unlocks; older builds keep working
---   revoked_at     set when the payment is refunded
-CREATE TABLE IF NOT EXISTS licenses (
-    id                VARCHAR     PRIMARY KEY,
-    product           VARCHAR     NOT NULL,
-    edition           VARCHAR     NOT NULL,
-    email             VARCHAR     NOT NULL,
-    stripe_session_id VARCHAR     NOT NULL UNIQUE,
-    stripe_payment_intent_id VARCHAR,
-    key               TEXT        NOT NULL,
-    updates_until     DATE        NOT NULL,
-    issued_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    revoked_at        TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(email);
-CREATE INDEX IF NOT EXISTS idx_licenses_payment_intent ON licenses(stripe_payment_intent_id);
-
--- What was bought, under the app's current name ("TrackCut Pro"). `product`
--- stays the id signed into the key ("splitter"), which the apps check and a
--- rename cannot change. Rows from before this column are named here once.
-ALTER TABLE licenses ADD COLUMN IF NOT EXISTS product_name VARCHAR;
-UPDATE licenses SET product_name = CASE product
-        WHEN 'splitter'    THEN 'TrackCut Pro'
-        WHEN 'gitagent'    THEN 'GitAgent Pro'
-        WHEN 'small-video' THEN 'PolishCast Pro'
-        WHEN 'spreadwatch' THEN 'SpreadRadar Pro'
-        WHEN 'jobscout'    THEN 'JobScout Pro'
-    END
-    WHERE product_name IS NULL AND edition = 'pro';
-
--- ── Monthly plans: every desktop app, plus AI credits ────────────────────────
+-- ── Monthly plans: the only way to buy ──────────────────────────────────────
+-- Someone subscribes to a plan with their email; the subscription gets one
+-- licence number, emailed to them, which unlocks the plan's apps and pays for
+-- AI calls from its monthly credits. Apps check it online (gateway /v1/licence).
 -- The plans on sale, set by the super admin in the dashboard (payment::plans).
 -- The Stripe price is created by the store whenever the amount or currency
 -- changes; the old one is archived, and subscribers already on it keep it.
@@ -918,8 +887,8 @@ CREATE TABLE IF NOT EXISTS plans (
 -- Two plans to start from; inactive until the super admin reviews and saves
 -- them, which is also what creates their Stripe prices.
 INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, active, sort_order) VALUES
-    ('starter', 'Starter', 'Every desktop app in Pro, and 500 AI credits a month.', 1900, 'eur', 500, FALSE, 1),
-    ('pro',     'Pro',     'Every desktop app in Pro, and 2,000 AI credits a month.', 4900, 'eur', 2000, FALSE, 2)
+    ('starter', 'Starter', 'Pro in the apps it lists, and 500 AI credits a month.', 1900, 'eur', 500, FALSE, 1),
+    ('pro',     'Pro',     'Pro in the apps it lists, and 2,000 AI credits a month.', 4900, 'eur', 2000, FALSE, 2)
 ON CONFLICT (id) DO NOTHING;
 
 -- One row per Stripe subscription, kept in step by the webhooks
@@ -930,7 +899,7 @@ ON CONFLICT (id) DO NOTHING;
 --   credits_granted/used  this period's allowance; a new period sets used to 0
 CREATE TABLE IF NOT EXISTS subscriptions (
     id                   VARCHAR     PRIMARY KEY,
-    tenant_id            VARCHAR     NOT NULL REFERENCES tenants(id),
+    tenant_id            VARCHAR     REFERENCES tenants(id),
     email                VARCHAR     NOT NULL,
     plan_id              VARCHAR     NOT NULL REFERENCES plans(id),
     stripe_customer_id   VARCHAR     NOT NULL,
@@ -946,12 +915,28 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_email ON subscriptions(email);
 
+-- The apps a plan makes Pro, by the id each app checks for ("*" for all).
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS products TEXT[] NOT NULL DEFAULT '{}';
+-- A subscriber needs no api0 account: the email is enough.
+ALTER TABLE subscriptions ALTER COLUMN tenant_id DROP NOT NULL;
+--   licence             the licence number, set when the subscription is first synced
+--   licence_emailed_at  when it was emailed: once, as soon as the subscription is live
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS licence VARCHAR;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS licence_emailed_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_licence ON subscriptions(licence);
+
 -- What an AI call costs in plan credits: ceil(tokens × multiplier ÷ tokens_per_credit),
 -- at least 1. The multipliers are a JSON object, model → factor; a model not in
 -- it counts as 1.
 INSERT INTO system_config (key, value) VALUES
     ('plans.tokens_per_credit', '10000'),
     ('plans.model_multipliers', '{"deepseek-reasoner": 3, "mistral-medium-latest": 2}')
+ON CONFLICT (key) DO NOTHING;
+-- What one use of each app's AI costs, for the pricing page's "what your
+-- credits buy" (payment::plans::AppUse), by the product id the licences use.
+-- The super admin adjusts them.
+INSERT INTO system_config (key, value) VALUES
+    ('plans.app_uses', '[{"app":"gitagent","credits":50},{"app":"shipscreen","credits":25},{"app":"splitter","credits":2},{"app":"small-video","credits":20},{"app":"jobscout","credits":100},{"app":"spreadwatch","credits":10},{"app":"surface-watch","credits":50}]')
 ON CONFLICT (key) DO NOTHING;
 
 -- ── Tenant names are unique, ignoring case ───────────────────────────────────
@@ -1015,11 +1000,11 @@ CREATE TABLE IF NOT EXISTS email_opt_outs (
 
 -- ── LLM provider: usage ─────────────────────────────────────────────────────
 -- A tenant named by LLM_PROVIDER_TENANT_ID serves chat completions to the
--- desktop apps (gateway: POST /v1/chat/completions). The app presents a
--- licence or plan key; the email's monthly plan credits pay (subscriptions).
+-- desktop apps (gateway: POST /v1/chat/completions). The app presents its
+-- licence number; that subscription's monthly credits pay.
 -- See payment::llm_wallet.
 -- One row per completion. Not api_usage_logs: a licence is not an api key.
--- license_id is the licence id, or the subscription id for a plan key.
+-- license_id is the subscription the licence belongs to; product is the app.
 CREATE TABLE IF NOT EXISTS llm_usage (
     id               VARCHAR     PRIMARY KEY,
     tenant_id        VARCHAR     NOT NULL,        -- the provider tenant

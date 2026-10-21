@@ -1,7 +1,7 @@
 use stripe::{
     BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client,
     CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionAutomaticTax,
-    CreateCheckoutSessionLineItems, CreateCheckoutSessionPaymentIntentData,
+    CreateCheckoutSessionLineItems,
     CreateCheckoutSessionSubscriptionData, CreatePaymentIntent, CreatePrice, CreatePriceRecurring,
     CreatePriceRecurringInterval, CreateProduct, Currency, CustomerId, IdOrCreate, PaymentIntent,
     PaymentIntentId, PaymentIntentStatus, Price, PriceId, PriceTaxBehavior, Product, ProductId,
@@ -68,51 +68,9 @@ impl PaymentService {
         Ok(intent)
     }
 
-    /// A hosted Checkout page for one licence of a desktop app. `metadata` is
-    /// copied onto both the session and its PaymentIntent, so the webhook that
-    /// completes the session and a later refund can both be traced back to it.
-    pub async fn create_license_checkout(
-        &self,
-        price_id: &str,
-        success_url: &str,
-        cancel_url: &str,
-        metadata: HashMap<String, String>,
-    ) -> Result<CheckoutSession> {
-        let mut params = CreateCheckoutSession::new();
-        params.mode = Some(CheckoutSessionMode::Payment);
-        params.success_url = Some(success_url);
-        params.cancel_url = Some(cancel_url);
-        params.line_items = Some(vec![CreateCheckoutSessionLineItems {
-            price: Some(price_id.to_string()),
-            quantity: Some(1),
-            ..Default::default()
-        }]);
-        params.metadata = Some(metadata.clone());
-        params.payment_intent_data = Some(CreateCheckoutSessionPaymentIntentData {
-            metadata: Some(metadata),
-            ..Default::default()
-        });
-        params.allow_promotion_codes = Some(true);
-        // Stripe Tax works out VAT from the buyer's address; it needs the
-        // account's tax registrations set up in the Stripe dashboard.
-        if std::env::var("STRIPE_AUTOMATIC_TAX").as_deref() == Ok("true") {
-            params.automatic_tax = Some(CreateCheckoutSessionAutomaticTax {
-                enabled: true,
-                ..Default::default()
-            });
-        }
-
-        Ok(CheckoutSession::create(&self.client, params).await?)
-    }
-
     pub async fn retrieve_checkout_session(&self, session_id: &str) -> Result<CheckoutSession> {
         let id: CheckoutSessionId = session_id.parse()?;
         Ok(CheckoutSession::retrieve(&self.client, &id, &[]).await?)
-    }
-
-    pub async fn retrieve_price(&self, price_id: &str) -> Result<Price> {
-        let id: PriceId = price_id.parse()?;
-        Ok(Price::retrieve(&self.client, &id, &[]).await?)
     }
 
     // ── Monthly plans ───────────────────────────────────────────────────────
@@ -175,7 +133,6 @@ impl PaymentService {
         price_id: &str,
         customer: Option<&str>,
         email: &str,
-        tenant_id: &str,
         success_url: &str,
         cancel_url: &str,
         metadata: HashMap<String, String>,
@@ -184,7 +141,6 @@ impl PaymentService {
         params.mode = Some(CheckoutSessionMode::Subscription);
         params.success_url = Some(success_url);
         params.cancel_url = Some(cancel_url);
-        params.client_reference_id = Some(tenant_id);
         let customer_id = customer.map(|c| c.parse::<CustomerId>()).transpose()?;
         match customer_id {
             Some(id) => params.customer = Some(id),

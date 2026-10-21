@@ -1,14 +1,17 @@
 // src/payment/plans.rs
 //
-// Monthly plans: every desktop app in Pro, plus a monthly allowance of AI
-// credits. The super admin sets them in the dashboard; a site lists the active
-// ones on its pricing page.
+// Monthly plans, the only thing on sale: Pro in the apps a plan lists, plus a
+// monthly allowance of AI credits. The super admin sets them in the dashboard;
+// a site lists the active ones on its pricing page. A subscription gets one
+// licence number (payment::subscription) that carries what its plan includes.
 //
 //   GET /api/plans                    the active plans, for a pricing page
 //   GET /api/admin/plans              every plan, with Stripe ids, and the credit pricing
 //   PUT /api/admin/plans/{id}         { name, description, price_cents, currency,
-//                                       monthly_credits, active, sort_order } — creates or updates
-//   PUT /api/admin/plans-pricing      { tokens_per_credit, model_multipliers }
+//                                       monthly_credits, products, active, sort_order }
+//                                     — creates or updates. `products` are the app ids
+//                                     the plan makes Pro, "*" for every app.
+//   PUT /api/admin/plans-pricing      { tokens_per_credit, model_multipliers, app_uses }
 //
 // All require X-Internal-Secret; the gateway restricts the admin routes to the
 // super admin.
@@ -47,6 +50,8 @@ pub struct Plan {
     pub price_cents: i64,
     pub currency: String,
     pub monthly_credits: i64,
+    /// The apps it makes Pro, by the id each app checks for; "*" is every app.
+    pub products: Vec<String>,
     pub stripe_product_id: Option<String>,
     pub stripe_price_id: Option<String>,
     pub active: bool,
@@ -54,7 +59,7 @@ pub struct Plan {
 }
 
 const PLAN_COLUMNS: &str = "id, name, description, price_cents, currency, monthly_credits, \
-                            stripe_product_id, stripe_price_id, active, sort_order";
+                            stripe_product_id, stripe_price_id, active, sort_order, products";
 
 fn plan_from_row(r: &tokio_postgres::Row) -> Plan {
     Plan {
@@ -68,6 +73,7 @@ fn plan_from_row(r: &tokio_postgres::Row) -> Plan {
         stripe_price_id: r.get(7),
         active: r.get(8),
         sort_order: r.get(9),
+        products: r.get(10),
     }
 }
 
@@ -105,11 +111,24 @@ pub async fn plan_for_price(store: &EndpointStore, price_id: &str) -> Result<Opt
 pub struct Pricing {
     pub tokens_per_credit: i64,
     pub model_multipliers: HashMap<String, f64>,
+    /// What one use of each app's AI costs, for a pricing page to say what a
+    /// plan's credits buy ("~4 repos a month"). Shown in this order. Only an
+    /// estimate for buyers: calls are charged by tokens, as above.
+    #[serde(default)]
+    pub app_uses: Vec<AppUse>,
+}
+
+/// One use of an app's AI — a repository for a month, a video — in credits.
+/// What a "use" is, in words, is the site's to say, by `app`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppUse {
+    pub app: String,
+    pub credits: i64,
 }
 
 impl Default for Pricing {
     fn default() -> Self {
-        Self { tokens_per_credit: DEFAULT_TOKENS_PER_CREDIT, model_multipliers: HashMap::new() }
+        Self { tokens_per_credit: DEFAULT_TOKENS_PER_CREDIT, model_multipliers: HashMap::new(), app_uses: Vec::new() }
     }
 }
 
@@ -132,6 +151,22 @@ impl Pricing {
         if let Some((m, f)) = self.model_multipliers.iter().find(|(_, f)| !(f.is_finite() && **f > 0.0)) {
             return Err(format!("The multiplier for {} must be above 0 (got {})", m, f));
         }
+        let mut seen = Vec::new();
+        for u in &self.app_uses {
+            let id_ok = !u.app.is_empty()
+                && u.app.len() <= 40
+                && u.app.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+            if !id_ok {
+                return Err(format!("'{}' is not an app id: lowercase letters, digits and dashes", u.app));
+            }
+            if u.credits < 1 {
+                return Err(format!("One use of {} must cost at least 1 credit", u.app));
+            }
+            if seen.contains(&&u.app) {
+                return Err(format!("{} is listed twice", u.app));
+            }
+            seen.push(&u.app);
+        }
         Ok(())
     }
 }
@@ -140,7 +175,8 @@ pub async fn read_pricing(store: &EndpointStore) -> Result<Pricing, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let rows = client
         .query(
-            "SELECT key, value FROM system_config WHERE key IN ('plans.tokens_per_credit', 'plans.model_multipliers')",
+            "SELECT key, value FROM system_config \
+             WHERE key IN ('plans.tokens_per_credit', 'plans.model_multipliers', 'plans.app_uses')",
             &[],
         )
         .await
@@ -158,6 +194,10 @@ pub async fn read_pricing(store: &EndpointStore) -> Result<Pricing, String> {
                 Ok(m) => pricing.model_multipliers = m,
                 Err(e) => app_log!(warn, error = %e, "plans.model_multipliers is not a JSON object of numbers; ignoring it"),
             },
+            "plans.app_uses" => match serde_json::from_str(v) {
+                Ok(u) => pricing.app_uses = u,
+                Err(e) => app_log!(warn, error = %e, "plans.app_uses is not a JSON list of {{app, credits}}; ignoring it"),
+            },
             _ => {}
         }
     }
@@ -174,6 +214,8 @@ fn public_plan(p: &Plan) -> serde_json::Value {
         "price_cents": p.price_cents,
         "currency": p.currency,
         "monthly_credits": p.monthly_credits,
+        "products": p.products,
+        "sort_order": p.sort_order,
     })
 }
 
@@ -195,6 +237,7 @@ pub async fn public_plans_handler(req: HttpRequest, store: web::Data<Arc<Endpoin
         "success": true,
         "plans": plans,
         "tokens_per_credit": pricing.tokens_per_credit,
+        "app_uses": pricing.app_uses,
     }))
 }
 
@@ -225,6 +268,8 @@ pub struct PlanInput {
     pub price_cents: i64,
     pub currency: String,
     pub monthly_credits: i64,
+    #[serde(default)]
+    pub products: Vec<String>,
     pub active: bool,
     #[serde(default)]
     pub sort_order: i32,
@@ -254,8 +299,37 @@ impl PlanInput {
         if self.monthly_credits < 0 {
             return Err("Monthly credits cannot be negative".into());
         }
+        self.products = normalise_products(&self.products)?;
         Ok(())
     }
+}
+
+/// App ids, lowercased, deduplicated and in order; "*" stands alone.
+fn normalise_products(products: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in products {
+        let p = p.trim().to_lowercase();
+        if p.is_empty() {
+            continue;
+        }
+        let ok = p == "*"
+            || (p.len() <= 40 && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+        if !ok {
+            return Err(format!("'{}' is not an app id: lowercase letters, digits and dashes", p));
+        }
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    if out.iter().any(|p| p == "*") {
+        return Ok(vec!["*".into()]);
+    }
+    Ok(out)
+}
+
+/// Whether a plan with `products` makes `app` Pro.
+pub fn includes(products: &[String], app: &str) -> bool {
+    products.iter().any(|p| p == "*" || p == app)
 }
 
 /// PUT /api/admin/plans/{id}
@@ -322,14 +396,15 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let sql = format!(
         "INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, \
-                            stripe_product_id, stripe_price_id, active, sort_order, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) \
+                            stripe_product_id, stripe_price_id, active, sort_order, products, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) \
          ON CONFLICT (id) DO UPDATE SET \
             name = EXCLUDED.name, description = EXCLUDED.description, \
             price_cents = EXCLUDED.price_cents, currency = EXCLUDED.currency, \
             monthly_credits = EXCLUDED.monthly_credits, \
             stripe_product_id = EXCLUDED.stripe_product_id, stripe_price_id = EXCLUDED.stripe_price_id, \
-            active = EXCLUDED.active, sort_order = EXCLUDED.sort_order, updated_at = NOW() \
+            active = EXCLUDED.active, sort_order = EXCLUDED.sort_order, \
+            products = EXCLUDED.products, updated_at = NOW() \
          RETURNING {}",
         PLAN_COLUMNS
     );
@@ -347,6 +422,7 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
                 &price_id,
                 &input.active,
                 &input.sort_order,
+                &input.products,
             ],
         )
         .await
@@ -368,14 +444,16 @@ pub async fn save_pricing_handler(
         return HttpResponse::BadRequest().json(serde_json::json!({ "success": false, "message": why }));
     }
     let multipliers = serde_json::to_string(&pricing.model_multipliers).unwrap_or_else(|_| "{}".into());
+    let app_uses = serde_json::to_string(&pricing.app_uses).unwrap_or_else(|_| "[]".into());
     let result = async {
         let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
         client
             .execute(
                 "INSERT INTO system_config (key, value, updated_at) VALUES \
-                    ('plans.tokens_per_credit', $1, NOW()), ('plans.model_multipliers', $2, NOW()) \
+                    ('plans.tokens_per_credit', $1, NOW()), ('plans.model_multipliers', $2, NOW()), \
+                    ('plans.app_uses', $3, NOW()) \
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
-                &[&pricing.tokens_per_credit.to_string(), &multipliers],
+                &[&pricing.tokens_per_credit.to_string(), &multipliers, &app_uses],
             )
             .await
             .map_err(|e| e.to_string())
@@ -383,7 +461,7 @@ pub async fn save_pricing_handler(
     .await;
     match result {
         Ok(_) => {
-            app_log!(info, tokens_per_credit = pricing.tokens_per_credit, multipliers = %multipliers, "Plan credit pricing changed");
+            app_log!(info, tokens_per_credit = pricing.tokens_per_credit, multipliers = %multipliers, app_uses = %app_uses, "Plan credit pricing changed");
             HttpResponse::Ok().json(serde_json::json!({ "success": true, "pricing": pricing }))
         }
         Err(e) => {
@@ -402,6 +480,7 @@ mod tests {
         let pricing = Pricing {
             tokens_per_credit: 10_000,
             model_multipliers: HashMap::from([("deepseek-reasoner".to_string(), 3.0)]),
+            app_uses: Vec::new(),
         };
         assert_eq!(pricing.credits_for("deepseek-chat", 0), 0);
         assert_eq!(pricing.credits_for("deepseek-chat", 1), 1);
@@ -415,7 +494,7 @@ mod tests {
     #[test]
     fn pricing_and_plans_are_checked() {
         assert!(Pricing { tokens_per_credit: 0, ..Default::default() }.check().is_err());
-        let bad = Pricing { tokens_per_credit: 10, model_multipliers: HashMap::from([("m".into(), 0.0)]) };
+        let bad = Pricing { tokens_per_credit: 10, model_multipliers: HashMap::from([("m".into(), 0.0)]), app_uses: Vec::new() };
         assert!(bad.check().is_err());
 
         let mut plan = PlanInput {
@@ -424,13 +503,40 @@ mod tests {
             price_cents: 1900,
             currency: "EUR".into(),
             monthly_credits: 500,
+            products: vec![" GitAgent ".into(), "jobscout".into(), "gitagent".into()],
             active: true,
             sort_order: 1,
         };
         assert!(plan.check("starter").is_ok());
+        assert_eq!(plan.products, vec!["gitagent", "jobscout"]);
         assert_eq!((plan.name.as_str(), plan.currency.as_str()), ("Starter", "eur"));
         assert!(plan.check("Starter Plan").is_err());
         plan.price_cents = 10;
         assert!(plan.check("starter").is_err());
+    }
+
+    #[test]
+    fn a_plan_names_the_apps_it_unlocks_or_all_of_them() {
+        assert_eq!(normalise_products(&["jobscout".into(), "*".into()]).unwrap(), vec!["*"]);
+        assert!(normalise_products(&["Job Scout".into()]).is_err());
+        assert!(includes(&["gitagent".into()], "gitagent"));
+        assert!(!includes(&["gitagent".into()], "jobscout"));
+        assert!(includes(&["*".into()], "jobscout"));
+        assert!(!includes(&[], "gitagent"));
+    }
+
+    #[test]
+    fn what_an_app_use_costs_is_checked() {
+        let with = |uses: Vec<(&str, i64)>| Pricing {
+            app_uses: uses.into_iter().map(|(a, c)| AppUse { app: a.into(), credits: c }).collect(),
+            ..Default::default()
+        };
+        assert!(with(vec![("gitagent", 50), ("jobscout", 100)]).check().is_ok());
+        assert!(with(vec![("gitagent", 0)]).check().is_err());
+        assert!(with(vec![("Git Agent", 5)]).check().is_err());
+        assert!(with(vec![("gitagent", 5), ("gitagent", 6)]).check().is_err());
+        // A pricing saved before app uses existed still reads.
+        let old: Pricing = serde_json::from_str(r#"{"tokens_per_credit":10000,"model_multipliers":{}}"#).unwrap();
+        assert!(old.app_uses.is_empty());
     }
 }
