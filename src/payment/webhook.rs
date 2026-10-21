@@ -13,11 +13,9 @@
 //
 // Handled:
 //   payment_intent.succeeded    → api0 credits (payment::topup)
-//   checkout.session.completed  → desktop app licence (payment::license)
-//   charge.refunded             → licence revoked, when fully refunded
 //   checkout.session.completed (subscription mode), invoice.paid,
 //   invoice.payment_failed, customer.subscription.created/updated/deleted
-//                               → monthly plan subscription (payment::subscription)
+//                               → plan subscription and its licence (payment::subscription)
 // Anything else, or an event for a payment that is neither, is acknowledged
 // with 200 and ignored. 500 only when Stripe should retry.
 
@@ -25,7 +23,6 @@ use crate::app_log;
 use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
-use crate::payment::license::{self, IssueError};
 use crate::payment::service::PaymentService;
 use crate::payment::subscription;
 use crate::payment::topup::{self, TopUp, TopUpError};
@@ -107,7 +104,6 @@ pub async fn stripe_webhook_handler(
         "checkout.session.completed" | "checkout.session.async_payment_succeeded" => {
             on_checkout_completed(&store, &payment_service, object_id).await
         }
-        "charge.refunded" => on_charge_refunded(&store, object).await,
         "invoice.paid" | "invoice.payment_failed" => match object["subscription"].as_str() {
             Some(sub_id) => on_subscription_changed(&store, &payment_service, sub_id).await,
             None => false,
@@ -165,50 +161,23 @@ async fn on_checkout_completed(store: &Arc<EndpointStore>, stripe: &PaymentServi
             return true;
         }
     };
-    if session.mode == stripe::CheckoutSessionMode::Subscription {
-        return match session.subscription.as_ref() {
-            Some(sub) => on_subscription_changed(store, stripe, sub.id().as_str()).await,
-            None => false,
-        };
-    }
-    match license::issue_for_session(store, &session).await {
-        Ok(_) => false,
-        // Not a licence session, or paid by a method that settles later: its
-        // checkout.session.async_payment_succeeded event will issue it.
-        Err(IssueError::NotIssuable(_)) => false,
-        Err(e) => {
-            app_log!(error, error = %e, session_id = %session_id, "Webhook: licence could not be issued");
-            true
+    // Subscriptions are all that is sold; a one-off Checkout (another site on
+    // the same Stripe account) is not ours to handle.
+    match session.subscription.as_ref() {
+        Some(sub) if session.mode == stripe::CheckoutSessionMode::Subscription => {
+            on_subscription_changed(store, stripe, sub.id().as_str()).await
         }
+        _ => false,
     }
 }
 
 /// Returns whether Stripe should retry. A subscription that is not a plan
 /// subscription is skipped inside sync, and counts as handled.
-async fn on_subscription_changed(store: &EndpointStore, stripe: &PaymentService, subscription_id: &str) -> bool {
+async fn on_subscription_changed(store: &Arc<EndpointStore>, stripe: &PaymentService, subscription_id: &str) -> bool {
     match subscription::sync_by_id(store, stripe, subscription_id).await {
         Ok(()) => false,
         Err(e) => {
             app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: plan subscription could not be synced");
-            true
-        }
-    }
-}
-
-async fn on_charge_refunded(store: &EndpointStore, charge: &serde_json::Value) -> bool {
-    // A partial refund (a goodwill discount) leaves the licence alone.
-    if charge["refunded"].as_bool() != Some(true) {
-        return false;
-    }
-    let Some(intent_id) = charge["payment_intent"].as_str() else { return false };
-    match license::revoke_for_payment(store, intent_id).await {
-        Ok(0) => false,
-        Ok(n) => {
-            app_log!(info, payment_intent_id = %intent_id, revoked = n, "Licence revoked after a full refund");
-            false
-        }
-        Err(e) => {
-            app_log!(error, error = %e, payment_intent_id = %intent_id, "Webhook: licence could not be revoked");
             true
         }
     }

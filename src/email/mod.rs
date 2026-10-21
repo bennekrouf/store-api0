@@ -72,9 +72,9 @@ pub enum EmailKind {
     Nudge { name: String, credits: i64 },
     WinBack { name: String },
     WhatsNew { feature_title: String, description: String },
-    // ── Desktop app licences (sold on mayorana.ch, not api0) ─────────────────
-    /// `how`: where the key goes in that app, as HTML ("open GitAgent, click …").
-    LicenseIssued { product_name: String, how: String, key: String, updates_until: String },
+    // ── Plan subscriptions (the desktop apps' licence) ───────────────────────
+    /// `apps`: the apps the plan makes Pro, comma-separated; empty for all.
+    LicenceIssued { plan_name: String, licence: String, apps: String, monthly_credits: i64 },
 }
 
 impl EmailKind {
@@ -94,7 +94,7 @@ impl EmailKind {
             Self::Nudge { .. }             => "nudge",
             Self::WinBack { .. }           => "win_back",
             Self::WhatsNew { .. }          => "whats_new",
-            Self::LicenseIssued { .. }     => "license_issued",
+            Self::LicenceIssued { .. }     => "licence_issued",
         }
     }
 
@@ -120,7 +120,7 @@ impl EmailKind {
             Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
             Self::WhatsNew { feature_title, .. }             => format!("New on api0: {}", feature_title),
-            Self::LicenseIssued { product_name, .. }         => format!("Your {} licence key", product_name),
+            Self::LicenceIssued { plan_name, .. }            => format!("Your {} licence", plan_name),
         }
     }
 
@@ -137,7 +137,7 @@ impl EmailKind {
     /// desktop app from mayorana.ch and have never heard of api0.
     fn sender_name(&self) -> &'static str {
         match self {
-            Self::LicenseIssued { .. } => "mayorana",
+            Self::LicenceIssued { .. } => "mayorana",
             _ => "api0",
         }
     }
@@ -149,13 +149,18 @@ impl EmailKind {
 
     /// The body, with an unsubscribe link in the footer when one is given.
     pub fn html_body_with(&self, unsubscribe: Option<&str>) -> String {
-        if let Self::LicenseIssued { product_name, how, key, updates_until } = self {
+        if let Self::LicenceIssued { plan_name, licence, apps, monthly_credits } = self {
+            let unlocks = if apps.is_empty() {
+                "every app".to_string()
+            } else {
+                apps.clone()
+            };
             return wrap_mayorana_layout(&format!(
-                r#"<h1>Thank you for buying {product_name}</h1>
-<p>Here is your licence key. To activate it, {how}</p>
-<pre style="white-space:pre-wrap;word-break:break-all;background:#F1F5F9;padding:12px;border-radius:6px;font-size:12px">{key}</pre>
-<p>It includes every update released until <strong>{updates_until}</strong>. Versions released before that date keep working after it.</p>
-<p style="color:#64748B;font-size:13px">Keep this email: the key works offline and is all you need to activate {product_name} on another computer.</p>"#
+                r#"<h1>Welcome to {plan_name}</h1>
+<p>Here is your licence number. Paste it into the app's licence window to turn on Pro in {unlocks}.</p>
+<pre style="font-size:20px;letter-spacing:2px;background:#F1F5F9;padding:12px;border-radius:6px;text-align:center">{licence}</pre>
+<p>It also includes <strong>{monthly_credits} AI credits</strong> every month, used by the apps' AI features. They renew with each paid month.</p>
+<p style="color:#64748B;font-size:13px">Keep this email: the same licence works on every computer you use. You can change or cancel your subscription from the app's licence window.</p>"#
             ));
         }
         let content = match self {
@@ -338,7 +343,7 @@ impl EmailKind {
 <p>{description}</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Try It Now</a></p>"#
             ),
-            Self::LicenseIssued { .. } => unreachable!("rendered above"),
+            Self::LicenceIssued { .. } => unreachable!("rendered above"),
         };
 
         wrap_layout(&content, unsubscribe)

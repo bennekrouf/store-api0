@@ -7,7 +7,6 @@ pub mod transactions;
 pub mod payment;
 pub mod service;
 pub mod topup;
-pub mod license;
 pub mod plans;
 pub mod subscription;
 pub mod llm_wallet;
