@@ -19,8 +19,10 @@
 // read is the one place a key leaves, decrypted, on the internal network.
 //
 // Every provider here speaks the OpenAI-style chat-completions API, tool calls
-// included, at `{base_url}/v1/chat/completions` — so the bridge needs one
-// client, not one each. DeepSeek is the default; Mistral and Anthropic (Claude,
+// included, at `{base_url}{chat_path}` — `/v1/chat/completions` for most, so the
+// bridge needs one client, not one each. Providers with no `models` here (OpenAI,
+// Google, Qwen, Z.ai) only back the regions the desktop apps offer, with the
+// models listed in llm_models.rs; the bridge never runs on them. DeepSeek is the default; Mistral and Anthropic (Claude,
 // through its OpenAI-compatible endpoint) the alternatives. The same keys back
 // the regions the desktop apps offer (llm_regions.rs).
 
@@ -41,21 +43,35 @@ pub(crate) struct Provider {
     pub id: &'static str,
     pub label: &'static str,
     pub base_url: &'static str,
+    /// Where chat completions are, after `base_url`.
+    pub chat_path: &'static str,
+    /// The models the messaging assistant may choose; none for a provider
+    /// that only backs regions.
     pub models: &'static [&'static str],
 }
+
+impl Provider {
+    pub fn chat_url(&self) -> String {
+        format!("{}{}", self.base_url, self.chat_path)
+    }
+}
+
+const CHAT_PATH: &str = "/v1/chat/completions";
 
 pub(crate) const PROVIDERS: &[Provider] = &[
     Provider {
         id: "deepseek",
         label: "DeepSeek",
         base_url: "https://api.deepseek.com",
+        chat_path: CHAT_PATH,
         models: &["deepseek-chat", "deepseek-reasoner"],
     },
     Provider {
         id: "mistral",
         label: "Mistral",
         base_url: "https://api.mistral.ai",
-        models: &["mistral-medium-latest"],
+        chat_path: CHAT_PATH,
+        models: &["mistral-medium-latest", "mistral-small-latest", "codestral-latest"],
     },
     // Not "claude": schema.sql moves a deployment still on the old Claude
     // provider, dropped before, back to DeepSeek.
@@ -63,7 +79,36 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         id: "anthropic",
         label: "Anthropic (Claude)",
         base_url: "https://api.anthropic.com",
+        chat_path: CHAT_PATH,
         models: &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
+    },
+    Provider {
+        id: "openai",
+        label: "OpenAI",
+        base_url: "https://api.openai.com",
+        chat_path: CHAT_PATH,
+        models: &[],
+    },
+    Provider {
+        id: "google",
+        label: "Google (Gemini)",
+        base_url: "https://generativelanguage.googleapis.com",
+        chat_path: "/v1beta/openai/chat/completions",
+        models: &[],
+    },
+    Provider {
+        id: "qwen",
+        label: "Alibaba (Qwen)",
+        base_url: "https://dashscope-intl.aliyuncs.com",
+        chat_path: "/compatible-mode/v1/chat/completions",
+        models: &[],
+    },
+    Provider {
+        id: "zai",
+        label: "Z.ai (GLM)",
+        base_url: "https://api.z.ai",
+        chat_path: "/api/paas/v4/chat/completions",
+        models: &[],
     },
 ];
 
@@ -174,6 +219,12 @@ pub async fn update_assistant_config(
     let Some(p) = provider(&body.provider) else {
         return error(actix_web::http::StatusCode::BAD_REQUEST, format!("Unknown provider '{}'", body.provider));
     };
+    if p.models.is_empty() {
+        return error(
+            actix_web::http::StatusCode::BAD_REQUEST,
+            format!("{} only backs the apps' regions, not the messaging assistant", p.label),
+        );
+    }
     if !p.models.contains(&body.model.as_str()) {
         return error(
             actix_web::http::StatusCode::BAD_REQUEST,
@@ -356,15 +407,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deepseek_mistral_and_anthropic_are_the_providers() {
+    fn every_provider_speaks_chat_completions_and_three_serve_the_assistant() {
         for p in PROVIDERS {
-            assert!(!p.models.is_empty(), "{} has no models", p.id);
             assert!(p.base_url.starts_with("https://"), "{} base_url", p.id);
+            assert!(p.chat_path.ends_with("/chat/completions"), "{} chat_path", p.id);
         }
+        for id in ["deepseek", "mistral", "anthropic"] {
+            assert!(!provider(id).unwrap().models.is_empty(), "{} has no assistant models", id);
+        }
+        assert_eq!(provider("google").unwrap().chat_url(), "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
         assert_eq!(PROVIDERS[0].id, "deepseek", "the first provider is the default");
         assert!(provider("mistral").is_some());
         assert!(provider("anthropic").is_some());
         assert!(provider("claude").is_none(), "the old id is migrated away in schema.sql");
-        assert!(provider("openai").is_none());
+        assert!(provider("openai").unwrap().models.is_empty(), "regions only");
     }
 }
