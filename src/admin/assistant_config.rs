@@ -20,7 +20,9 @@
 //
 // Every provider here speaks the OpenAI-style chat-completions API, tool calls
 // included, at `{base_url}/v1/chat/completions` — so the bridge needs one
-// client, not one each. DeepSeek is the default; Mistral the alternative.
+// client, not one each. DeepSeek is the default; Mistral and Anthropic (Claude,
+// through its OpenAI-compatible endpoint) the alternatives. The same keys back
+// the regions the desktop apps offer (llm_regions.rs).
 
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
@@ -54,6 +56,14 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         label: "Mistral",
         base_url: "https://api.mistral.ai",
         models: &["mistral-medium-latest"],
+    },
+    // Not "claude": schema.sql moves a deployment still on the old Claude
+    // provider, dropped before, back to DeepSeek.
+    Provider {
+        id: "anthropic",
+        label: "Anthropic (Claude)",
+        base_url: "https://api.anthropic.com",
+        models: &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
     },
 ];
 
@@ -279,6 +289,12 @@ pub async fn delete_assistant_key(
             );
         }
     }
+    if let Some(region) = crate::admin::llm_regions::uses_provider(&store, &id).await {
+        return error(
+            actix_web::http::StatusCode::BAD_REQUEST,
+            format!("The {} region uses this provider — put another one behind it before removing its key", region),
+        );
+    }
     if crate::admin::model_config::read_ai_config(&store).await.0 == id {
         return error(
             actix_web::http::StatusCode::BAD_REQUEST,
@@ -340,14 +356,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deepseek_and_mistral_are_the_only_providers() {
+    fn deepseek_mistral_and_anthropic_are_the_providers() {
         for p in PROVIDERS {
             assert!(!p.models.is_empty(), "{} has no models", p.id);
             assert!(p.base_url.starts_with("https://"), "{} base_url", p.id);
         }
         assert_eq!(PROVIDERS[0].id, "deepseek", "the first provider is the default");
         assert!(provider("mistral").is_some());
-        assert!(provider("claude").is_none());
+        assert!(provider("anthropic").is_some());
+        assert!(provider("claude").is_none(), "the old id is migrated away in schema.sql");
         assert!(provider("openai").is_none());
     }
 }

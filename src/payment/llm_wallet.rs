@@ -7,8 +7,13 @@
 // (payment::subscription).
 //
 //   POST /api/internal/llm/authorize  { licence, model?, app? }
-//        → whose licence it is, the credits left, the models on offer and,
-//          when one matches, the upstream provider to forward to (with its key)
+//        → whose licence it is, the credits left, the regions on offer (with
+//          what a credit buys on each) and, when one matches, the upstream
+//          provider to forward to (with its key) and the name the app may see
+//
+// An app names a region ("europe", admin/llm_regions.rs) and is only ever told
+// the region back. "default" (or the tenant's name) is the platform's choice;
+// a model named directly still works for older apps, but is never listed.
 //   POST /api/internal/llm/charge     one completion's tokens
 //        → { credits, balance }: spends the subscription's credits and records
 //          the call under the provider tenant in llm_usage
@@ -23,6 +28,7 @@
 // super admin sets in Admin → Messaging assistant (assistant_config).
 
 use crate::admin::assistant_config::{self, PROVIDERS};
+use crate::admin::llm_regions::{self, Backing, Region};
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
@@ -47,6 +53,27 @@ pub fn pick_model<'a>(
             .or_else(|| offered.first().copied());
     }
     offered.iter().find(|(_, m)| *m == r).copied()
+}
+
+/// The region a request names, among those live.
+pub(crate) fn pick_region<'a>(
+    requested: &str,
+    live: &[(&'static Region, &'a Backing)],
+) -> Option<(&'static Region, &'a Backing)> {
+    live.iter().find(|(r, _)| r.id.eq_ignore_ascii_case(requested.trim())).copied()
+}
+
+/// The name an answer carries back to the app: the region, "default", or the
+/// model it named itself — never a model it did not name.
+fn public_name(requested: &str, region: Option<&Region>, tenant_name: &str) -> String {
+    let r = requested.trim();
+    match region {
+        Some(region) => region.id.to_string(),
+        None if r.is_empty() || r.eq_ignore_ascii_case("default") || r.eq_ignore_ascii_case(tenant_name.trim()) => {
+            "default".to_string()
+        }
+        None => r.to_string(),
+    }
 }
 
 fn fail(status: StatusCode, msg: impl Into<String>) -> HttpResponse {
@@ -129,14 +156,39 @@ pub async fn authorize_handler(
         .filter(|p| keyed.iter().any(|k| k == p.id))
         .flat_map(|p| p.models.iter().map(move |m| (p.id, *m)))
         .collect();
-    let choice = assistant_config::read_choice(&store).await.ok().flatten();
-    let default = choice.as_ref().map(|(p, m)| (p.as_str(), m.as_str()));
-    let picked = pick_model(body.model.as_deref().unwrap_or_default(), &tenant_name, default, &offered);
+    let regions = match llm_regions::read_regions(&store).await {
+        Ok(r) => r,
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read the LLM regions");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the regions");
+        }
+    };
+    let live = llm_regions::live(&regions, &keyed);
+    let pricing = match crate::payment::plans::read_pricing(&store).await {
+        Ok(p) => p,
+        Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+
+    let requested = body.model.as_deref().unwrap_or_default();
+    let region = pick_region(requested, &live);
+    let choice = match region {
+        Some(_) => None,
+        None => assistant_config::read_choice(&store).await.ok().flatten(),
+    };
+    let picked: Option<(&str, &str)> = match region {
+        Some((_, b)) => Some((b.provider.as_str(), b.model.as_str())),
+        None => {
+            let default = choice.as_ref().map(|(p, m)| (p.as_str(), m.as_str()));
+            pick_model(requested, &tenant_name, default, &offered)
+        }
+    };
 
     let upstream = match picked.and_then(|(p, m)| assistant_config::provider(p).map(|prov| (prov, m))) {
         Some((prov, model)) => match assistant_config::api_key(&store, prov.id).await {
             Ok(Some(key)) => serde_json::json!({
                 "provider": prov.id, "base_url": prov.base_url, "model": model, "api_key": key,
+                "region": region.map(|(r, _)| r.id),
+                "public_model": public_name(requested, region.map(|(r, _)| r), &tenant_name),
             }),
             Ok(None) => serde_json::Value::Null,
             Err(e) => {
@@ -157,7 +209,18 @@ pub async fn authorize_handler(
         "plan": who.active,
         "plan_name": who.plan_name,
         "balance": if who.active { who.credits_left } else { 0 },
-        "models": offered.iter().map(|(_, m)| *m).collect::<Vec<_>>(),
+        // What the app may list: the regions, never the models behind them.
+        "models": live.iter().map(|(r, _)| r.id).collect::<Vec<_>>(),
+        "regions": live
+            .iter()
+            .map(|(r, b)| serde_json::json!({
+                "id": r.id,
+                "label": r.label,
+                "flag": r.flag,
+                "multiplier": pricing.model_multipliers.get(&b.model).copied().unwrap_or(1.0),
+            }))
+            .collect::<Vec<_>>(),
+        "tokens_per_credit": pricing.tokens_per_credit,
         "upstream": upstream,
     }))
 }
@@ -178,6 +241,9 @@ pub struct ChargeRequest {
     pub status_code: i32,
     #[serde(default)]
     pub response_time_ms: Option<i64>,
+    /// The region the app chose, when it chose one.
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 pub async fn charge_handler(
@@ -221,12 +287,12 @@ pub async fn charge_handler(
     let result = client
         .execute(
             "INSERT INTO llm_usage (id, tenant_id, license_id, email, product, provider, model,
-                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms, region)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
             &[
                 &usage_id, &tenant_id, &b.subscription_id, &b.email, &b.app, &b.provider, &b.model,
                 &b.input_tokens, &b.output_tokens, &total, &b.estimated, &credits, &b.status_code,
-                &b.response_time_ms,
+                &b.response_time_ms, &b.region,
             ],
         )
         .await;
@@ -285,7 +351,8 @@ const USAGE_DEFAULT_LIMIT: i64 = 50;
 const USAGE_MAX_LIMIT: i64 = 200;
 
 /// One recorded call, as the dashboard lists it. `app` is the product that
-/// made the call.
+/// made the call; `model` is the region it chose, or "api0" — the subscriber
+/// never sees which model ran, unless the app named one itself.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UsageEntry {
     pub id: String,
@@ -302,7 +369,7 @@ pub struct UsageEntry {
 /// The columns USAGE_SQL selects, in order.
 type UsageCols = (String, DateTime<Utc>, String, String, i64, i64, i64, i64, i32);
 
-const USAGE_SQL: &str = "SELECT id, created_at, product, model, input_tokens, output_tokens, total_tokens, credits, status_code \
+const USAGE_SQL: &str = "SELECT id, created_at, product, COALESCE(region, model), input_tokens, output_tokens, total_tokens, credits, status_code \
      FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL ORDER BY created_at DESC LIMIT $2";
 
 fn usage_entry((id, created_at, app, model, input_tokens, output_tokens, tokens, credits, status): UsageCols) -> UsageEntry {
@@ -382,6 +449,21 @@ mod tests {
         assert_eq!(pick_model("gpt-5", "Mayo", default, &offered), None);
         // A choice whose provider has no key falls back to what is on offer.
         assert_eq!(pick_model("default", "Mayo", Some(("other", "x")), &offered), Some(("deepseek", "deepseek-chat")));
+    }
+
+    #[test]
+    fn a_region_is_picked_by_id_and_the_answer_names_only_what_was_asked() {
+        let china = Backing { provider: "deepseek".into(), model: "deepseek-chat".into() };
+        let live = [(&llm_regions::REGIONS[1], &china)];
+        let (r, b) = pick_region(" China ", &live).unwrap();
+        assert_eq!((r.id, b.model.as_str()), ("china", "deepseek-chat"));
+        assert!(pick_region("europe", &live).is_none(), "not live");
+        assert!(pick_region("deepseek-chat", &live).is_none());
+
+        assert_eq!(public_name("China", Some(r), "Mayo"), "china");
+        assert_eq!(public_name("", None, "Mayo"), "default");
+        assert_eq!(public_name("mayo", None, "Mayo"), "default");
+        assert_eq!(public_name("deepseek-reasoner", None, "Mayo"), "deepseek-reasoner");
     }
 
     #[test]

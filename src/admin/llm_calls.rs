@@ -45,21 +45,21 @@ const SQL: &str = "
                CASE WHEN license_id IS NULL THEN 'platform' ELSE 'licence' END AS kind,
                product AS app, email, tenant_id, provider, model,
                input_tokens, output_tokens, total_tokens, estimated,
-               credits, status_code, response_time_ms, 1 AS calls
+               credits, status_code, response_time_ms, 1 AS calls, region
           FROM llm_usage
         UNION ALL
         SELECT id, timestamp, 'assistant', endpoint_path, email, tenant_id,
                COALESCE(metadata->>'provider', ''), COALESCE(model_used, ''),
                COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), COALESCE(total_tokens, 0),
                COALESCE(usage_estimated, false), NULL::BIGINT, COALESCE(response_status, 0),
-               response_time_ms, COALESCE((metadata->>'llm_calls')::INT, 1)
+               response_time_ms, COALESCE((metadata->>'llm_calls')::INT, 1), NULL::VARCHAR
           FROM api_usage_logs
          WHERE method = 'LLM'
     )
     SELECT count(*) OVER (), (sum(c.input_tokens) OVER ())::BIGINT, (sum(c.output_tokens) OVER ())::BIGINT,
            c.id, c.at, c.kind, c.app, c.email, c.tenant_id, t.name, c.provider, c.model,
            c.input_tokens, c.output_tokens, c.total_tokens, c.estimated, c.credits,
-           c.status_code, c.response_time_ms, c.calls
+           c.status_code, c.response_time_ms, c.calls, c.region
       FROM calls c
       LEFT JOIN tenants t ON t.id = c.tenant_id
      WHERE ($1 = '' OR c.email ILIKE '%' || $1 || '%' OR c.model ILIKE '%' || $1 || '%'
@@ -131,6 +131,8 @@ pub async fn list_llm_calls(
                 "ok": (200..300).contains(&status),
                 "response_time_ms": r.get::<_, Option<i64>>(18),
                 "calls": r.get::<_, i32>(19),
+                // The region a licence call chose: what its user saw instead of the model.
+                "region": r.get::<_, Option<String>>(20),
             })
         })
         .collect();
