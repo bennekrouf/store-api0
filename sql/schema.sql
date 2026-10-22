@@ -444,8 +444,10 @@ UPDATE system_config SET value = 'deepseek-chat', updated_at = NOW()
  WHERE key = 'ai_uploader.model' AND (value LIKE 'command-%' OR value LIKE 'claude-%');
 UPDATE system_config SET value = 'deepseek', updated_at = NOW()
  WHERE key = 'assistant.provider' AND value = 'claude';
+-- Claude is back as provider "anthropic": its models stay when it is chosen.
 UPDATE system_config SET value = 'deepseek-chat', updated_at = NOW()
- WHERE key = 'assistant.model' AND value LIKE 'claude-%';
+ WHERE key = 'assistant.model' AND value LIKE 'claude-%'
+   AND NOT EXISTS (SELECT 1 FROM system_config WHERE key = 'assistant.provider' AND value = 'anthropic');
 
 -- ── Platform-level user roles ───────────────────────────────────────────────
 -- Roles: super_admin, admin, user (default)
@@ -1068,3 +1070,6 @@ CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_ts ON llm_usage(tenant_id, creat
 ALTER TABLE llm_usage ALTER COLUMN license_id DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_llm_ts ON api_usage_logs(timestamp DESC) WHERE method = 'LLM';
+-- The region the app chose (admin/llm_regions.rs), which is all its user sees
+-- of the call; provider and model say what ran. NULL: a model named directly.
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS region VARCHAR;
