@@ -129,7 +129,12 @@ pub async fn upload_reference_data(
         )
         .await
     {
-        Ok(bytes) => bytes,
+        Ok((bytes, spend)) => {
+            if let Some(spend) = &spend {
+                crate::payment::llm_wallet::record_platform_call(&store, None, &upload_data.email, "reference-import", spend).await;
+            }
+            bytes
+        }
         Err(e) => {
             app_log!(error, "Failed to format reference data: {}", e);
              return HttpResponse::InternalServerError().json(UploadReferenceDataResponse {
