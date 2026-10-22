@@ -196,16 +196,28 @@ pub async fn upload_api_config(
                 )
                 .await
             {
-                Ok(formatted) => match String::from_utf8(formatted) {
-                    Ok(content) => {
-                        app_log!(info, "Successfully formatted YAML content");
-                        content
+                Ok((formatted, spend)) => {
+                    if let Some(spend) = &spend {
+                        crate::payment::llm_wallet::record_platform_call(
+                            &store,
+                            upload_data.tenant_id.as_deref(),
+                            &upload_data.email,
+                            "yaml-import",
+                            spend,
+                        )
+                        .await;
                     }
-                    Err(_) => {
-                        app_log!(warn, "Formatted content is not valid UTF-8, using original");
-                        file_content
+                    match String::from_utf8(formatted) {
+                        Ok(content) => {
+                            app_log!(info, "Successfully formatted YAML content");
+                            content
+                        }
+                        Err(_) => {
+                            app_log!(warn, "Formatted content is not valid UTF-8, using original");
+                            file_content
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     app_log!(warn,
                         error = %e,

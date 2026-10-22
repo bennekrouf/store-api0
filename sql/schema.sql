@@ -1063,3 +1063,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_email_ts ON llm_usage(email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_ts ON llm_usage(tenant_id, created_at DESC);
+-- api0's own AI calls (YAML import) land here too, with no licence and no
+-- credits, so the super admin sees every LLM call in one ledger.
+ALTER TABLE llm_usage ALTER COLUMN license_id DROP NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_llm_ts ON api_usage_logs(timestamp DESC) WHERE method = 'LLM';

@@ -16,6 +16,9 @@
 //        → { usage: [...] }: the email's recent calls, newest first, for the
 //          dashboard (the gateway puts the signed-in email in)
 //
+// api0's own AI calls (YAML import) are recorded in llm_usage too, by
+// record_platform_call, with no licence and no credits.
+//
 // All need X-Internal-Secret. The upstream keys are the platform ones the
 // super admin sets in Admin → Messaging assistant (assistant_config).
 
@@ -237,6 +240,45 @@ pub async fn charge_handler(
     HttpResponse::Ok().json(serde_json::json!({ "success": true, "credits": credits, "balance": balance }))
 }
 
+// ── api0's own AI calls ─────────────────────────────────────────────────────
+
+/// Record an AI call api0 made for a person (a YAML import) in llm_usage, so
+/// the super admin's ledger holds every call. No licence, nothing charged.
+/// Best effort: a failure is logged, never passed on.
+pub async fn record_platform_call(
+    store: &EndpointStore,
+    tenant_id: Option<&str>,
+    email: &str,
+    product: &str,
+    spend: &crate::infra::formatter::LlmSpend,
+) {
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, product = %product, "Could not record an AI call");
+            return;
+        }
+    };
+    let id = format!("llm_{}", uuid::Uuid::new_v4().simple());
+    let total = spend.input_tokens.max(0) + spend.output_tokens.max(0);
+    let result = client
+        .execute(
+            "INSERT INTO llm_usage (id, tenant_id, license_id, email, product, provider, model,
+                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms)
+             VALUES ($1,
+                COALESCE($2, (SELECT default_tenant_id FROM user_preferences WHERE email = $3), ''),
+                NULL, $3, $4, $5, $6, $7, $8, $9, $10, 0, 200, $11)",
+            &[
+                &id, &tenant_id, &email, &product, &spend.provider, &spend.model,
+                &spend.input_tokens, &spend.output_tokens, &total, &spend.estimated, &spend.response_time_ms,
+            ],
+        )
+        .await;
+    if let Err(e) = result {
+        app_log!(error, error = %e, product = %product, model = %spend.model, tokens = total, "Could not record an AI call");
+    }
+}
+
 // ── Usage, for the dashboard ────────────────────────────────────────────────
 
 const USAGE_DEFAULT_LIMIT: i64 = 50;
@@ -261,7 +303,7 @@ pub struct UsageEntry {
 type UsageCols = (String, DateTime<Utc>, String, String, i64, i64, i64, i64, i32);
 
 const USAGE_SQL: &str = "SELECT id, created_at, product, model, input_tokens, output_tokens, total_tokens, credits, status_code \
-     FROM llm_usage WHERE email = $1 ORDER BY created_at DESC LIMIT $2";
+     FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL ORDER BY created_at DESC LIMIT $2";
 
 fn usage_entry((id, created_at, app, model, input_tokens, output_tokens, tokens, credits, status): UsageCols) -> UsageEntry {
     UsageEntry {

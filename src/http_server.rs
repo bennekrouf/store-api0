@@ -233,6 +233,8 @@ pub async fn start_http_server(
                             // Super admin: every user and their workspaces, paged
                             .route("/admin/users", web::get().to(crate::admin::users_directory::list_users))
                             .route("/admin/tenant-names", web::get().to(crate::admin::users_directory::tenant_names))
+                            // Super admin: every AI call, its model and tokens, paged
+                            .route("/admin/llm-calls", web::get().to(crate::admin::llm_calls::list_llm_calls))
                             .route("/admin/config/assistant", web::get().to(crate::admin::assistant_config::get_assistant_config))
                             .route("/admin/config/assistant", web::put().to(crate::admin::assistant_config::update_assistant_config))
                             .route("/admin/config/assistant/keys/{provider}", web::put().to(crate::admin::assistant_config::set_assistant_key))
