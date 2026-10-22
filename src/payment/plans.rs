@@ -26,6 +26,11 @@
 // old one. Subscribers already on the old price keep paying it; their credits
 // follow the plan as it is now, from their next paid month.
 //
+// Stripe is kept in step with the plans on sale (sync_stripe), at start-up and
+// after every save: each plan's product carries its logo, and the customer
+// portal lets a subscriber switch between those plans. The portal's
+// configuration id is kept in system_config (plans.portal_configuration).
+//
 // Credits: an AI call costs ceil(tokens × multiplier ÷ tokens_per_credit), at
 // least 1. With the default 10,000 tokens per credit, one credit is one
 // ordinary call (scoring a job, writing a commit message: 2–6k tokens), so
@@ -216,6 +221,80 @@ pub async fn read_pricing(store: &EndpointStore) -> Result<Pricing, String> {
     Ok(pricing)
 }
 
+// ── Stripe: logos and the customer portal ────────────────────────────────────
+
+const PORTAL_CONFIG_KEY: &str = "plans.portal_configuration";
+
+/// Where a plan's logo is: PLANS_LOGO_URL with `{id}` in it, else mayorana.ch's.
+fn logo_url(plan_id: &str) -> String {
+    std::env::var("PLANS_LOGO_URL")
+        .ok()
+        .filter(|u| u.contains("{id}"))
+        .unwrap_or_else(|| "https://mayorana.ch/image/plans/{id}.png".to_string())
+        .replace("{id}", plan_id)
+}
+
+/// The portal configuration sessions should open with, once sync_stripe made one.
+pub async fn portal_configuration(store: &EndpointStore) -> Option<String> {
+    let client = store.get_admin_conn().await.ok()?;
+    let row = client
+        .query_opt("SELECT value FROM system_config WHERE key = $1", &[&PORTAL_CONFIG_KEY])
+        .await
+        .ok()??;
+    Some(row.get::<_, String>(0)).filter(|v| !v.is_empty())
+}
+
+/// Gives each plan on sale its logo (when one is published for its id) and
+/// lists them all in the customer portal as the plans to switch between.
+/// Safe to run any number of times.
+pub async fn sync_stripe(store: &EndpointStore, stripe: &PaymentService) -> Result<(), String> {
+    let on_sale: Vec<Plan> = list_plans(store, true)
+        .await?
+        .into_iter()
+        .filter(|p| !p.is_free() && p.stripe_product_id.is_some() && p.stripe_price_id.is_some())
+        .collect();
+
+    let http = reqwest::Client::new();
+    for plan in &on_sale {
+        let (Some(product), url) = (plan.stripe_product_id.as_deref(), logo_url(&plan.id)) else { continue };
+        // A plan added later may have no logo yet: Stripe would show a broken image.
+        let published = http.head(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false);
+        if !published {
+            app_log!(warn, plan = %plan.id, url = %url, "No logo published for this plan; Stripe keeps its current image");
+            continue;
+        }
+        if let Err(e) = stripe.set_product_image(product, &url).await {
+            app_log!(warn, error = %e, plan = %plan.id, "Could not set a plan's logo on Stripe");
+        }
+    }
+
+    let switchable: Vec<(String, String)> = on_sale
+        .iter()
+        .filter_map(|p| Some((p.stripe_product_id.clone()?, p.stripe_price_id.clone()?)))
+        .collect();
+    let existing = portal_configuration(store).await;
+    let saved = match stripe.save_portal_configuration(existing.as_deref(), &switchable).await {
+        Ok(id) => id,
+        // Deleted, or made in another Stripe mode (test vs live): start a new one.
+        Err(e) if existing.is_some() => {
+            app_log!(warn, error = %e, "Could not update the portal configuration; creating a new one");
+            stripe.save_portal_configuration(None, &switchable).await.map_err(|e| e.to_string())?
+        }
+        Err(e) => return Err(format!("Stripe refused the portal configuration: {}", e)),
+    };
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    client
+        .execute(
+            "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW()) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+            &[&PORTAL_CONFIG_KEY, &saved],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app_log!(info, configuration = %saved, plans = switchable.len(), "Stripe portal lets subscribers switch between the plans on sale");
+    Ok(())
+}
+
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 
 fn public_plan(p: &Plan) -> serde_json::Value {
@@ -361,7 +440,13 @@ pub async fn save_plan_handler(
         return HttpResponse::BadRequest().json(serde_json::json!({ "success": false, "message": why }));
     }
     match save_plan(&store, &payment_service, &id, input).await {
-        Ok(plan) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "plan": plan })),
+        Ok(plan) => {
+            // The portal must offer what is on sale now; the plan is saved either way.
+            if let Err(e) = sync_stripe(&store, &payment_service).await {
+                app_log!(error, error = %e, plan = %id, "Could not bring Stripe in step after saving a plan");
+            }
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "plan": plan }))
+        }
         Err(e) => {
             app_log!(error, error = %e, plan = %id, "Could not save a plan");
             HttpResponse::InternalServerError().json(serde_json::json!({ "success": false, "message": e }))

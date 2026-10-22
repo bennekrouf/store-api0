@@ -13,8 +13,13 @@
 //   GET  /api/plans/session/{id}            the licence a finished Checkout session bought
 //   GET  /api/plans/subscription/{email}    the current subscription and its credits, or null
 //   POST /api/plans/portal                  { email } → { url } of Stripe's customer portal
+//   POST /api/plans/cancel                  { email, cancel } → cancels the email's paid plan at
+//                                           the end of its month (cancel: true), or resumes it
 //   POST /api/internal/licence/status       { licence } → what it unlocks, and its credits
 //   POST /api/internal/licence/portal       { licence } → { url } of Stripe's customer portal
+//   POST /api/internal/licence/email        { licence, app, title, intro, items } → emails
+//                                           what an app found to the licence's own email,
+//                                           never anyone else; LICENCE_EMAILS_PER_DAY a licence
 //
 // All require X-Internal-Secret; the gateway is the only caller.
 //
@@ -33,9 +38,14 @@
 // checkout.session.completed, invoice.paid, invoice.payment_failed and
 // customer.subscription.created/updated/deleted. It always re-reads the
 // subscription from Stripe, so events arriving out of order end in the same state.
+//
+// Emails: the licence once the subscription is first live; a confirmation when
+// it is cancelled, however that happened (here, the portal, or Stripe giving up
+// on a card); and one "come back" reminder a week after a cancelled plan ended,
+// unless they have a plan again by then (send_come_back_reminders, daily).
 
 use crate::app_log;
-use crate::email::{send_async, EmailKind};
+use crate::email::{send_async, DigestItem, EmailKind};
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::payment::plans::{self, PURPOSE_PLAN};
@@ -65,6 +75,11 @@ pub struct SubscriptionView {
     pub credits_granted: i64,
     pub credits_used: i64,
     pub credits_left: i64,
+    /// Only ever shown to the person signed in with this email.
+    pub licence: Option<String>,
+    /// The apps it makes Pro; "*" is every app.
+    pub products: Vec<String>,
+    pub is_free: bool,
 }
 
 /// The subscription that counts for `email`: a live one if any, else the
@@ -74,9 +89,10 @@ pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<
     let sql = format!(
         "SELECT s.id, s.plan_id, p.name, s.status, \
                 (s.status IN {live} AND s.period_end > NOW()) AS live, \
-                s.cancel_at_period_end, s.period_start, s.period_end, s.credits_granted, s.credits_used \
+                s.cancel_at_period_end, s.period_start, s.period_end, s.credits_granted, s.credits_used, \
+                s.licence, p.products, s.is_free \
          FROM subscriptions s JOIN plans p ON p.id = s.plan_id \
-         WHERE s.email = $1 \
+         WHERE s.email = $1 AND s.status <> 'upgraded' \
          ORDER BY live DESC, s.period_end DESC LIMIT 1",
         live = LIVE_STATUSES
     );
@@ -95,6 +111,9 @@ pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<
             credits_granted: granted,
             credits_used: used,
             credits_left: (granted - used).max(0),
+            licence: r.get(10),
+            products: r.get(11),
+            is_free: r.get(12),
         }
     }))
 }
@@ -372,9 +391,88 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
     if let Some(row) = fresh {
         let licence: String = row.get(0);
         app_log!(info, subscription_id = %sub.id, email = %email, "Licence issued");
-        send_async(Arc::clone(store), email, licence_email(&plan, licence));
+        send_async(Arc::clone(store), email.clone(), licence_email(&plan, licence));
+    }
+
+    // Resumed: a later cancel is confirmed again.
+    client
+        .execute(
+            "UPDATE subscriptions SET cancel_emailed_at = NULL \
+             WHERE id = $1 AND NOT cancel_at_period_end AND status <> 'canceled'",
+            &[&sub.id.to_string()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    // Cancelled, once, and only a subscription that was ever live: an
+    // abandoned Checkout expires without anyone having subscribed.
+    let cancelled = client
+        .query_opt(
+            "UPDATE subscriptions SET cancel_emailed_at = NOW() \
+             WHERE id = $1 AND cancel_emailed_at IS NULL AND licence_emailed_at IS NOT NULL \
+               AND (cancel_at_period_end OR status = 'canceled') \
+             RETURNING GREATEST(period_end, NOW())",
+            &[&sub.id.to_string()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(row) = cancelled {
+        let ends: DateTime<Utc> = row.get(0);
+        app_log!(info, subscription_id = %sub.id, email = %email, "Plan cancelled");
+        send_async(
+            Arc::clone(store),
+            email,
+            EmailKind::PlanCancelled { plan_name: plan.name.clone(), ends_on: ends.format("%-d %B %Y").to_string() },
+        );
     }
     Ok(())
+}
+
+/// How long after a cancelled plan ends the one reminder goes out, and the
+/// oldest ending still reminded (so turning this on does not mail everyone who
+/// ever left).
+const COME_BACK_AFTER: &str = "7 days";
+const COME_BACK_UNTIL: &str = "30 days";
+
+/// Daily: the "come back" reminder, once per cancelled plan, to people who
+/// have no plan again. It is optional, so opted-out addresses are skipped when
+/// sending.
+pub async fn send_come_back_reminders(store: &Arc<EndpointStore>) {
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, "Could not connect to send come-back reminders");
+            return;
+        }
+    };
+    let sql = format!(
+        "UPDATE subscriptions s SET comeback_emailed_at = NOW() \
+         FROM plans p \
+         WHERE p.id = s.plan_id AND NOT s.is_free \
+           AND s.cancel_emailed_at IS NOT NULL AND s.comeback_emailed_at IS NULL \
+           AND s.period_end < NOW() - INTERVAL '{COME_BACK_AFTER}' \
+           AND s.period_end > NOW() - INTERVAL '{COME_BACK_UNTIL}' \
+           AND NOT EXISTS (SELECT 1 FROM subscriptions o \
+                           WHERE o.email = s.email AND NOT o.is_free \
+                             AND o.status IN {live} AND o.period_end > NOW()) \
+         RETURNING s.email, p.name",
+        live = LIVE_STATUSES
+    );
+    let rows = match client.query(sql.as_str(), &[]).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            app_log!(error, error = %e, "Could not pick the come-back reminders");
+            return;
+        }
+    };
+    // Two old plans of the same person are both marked, and mailed once.
+    let mut sent = std::collections::HashSet::new();
+    for row in rows {
+        let email: String = row.get(0);
+        if sent.insert(email.clone()) {
+            send_async(Arc::clone(store), email, EmailKind::PlanComeBack { plan_name: row.get(1) });
+        }
+    }
+    app_log!(info, count = sent.len(), "Come-back reminders sent");
 }
 
 fn licence_email(plan: &plans::Plan, licence: String) -> EmailKind {
@@ -656,13 +754,178 @@ pub async fn licence_portal_handler(
         return fail(StatusCode::NOT_FOUND, "No subscription to manage");
     };
     let return_url = site_url().unwrap_or_default();
-    match payment_service.create_portal_session(&customer, &return_url).await {
+    match payment_service
+        .create_portal_session(&customer, &return_url, plans::portal_configuration(&store).await.as_deref())
+        .await {
         Ok(url) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "url": url })),
         Err(e) => {
             app_log!(error, error = %e, "Failed to open the customer portal for a licence");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "The subscription page could not be opened")
         }
     }
+}
+
+/// How many emails one licence may have an app send a day.
+const LICENCE_EMAILS_PER_DAY: u32 = 30;
+
+#[derive(Deserialize)]
+pub struct LicenceEmailRequest {
+    pub licence: String,
+    /// The app's name as the holder knows it ("JobScout"), shown in the email.
+    pub app: String,
+    pub title: String,
+    #[serde(default)]
+    pub intro: String,
+    #[serde(default)]
+    pub items: Vec<DigestItem>,
+}
+
+/// One line of an app's text, trimmed, within `max` characters and without
+/// control characters (it can reach the Subject header).
+fn digest_text(raw: &str, max: usize) -> Option<String> {
+    let t = raw.trim();
+    (t.chars().count() <= max && !t.chars().any(|c| c.is_control())).then(|| t.to_string())
+}
+
+/// An app's request, checked: a short single-line app name and title, a short
+/// intro, at most 50 items, and only plain https links.
+fn digest_of(body: &LicenceEmailRequest) -> Result<EmailKind, &'static str> {
+    let app = digest_text(&body.app, 40).filter(|a| !a.is_empty()).ok_or("app is a short name")?;
+    let title = digest_text(&body.title, 150).filter(|t| !t.is_empty()).ok_or("title is one short line")?;
+    let intro = body.intro.trim();
+    if intro.chars().count() > 2000 {
+        return Err("intro is at most 2000 characters");
+    }
+    if body.items.is_empty() || body.items.len() > 50 {
+        return Err("items holds 1 to 50 lines");
+    }
+    let mut items = Vec::with_capacity(body.items.len());
+    for i in &body.items {
+        let title = digest_text(&i.title, 200).filter(|t| !t.is_empty()).ok_or("each item has a short title")?;
+        let detail = digest_text(&i.detail, 500).ok_or("an item's detail is one line of at most 500 characters")?;
+        let url = i.url.trim().to_string();
+        if !url.is_empty()
+            && !(url.starts_with("https://")
+                && url.len() <= 2000
+                && url.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '<' | '>')))
+        {
+            return Err("an item's url is a plain https link");
+        }
+        items.push(DigestItem { title, detail, url });
+    }
+    Ok(EmailKind::AppDigest { app, title, intro: intro.to_string(), items })
+}
+
+/// Counts one email for `licence` today; false once it has had its day's.
+fn take_licence_email(licence: &str) -> bool {
+    use std::sync::Mutex;
+    static SENT: Mutex<Option<HashMap<String, (chrono::NaiveDate, u32)>>> = Mutex::new(None);
+    let today = Utc::now().date_naive();
+    let mut sent = SENT.lock().unwrap_or_else(|e| e.into_inner());
+    let sent = sent.get_or_insert_with(HashMap::new);
+    sent.retain(|_, (day, _)| *day == today);
+    let n = sent.entry(licence.to_string()).or_insert((today, 0));
+    if n.1 >= LICENCE_EMAILS_PER_DAY {
+        return false;
+    }
+    n.1 += 1;
+    true
+}
+
+/// POST /api/internal/licence/email — an app emailing its own user what it
+/// found. Goes to the licence's email only, so the licence is all the proof
+/// needed; the licence must be active (free allowance included).
+pub async fn licence_email_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<LicenceEmailRequest>,
+) -> impl Responder {
+    use actix_web::http::StatusCode;
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let licence = match licence_status(&store, &body.licence).await {
+        Ok(Some(l)) => l,
+        Ok(None) => return fail(StatusCode::NOT_FOUND, "Unknown licence"),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read a licence for an app email");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "Licence unavailable");
+        }
+    };
+    if !licence.active {
+        return fail(StatusCode::PAYMENT_REQUIRED, "This licence's subscription is not active");
+    }
+    let kind = match digest_of(&body) {
+        Ok(k) => k,
+        Err(why) => return fail(StatusCode::BAD_REQUEST, why),
+    };
+    if !take_licence_email(&licence.licence) {
+        return fail(StatusCode::TOO_MANY_REQUESTS, "Too many emails from this licence today");
+    }
+    let to = licence.email.clone();
+    send_async(store.get_ref().clone(), to.clone(), kind);
+    HttpResponse::Accepted().json(serde_json::json!({ "success": true, "emailed": true, "to": to }))
+}
+
+#[derive(Deserialize)]
+pub struct CancelRequest {
+    pub email: String,
+    /// False resumes a plan that was cancelled but has not ended yet.
+    pub cancel: bool,
+}
+
+/// POST /api/plans/cancel — answers with the subscription as it now is.
+pub async fn cancel_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    payment_service: web::Data<Arc<PaymentService>>,
+    body: web::Json<CancelRequest>,
+) -> impl Responder {
+    use actix_web::http::StatusCode;
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let email = body.email.trim().to_lowercase();
+    let sub_id = match live_paid_subscription(&store, &email).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return fail(StatusCode::NOT_FOUND, "No plan to cancel"),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read subscriptions to cancel");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "The plan could not be changed");
+        }
+    };
+    let sub = match payment_service.set_cancel_at_period_end(&sub_id, body.cancel).await {
+        Ok(sub) => sub,
+        Err(e) => {
+            app_log!(error, error = %e, subscription_id = %sub_id, "Stripe refused to change cancel_at_period_end");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "The plan could not be changed");
+        }
+    };
+    app_log!(info, subscription_id = %sub_id, email = %email, cancel = body.cancel, "Plan cancel changed by its owner");
+    // Synced now, so the answer and the email do not wait for the webhook.
+    if let Err(e) = sync_subscription(&store, &sub).await {
+        app_log!(error, error = %e, subscription_id = %sub_id, "Could not sync a subscription after cancelling");
+    }
+    match current_subscription(&store, &email).await {
+        Ok(sub) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription": sub })),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read a subscription after cancelling");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "Subscription unavailable")
+        }
+    }
+}
+
+/// The email's paid plan that is running now, if any.
+async fn live_paid_subscription(store: &EndpointStore, email: &str) -> Result<Option<String>, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let sql = format!(
+        "SELECT id FROM subscriptions \
+         WHERE email = $1 AND NOT is_free AND status IN {live} AND period_end > NOW() \
+         ORDER BY period_end DESC LIMIT 1",
+        live = LIVE_STATUSES
+    );
+    let row = client.query_opt(sql.as_str(), &[&email]).await.map_err(|e| e.to_string())?;
+    Ok(row.map(|r| r.get(0)))
 }
 
 async fn has_live_paid_plan(store: &EndpointStore, email: &str) -> Result<bool, String> {
@@ -730,7 +993,9 @@ pub async fn portal_handler(
         return fail(StatusCode::NOT_FOUND, "No subscription to manage");
     };
     let return_url = site_url().unwrap_or_default();
-    match payment_service.create_portal_session(&customer, &return_url).await {
+    match payment_service
+        .create_portal_session(&customer, &return_url, plans::portal_configuration(&store).await.as_deref())
+        .await {
         Ok(url) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "url": url })),
         Err(e) => {
             app_log!(error, error = %e, email = %email, "Failed to open the customer portal");
@@ -768,5 +1033,52 @@ mod tests {
         for bad in ["", "anna", "anna@", "@band.ch", "anna@band", "an na@band.ch"] {
             assert!(!plausible_email(bad), "{bad:?}");
         }
+    }
+
+    fn digest(items: Vec<DigestItem>) -> LicenceEmailRequest {
+        LicenceEmailRequest {
+            licence: "ABCDE-FGHJK-LMNPQ-RSTUV".into(),
+            app: "JobScout".into(),
+            title: "3 new jobs for rust developer".into(),
+            intro: String::new(),
+            items,
+        }
+    }
+
+    fn item(title: &str, url: &str) -> DigestItem {
+        DigestItem { title: title.into(), detail: "Zurich · 82/100".into(), url: url.into() }
+    }
+
+    #[test]
+    fn an_app_email_takes_short_lines_and_plain_https_links_only() {
+        assert!(digest_of(&digest(vec![item("Rust developer", "https://example.ch/jobs/1")])).is_ok());
+        assert!(digest_of(&digest(vec![item("No link", "")])).is_ok());
+        assert!(digest_of(&digest(vec![])).is_err());
+        assert!(digest_of(&digest(vec![item("x", "http://example.ch")])).is_err());
+        assert!(digest_of(&digest(vec![item("x", "javascript:alert(1)")])).is_err());
+        assert!(digest_of(&digest(vec![item("x", "https://a.ch/\"onmouseover=x")])).is_err());
+        let mut header = digest(vec![item("x", "")]);
+        header.title = "Hi\r\nBcc: someone@example.com".into();
+        assert!(digest_of(&header).is_err());
+        assert!(digest_of(&digest((0..51).map(|_| item("x", "")).collect())).is_err());
+    }
+
+    #[test]
+    fn an_app_email_escapes_what_the_app_wrote() {
+        let kind = digest_of(&digest(vec![item("<b>Rust</b> & co", "https://example.ch/jobs/1?a=1&b=2")])).unwrap();
+        let html = kind.html_body_with(None);
+        assert!(html.contains("&lt;b&gt;Rust&lt;/b&gt; &amp; co"));
+        assert!(html.contains("https://example.ch/jobs/1?a=1&amp;b=2"));
+        assert_eq!(kind.subject(), "JobScout: 3 new jobs for rust developer");
+    }
+
+    #[test]
+    fn a_licence_gets_its_days_emails_and_no_more() {
+        let licence = "TESTS-DAILY-LIMIT-ONLY0";
+        for _ in 0..LICENCE_EMAILS_PER_DAY {
+            assert!(take_licence_email(licence));
+        }
+        assert!(!take_licence_email(licence));
+        assert!(take_licence_email("TESTS-ANOTHER-LICENCE0"));
     }
 }

@@ -248,6 +248,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             loop {
                 interval.tick().await;
                 run_engagement_schedulers(&sched_store).await;
+                crate::payment::subscription::send_come_back_reminders(&sched_store).await;
                 run_retention_cleanup(&sched_store).await;
             }
         });
@@ -272,6 +273,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialise Stripe payment service
     let stripe_key = config.stripe_secret_key();
     let payment_service = Arc::new(crate::payment::service::PaymentService::new(stripe_key));
+    // Stripe in step with the plans on sale: their logos, and the portal's
+    // plan switching. Retried after every plan save, so a failure here only waits.
+    {
+        let store = Arc::clone(&store_arc);
+        let stripe = Arc::clone(&payment_service);
+        tokio::spawn(async move {
+            if let Err(e) = crate::payment::plans::sync_stripe(&store, &stripe).await {
+                app_log!(error, error = %e, "Could not bring Stripe in step with the plans at start-up");
+            }
+        });
+    }
     let http_payment_service = payment_service;
 
     // Start the HTTP server as a separate task

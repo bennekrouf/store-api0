@@ -42,5 +42,6 @@ hex = "0.4"
 name = "store"
 path = "src/main.rs"
 
-
-
+[dev-dependencies]
+# Checks the form bodies sent to Stripe, encoded as async-stripe encodes them.
+serde_qs = "0.10.1"

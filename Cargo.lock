@@ -2660,6 +2660,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_qs 0.10.1",
  "serde_yaml",
  "sha2",
  "slug",
