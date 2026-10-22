@@ -923,6 +923,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_licence ON subscriptions(lic
 -- to the paid subscription the same email takes out later.
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_free BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_one_free ON subscriptions(email) WHERE is_free AND licence IS NOT NULL;
+--   cancel_emailed_at   when the "your plan is cancelled" email went out; cleared
+--                       if they resume, so a later cancel is confirmed again
+--   comeback_emailed_at when the one "come back" reminder went out, some days
+--                       after a cancelled plan ended
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancel_emailed_at TIMESTAMPTZ;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS comeback_emailed_at TIMESTAMPTZ;
 
 -- ── The default lineup ───────────────────────────────────────────────────────
 -- The apps themselves are the free version; plans are for Pro and AI credits.

@@ -1,11 +1,11 @@
 use stripe::{
-    BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client,
+    BillingPortalConfiguration, BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client,
     CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionAutomaticTax,
     CreateCheckoutSessionLineItems,
     CreateCheckoutSessionSubscriptionData, CreatePaymentIntent, CreatePrice, CreatePriceRecurring,
     CreatePriceRecurringInterval, CreateProduct, Currency, CustomerId, IdOrCreate, PaymentIntent,
     PaymentIntentId, PaymentIntentStatus, Price, PriceId, PriceTaxBehavior, Product, ProductId,
-    Subscription, SubscriptionId, UpdatePrice, UpdateProduct,
+    Subscription, SubscriptionId, UpdatePrice, UpdateProduct, UpdateSubscription,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -124,6 +124,30 @@ impl PaymentService {
         Ok(())
     }
 
+    /// The picture Checkout and the customer portal show for the product.
+    pub async fn set_product_image(&self, product_id: &str, image_url: &str) -> Result<()> {
+        let id: ProductId = product_id.parse()?;
+        let mut params = UpdateProduct::new();
+        params.images = Some(vec![image_url.to_string()]);
+        Product::update(&self.client, &id, params).await?;
+        Ok(())
+    }
+
+    /// Creates the customer portal's configuration, or updates `existing`, so
+    /// a subscriber can switch between the plans on sale (`plans`: each
+    /// product with its price), change card, see invoices, and cancel at the
+    /// end of the paid month. A switch is prorated: the difference is billed
+    /// or credited at once. Returns its id, which portal sessions are opened with.
+    pub async fn save_portal_configuration(&self, existing: Option<&str>, plans: &[(String, String)]) -> Result<String> {
+        let form = portal_form(plans);
+        let path = match existing {
+            Some(id) => format!("/billing_portal/configurations/{}", id),
+            None => "/billing_portal/configurations".to_string(),
+        };
+        let saved: BillingPortalConfiguration = self.client.post_form(&path, form).await?;
+        Ok(saved.id.to_string())
+    }
+
     /// A hosted Checkout page that starts a monthly subscription. `metadata`
     /// goes on the session and on the subscription, which is what the webhooks
     /// read back. An earlier customer is reused, so one person keeps one
@@ -171,10 +195,73 @@ impl PaymentService {
         Ok(Subscription::retrieve(&self.client, &id, &[]).await?)
     }
 
+    /// Cancels at the end of the paid month (`true`), or takes that back
+    /// (`false`). The subscription runs, and is billed, until then either way.
+    pub async fn set_cancel_at_period_end(&self, subscription_id: &str, cancel: bool) -> Result<Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        let params = UpdateSubscription { cancel_at_period_end: Some(cancel), ..Default::default() };
+        Ok(Subscription::update(&self.client, &id, params).await?)
+    }
+
     /// Stripe's customer portal: change card, see invoices, cancel.
-    pub async fn create_portal_session(&self, customer_id: &str, return_url: &str) -> Result<String> {
+    /// `configuration`: the one save_portal_configuration made, else Stripe's default.
+    pub async fn create_portal_session(&self, customer_id: &str, return_url: &str, configuration: Option<&str>) -> Result<String> {
         let mut params = CreateBillingPortalSession::new(customer_id.parse()?);
         params.return_url = Some(return_url);
+        params.configuration = configuration;
         Ok(BillingPortalSession::create(&self.client, params).await?.url)
+    }
+}
+
+/// The customer portal's settings, as Stripe's form body takes them.
+fn portal_form(plans: &[(String, String)]) -> serde_json::Value {
+    let products: Vec<_> = plans
+        .iter()
+        .map(|(product, price)| serde_json::json!({ "product": product, "prices": [price] }))
+        .collect();
+    serde_json::json!({
+        "business_profile": { "headline": "Manage your mayorana plan" },
+        "features": {
+            "invoice_history": { "enabled": true },
+            "payment_method_update": { "enabled": true },
+            "subscription_cancel": { "enabled": true, "mode": "at_period_end" },
+            "subscription_update": {
+                // Stripe refuses an enabled switch with no products to switch to.
+                "enabled": !products.is_empty(),
+                "default_allowed_updates": if products.is_empty() { vec![] } else { vec!["price", "promotion_code"] },
+                "proration_behavior": "create_prorations",
+                "products": products,
+            },
+        },
+    })
+}
+
+#[cfg(test)]
+mod portal_tests {
+    use super::portal_form;
+
+    /// The form as Stripe reads it, brackets unescaped.
+    fn encoded(plans: &[(String, String)]) -> String {
+        serde_qs::to_string(&portal_form(plans)).unwrap().replace("%5B", "[").replace("%5D", "]")
+    }
+
+    #[test]
+    fn the_portal_switches_between_the_plans_on_sale() {
+        let plans = vec![("prod_a".to_string(), "price_a".to_string()), ("prod_b".to_string(), "price_b".to_string())];
+        let form = encoded(&plans);
+        for part in [
+            "features[subscription_update][enabled]=true",
+            "features[subscription_update][products][0][product]=prod_a",
+            "features[subscription_update][products][1][prices][0]=price_b",
+            "features[subscription_update][default_allowed_updates][0]=price",
+            "features[subscription_cancel][mode]=at_period_end",
+        ] {
+            assert!(form.contains(part), "{part} not in {form}");
+        }
+    }
+
+    #[test]
+    fn with_nothing_on_sale_switching_is_off() {
+        assert!(encoded(&[]).contains("features[subscription_update][enabled]=false"));
     }
 }
