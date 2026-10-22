@@ -6,3 +6,4 @@ pub mod tenant_overview;
 pub mod user_roles;
 pub mod llm_calls;
 pub mod llm_regions;
+pub mod llm_models;

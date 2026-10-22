@@ -186,7 +186,8 @@ pub async fn authorize_handler(
     let upstream = match picked.and_then(|(p, m)| assistant_config::provider(p).map(|prov| (prov, m))) {
         Some((prov, model)) => match assistant_config::api_key(&store, prov.id).await {
             Ok(Some(key)) => serde_json::json!({
-                "provider": prov.id, "base_url": prov.base_url, "model": model, "api_key": key,
+                "provider": prov.id, "base_url": prov.base_url, "chat_url": prov.chat_url(),
+                "model": model, "api_key": key,
                 "region": region.map(|(r, _)| r.id),
                 "public_model": public_name(requested, region.map(|(r, _)| r), &tenant_name),
             }),

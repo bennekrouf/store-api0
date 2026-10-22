@@ -7,8 +7,9 @@
 // answer, and in its usage on the dashboard. Which provider and model ran stays
 // on the server, in llm_usage and the super admin's ledger.
 //
-//   GET /api/admin/llm-regions   every region with what is behind it, and the
-//                                providers on offer (with whether their key is set)
+//   GET /api/admin/llm-regions   every region with what is behind it, the
+//                                providers (with whether their key is set) and
+//                                the models to choose from, priced (llm_models.rs)
 //   PUT /api/admin/llm-regions   { regions: [{ id, provider, model }] } — an
 //                                empty provider takes the region off offer
 //
@@ -17,6 +18,7 @@
 // Both need X-Internal-Secret; the gateway restricts them to the super admin.
 
 use crate::admin::assistant_config::{self, PROVIDERS};
+use crate::admin::llm_models::{self, CatalogModel};
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
@@ -96,9 +98,13 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    let (regions, keyed) = match (read_regions(&store).await, assistant_config::providers_with_key(&store).await) {
-        (Ok(r), Ok(k)) => (r, k),
-        (Err(e), _) | (_, Err(e)) => {
+    let (regions, keyed, catalog) = match (
+        read_regions(&store).await,
+        assistant_config::providers_with_key(&store).await,
+        llm_models::read_catalog(&store).await,
+    ) {
+        (Ok(r), Ok(k), Ok(c)) => (r, k, c),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
             app_log!(error, error = %e, "Could not read the LLM regions");
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the regions");
         }
@@ -123,12 +129,17 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
             serde_json::json!({
                 "id": p.id,
                 "label": p.label,
-                "models": p.models,
                 "key_set": keyed.iter().any(|k| k == p.id),
             })
         })
         .collect();
-    HttpResponse::Ok().json(serde_json::json!({ "success": true, "regions": list, "providers": providers }))
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "regions": list,
+        "providers": providers,
+        "models": catalog,
+        "defaults_priced_on": llm_models::DEFAULTS_PRICED_ON,
+    }))
 }
 
 // ── PUT /api/admin/llm-regions ───────────────────────────────────────────────
@@ -148,7 +159,7 @@ pub struct SaveRegionsRequest {
 }
 
 /// The regions as saved, or what is wrong with the request.
-fn validate(choices: &[RegionChoice], keyed: &[String]) -> Result<HashMap<String, Backing>, String> {
+fn validate(choices: &[RegionChoice], keyed: &[String], catalog: &[CatalogModel]) -> Result<HashMap<String, Backing>, String> {
     let mut out = HashMap::new();
     for c in choices {
         let Some(r) = region(&c.id) else {
@@ -161,8 +172,8 @@ fn validate(choices: &[RegionChoice], keyed: &[String]) -> Result<HashMap<String
             return Err(format!("Unknown provider '{}' for {}", c.provider, r.label));
         };
         let model = c.model.trim();
-        if !p.models.contains(&model) {
-            return Err(format!("'{}' is not a {} model: {}", model, p.label, p.models.join(", ")));
+        if !catalog.iter().any(|m| m.provider == p.id && m.model == model) {
+            return Err(format!("'{}' is not in the model list for {}", model, p.label));
         }
         if !keyed.iter().any(|k| k == p.id) {
             return Err(format!("Add a {} API key before putting it behind {}", p.label, r.label));
@@ -187,7 +198,11 @@ pub async fn save_regions(
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the provider keys");
         }
     };
-    let regions = match validate(&body.regions, &keyed) {
+    let catalog = match llm_models::read_catalog(&store).await {
+        Ok(c) => c,
+        Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let regions = match validate(&body.regions, &keyed, &catalog) {
         Ok(r) => r,
         Err(e) => return fail(StatusCode::BAD_REQUEST, e),
     };
@@ -222,6 +237,8 @@ mod tests {
     #[test]
     fn a_region_needs_a_known_model_of_a_provider_with_a_key() {
         let keyed = vec!["deepseek".to_string(), "mistral".to_string()];
+        let catalog = llm_models::defaults();
+        let validate = |c: &[RegionChoice], k: &[String]| validate(c, k, &catalog);
         let ok = validate(&[choice("china", "deepseek", "deepseek-chat"), choice("usa", "", "")], &keyed).unwrap();
         assert_eq!(ok.len(), 1);
         assert_eq!(ok["china"], Backing { provider: "deepseek".into(), model: "deepseek-chat".into() });
