@@ -187,6 +187,11 @@ pub async fn start_http_server(
                                 "/user/credits",
                                 web::post().to(update_credit_balance_handler),
                             )
+                            // A partner's charge: the plan's credits first, then the balance.
+                            .route(
+                                "/user/credits/spend",
+                                web::post().to(crate::payment::spend::spend_handler),
+                            )
                             .route(
                                 "/user/credit-transactions/{tenant_id}",
                                 web::get().to(get_credit_transactions_handler),
