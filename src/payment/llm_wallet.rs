@@ -17,9 +17,10 @@
 //   POST /api/internal/llm/charge     one completion's tokens
 //        → { credits, balance }: spends the subscription's credits and records
 //          the call under the provider tenant in llm_usage
-//   GET  /api/plans/usage/{email}?limit=N
-//        → { usage: [...] }: the email's recent calls, newest first, for the
-//          dashboard (the gateway puts the signed-in email in)
+//   GET  /api/plans/usage/{email}?limit=N&offset=M
+//        → { usage: [...], total }: a page of the email's calls, newest first,
+//          and how many there are, for the dashboard (the gateway puts the
+//          signed-in email in)
 //
 // api0's own AI calls (YAML import) are recorded in llm_usage too, by
 // record_platform_call, with no licence and no credits.
@@ -371,7 +372,9 @@ pub struct UsageEntry {
 type UsageCols = (String, DateTime<Utc>, String, String, i64, i64, i64, i64, i32);
 
 const USAGE_SQL: &str = "SELECT id, created_at, product, COALESCE(region, model), input_tokens, output_tokens, total_tokens, credits, status_code \
-     FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL ORDER BY created_at DESC LIMIT $2";
+     FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL ORDER BY created_at DESC LIMIT $2 OFFSET $3";
+
+const USAGE_COUNT_SQL: &str = "SELECT COUNT(*) FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL";
 
 fn usage_entry((id, created_at, app, model, input_tokens, output_tokens, tokens, credits, status): UsageCols) -> UsageEntry {
     UsageEntry {
@@ -391,25 +394,42 @@ fn usage_limit(requested: Option<i64>) -> i64 {
     requested.unwrap_or(USAGE_DEFAULT_LIMIT).clamp(1, USAGE_MAX_LIMIT)
 }
 
-/// The email's most recent calls, newest first.
-pub async fn recent_usage(store: &EndpointStore, email: &str, limit: Option<i64>) -> Result<Vec<UsageEntry>, String> {
+fn usage_offset(requested: Option<i64>) -> i64 {
+    requested.unwrap_or(0).max(0)
+}
+
+/// A page of the email's calls, newest first, and how many there are in all.
+pub async fn recent_usage(
+    store: &EndpointStore,
+    email: &str,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<(Vec<UsageEntry>, i64), String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let email = email.trim().to_lowercase();
     let rows = client
-        .query(USAGE_SQL, &[&email.trim().to_lowercase(), &usage_limit(limit)])
+        .query(USAGE_SQL, &[&email, &usage_limit(limit), &usage_offset(offset)])
         .await
         .map_err(|e| e.to_string())?;
-    Ok(rows
+    let total: i64 = client
+        .query_one(USAGE_COUNT_SQL, &[&email])
+        .await
+        .map_err(|e| e.to_string())?
+        .get(0);
+    let usage = rows
         .iter()
         .map(|r| usage_entry((r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5), r.get(6), r.get(7), r.get(8))))
-        .collect())
+        .collect();
+    Ok((usage, total))
 }
 
 #[derive(Deserialize)]
 pub struct UsageQuery {
     pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
-/// GET /api/plans/usage/{email}?limit=N
+/// GET /api/plans/usage/{email}?limit=N&offset=M
 pub async fn usage_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
@@ -419,8 +439,8 @@ pub async fn usage_handler(
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    match recent_usage(&store, &email, query.limit).await {
-        Ok(usage) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "usage": usage })),
+    match recent_usage(&store, &email, query.limit, query.offset).await {
+        Ok((usage, total)) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "usage": usage, "total": total })),
         Err(e) => {
             app_log!(error, error = %e, "Could not read LLM usage");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "Usage unavailable")
@@ -498,5 +518,8 @@ mod tests {
         assert_eq!(usage_limit(Some(10)), 10);
         assert_eq!(usage_limit(Some(0)), 1);
         assert_eq!(usage_limit(Some(10_000)), USAGE_MAX_LIMIT);
+        assert_eq!(usage_offset(None), 0);
+        assert_eq!(usage_offset(Some(-5)), 0);
+        assert_eq!(usage_offset(Some(40)), 40);
     }
 }
