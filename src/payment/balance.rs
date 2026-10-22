@@ -7,6 +7,9 @@ use std::sync::Arc;
 /// GET /api/user/credits/{tenant_id or email}.
 ///
 /// Needs the internal secret (gateway) or a service key with `credits.read`.
+/// Asked by email, it also reports the credits left on the email's plan, and
+/// `available`: what POST /api/user/credits/spend can charge (payment::spend).
+/// `balance` stays the account's own, for callers that show its transactions.
 pub async fn get_credit_balance_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
@@ -16,6 +19,7 @@ pub async fn get_credit_balance_handler(
         return deny;
     }
     let mut tenant_id = tenant_id.into_inner();
+    let email = tenant_id.contains('@').then(|| tenant_id.clone());
     app_log!(info, tenant_id = %tenant_id, "Received HTTP get credit balance request");
 
     // If tenant_id looks like an email, resolve it to the actual tenant ID
@@ -33,9 +37,12 @@ pub async fn get_credit_balance_handler(
                 app_log!(info, email = %tenant_id, "No tenant for this email; reporting a zero balance");
                 // Same shape as the found case — a caller must not have to
                 // branch on which of two response bodies it got.
+                let plan = plan_credits(&store, &tenant_id).await;
                 return HttpResponse::Ok().json(serde_json::json!({
                     "success": true,
                     "balance": 0,
+                    "plan_credits_left": plan,
+                    "available": plan,
                     "message": "Credit balance retrieved successfully",
                 }));
             }
@@ -56,9 +63,15 @@ pub async fn get_credit_balance_handler(
                 balance = balance,
                 "Successfully retrieved credit balance"
             );
+            let plan = match &email {
+                Some(e) => plan_credits(&store, e).await,
+                None => 0,
+            };
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "balance": balance,
+                "plan_credits_left": plan,
+                "available": balance.max(0) + plan,
                 "message": "Credit balance retrieved successfully",
             }))
         }
@@ -74,4 +87,13 @@ pub async fn get_credit_balance_handler(
             }))
         }
     }
+}
+
+/// The email's plan credits left; 0 when they cannot be read, so a balance
+/// read never fails over the plan.
+async fn plan_credits(store: &EndpointStore, email: &str) -> i64 {
+    crate::payment::spend::plan_credits_left_for(store, email).await.unwrap_or_else(|e| {
+        app_log!(warn, error = %e, "Could not read plan credits for a balance read");
+        0
+    })
 }

@@ -9,6 +9,7 @@ pub mod service;
 pub mod topup;
 pub mod plans;
 pub mod subscription;
+pub mod spend;
 pub mod llm_wallet;
 pub mod webhook;
 pub mod update_balance;
