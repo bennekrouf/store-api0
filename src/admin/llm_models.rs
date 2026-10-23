@@ -2,8 +2,8 @@
 //
 // The models the super admin can put behind a region (llm_regions.rs), with
 // what the dashboard needs to choose between them: the region each belongs to
-// (where its provider is based), its price per million tokens, its context
-// window and a note. Prices change often, so the list is the super admin's to
+// (where its provider is based), the tasks it suits (TASKS), its price per
+// million tokens, its context window and a note. Prices change often, so the list is the super admin's to
 // edit; until it is saved, DEFAULTS stands.
 //
 //   PUT  /api/admin/llm-models        { models: [...] } — the whole list
@@ -29,6 +29,13 @@ use std::time::{Duration, Instant};
 
 const CONFIG_KEY: &str = "llm.models";
 
+/// What a model can be good at, by who calls it: code (GitAgent's reviews and
+/// commit messages), chat (the messaging assistant on Telegram, WhatsApp and
+/// Teams), text (PublishKit's posts). A model's tasks only say what it is good
+/// for; a region runs another model for a task when the super admin says so
+/// (llm_regions.rs).
+pub(crate) const TASKS: &[&str] = &["code", "chat", "text"];
+
 /// When DEFAULTS' prices were looked up.
 pub(crate) const DEFAULTS_PRICED_ON: &str = "2026-10-22";
 
@@ -39,6 +46,9 @@ pub(crate) struct CatalogModel {
     pub label: String,
     /// The region it belongs to (llm_regions::REGIONS).
     pub origin: String,
+    /// The TASKS it suits, in TASKS' order; empty in a list saved before tasks.
+    #[serde(default)]
+    pub tasks: Vec<String>,
     /// $ per million tokens; `None` while unknown.
     #[serde(default)]
     pub input_price: Option<f64>,
@@ -53,11 +63,14 @@ pub(crate) struct CatalogModel {
     pub note: String,
 }
 
+// One row of the DEFAULTS table, so each reads on a line or two.
+#[allow(clippy::too_many_arguments)]
 fn entry(
     provider: &str,
     model: &str,
     label: &str,
     origin: &str,
+    tasks: &[&str],
     prices: Option<(f64, f64)>,
     cached: Option<f64>,
     note: &str,
@@ -67,6 +80,7 @@ fn entry(
         model: model.into(),
         label: label.into(),
         origin: origin.into(),
+        tasks: tasks.iter().map(|t| t.to_string()).collect(),
         input_price: prices.map(|p| p.0),
         cached_input_price: cached,
         output_price: prices.map(|p| p.1),
@@ -81,29 +95,29 @@ const UNCONFIRMED: &str = "Id and price from a third-party listing — test befo
 pub(crate) fn defaults() -> Vec<CatalogModel> {
     vec![
         // Europe
-        entry("mistral", "mistral-small-latest", "Mistral Small", "europe", Some((0.15, 0.60)), None,
+        entry("mistral", "mistral-small-latest", "Mistral Small", "europe", &["chat", "text"], Some((0.15, 0.60)), None,
             "Cheap: PR comments and descriptions."),
-        entry("mistral", "codestral-latest", "Codestral", "europe", Some((0.30, 0.90)), None,
+        entry("mistral", "codestral-latest", "Codestral", "europe", &["code"], Some((0.30, 0.90)), None,
             "Made for code: a good default for reviews."),
-        entry("mistral", "mistral-medium-latest", "Mistral Medium", "europe", Some((1.50, 7.50)), None,
+        entry("mistral", "mistral-medium-latest", "Mistral Medium", "europe", &["code", "chat", "text"], Some((1.50, 7.50)), None,
             "Strongest here, about 10× Small."),
         // China
-        entry("deepseek", "deepseek-flash", "DeepSeek Flash", "china", Some((0.30, 1.20)), Some(0.003),
+        entry("deepseek", "deepseek-flash", "DeepSeek Flash", "china", &["code", "chat", "text"], Some((0.30, 1.20)), Some(0.003),
             "Peak price shown; half at other hours and weekends. Good for reviews and comments."),
-        entry("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro", "china", Some((1.32, 3.96)), None,
+        entry("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro", "china", &["code", "text"], Some((1.32, 3.96)), None,
             "Stronger, about 4× Flash. Peak price shown."),
-        entry("deepseek", "deepseek-chat", "DeepSeek (old name)", "china", Some((0.30, 1.20)), Some(0.003),
+        entry("deepseek", "deepseek-chat", "DeepSeek (old name)", "china", &["chat", "text"], Some((0.30, 1.20)), Some(0.003),
             "Old name, billed as Flash."),
-        entry("qwen", "qwen3-coder-next", "Qwen3 Coder Next", "china", Some((0.11, 0.80)), None, UNCONFIRMED),
-        entry("zai", "glm-5.3-flash", "GLM-5.3 Flash", "china", Some((0.15, 0.50)), None, UNCONFIRMED),
+        entry("qwen", "qwen3-coder-next", "Qwen3 Coder Next", "china", &["code"], Some((0.11, 0.80)), None, UNCONFIRMED),
+        entry("zai", "glm-5.3-flash", "GLM-5.3 Flash", "china", &["chat", "text"], Some((0.15, 0.50)), None, UNCONFIRMED),
         // United States
-        entry("anthropic", "claude-haiku-5-5", "Claude Haiku 5.5", "usa", Some((0.10, 0.50)), None,
+        entry("anthropic", "claude-haiku-5-5", "Claude Haiku 5.5", "usa", &["code", "chat"], Some((0.10, 0.50)), None,
             "Good for reviews. Price from a third-party listing — check Anthropic's."),
-        entry("anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5", "usa", None, None,
+        entry("anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5", "usa", &["code", "text"], None, None,
             "Premium. Set its price from Anthropic's page before offering it."),
-        entry("anthropic", "claude-opus-5-5", "Claude Opus 5.5", "usa", None, None,
+        entry("anthropic", "claude-opus-5-5", "Claude Opus 5.5", "usa", &["code", "text"], None, None,
             "Most capable and most expensive. Set its price before offering it."),
-        entry("google", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "usa", Some((0.25, 1.50)), None, UNCONFIRMED),
+        entry("google", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "usa", &["chat", "text"], Some((0.25, 1.50)), None, UNCONFIRMED),
     ]
 }
 
@@ -147,6 +161,10 @@ fn validate(models: Vec<CatalogModel>) -> Result<Vec<CatalogModel>, String> {
         if llm_regions::region(&m.origin).is_none() {
             return Err(format!("Unknown region '{}' for {}", m.origin, m.model));
         }
+        if let Some(t) = m.tasks.iter().find(|t| !TASKS.contains(&t.trim())) {
+            return Err(format!("Unknown task '{}' for {}", t, m.model));
+        }
+        m.tasks = TASKS.iter().filter(|t| m.tasks.iter().any(|x| x.trim() == **t)).map(|t| t.to_string()).collect();
         for price in [m.input_price, m.cached_input_price, m.output_price].into_iter().flatten() {
             if !(price.is_finite() && price >= 0.0) {
                 return Err(format!("{}: a price must be 0 or more", m.model));
@@ -175,14 +193,14 @@ pub async fn save_models(
         Ok(m) => m,
         Err(e) => return fail(StatusCode::BAD_REQUEST, e),
     };
-    // A model a region runs on cannot leave the list from under it.
+    // A model a region runs on, for any task, cannot leave the list from under it.
     if let Ok(regions) = llm_regions::read_regions(&store).await {
         for r in llm_regions::REGIONS {
-            if let Some(b) = regions.get(r.id) {
-                if !models.iter().any(|m| m.provider == b.provider && m.model == b.model) {
+            for (provider, model) in regions.get(r.id).into_iter().flat_map(|b| b.picks()) {
+                if !models.iter().any(|m| m.provider == provider && m.model == model) {
                     return fail(
                         StatusCode::BAD_REQUEST,
-                        format!("{} runs on {} — put another model behind it first", r.label, b.model),
+                        format!("{} runs on {} — put another model behind it first", r.label, model),
                     );
                 }
             }
@@ -301,8 +319,14 @@ mod tests {
         let mut bad = m.clone();
         bad.origin = "mars".into();
         assert!(validate(vec![bad]).is_err());
-        let mut bad = m;
+        let mut bad = m.clone();
         bad.output_price = Some(-1.0);
         assert!(validate(vec![bad]).is_err());
+        let mut bad = m.clone();
+        bad.tasks = vec!["poetry".into()];
+        assert!(validate(vec![bad]).is_err());
+        let mut messy = m;
+        messy.tasks = vec!["text".into(), " code".into(), "text".into()];
+        assert_eq!(validate(vec![messy]).unwrap()[0].tasks, ["code", "text"], "in TASKS' order, once");
     }
 }

@@ -534,10 +534,6 @@ pub async fn sync_by_id(store: &Arc<EndpointStore>, stripe: &PaymentService, sub
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 
-fn site_url() -> Option<String> {
-    std::env::var("PLANS_SITE_URL").ok().map(|s| s.trim_end_matches('/').to_string()).filter(|s| !s.is_empty())
-}
-
 fn fail(status: actix_web::http::StatusCode, message: &str) -> HttpResponse {
     HttpResponse::build(status).json(serde_json::json!({ "success": false, "message": message }))
 }
@@ -582,10 +578,7 @@ pub async fn checkout_handler(
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Checkout could not be started");
         }
     }
-    let Some(site) = site_url() else {
-        app_log!(error, "PLANS_SITE_URL is not set — cannot start a plan checkout");
-        return fail(StatusCode::SERVICE_UNAVAILABLE, "Plans are not on sale yet");
-    };
+    let site = crate::email::plans_page();
     let customer = earlier_customer(&store, &email).await;
     let metadata = HashMap::from([
         ("purpose".to_string(), PURPOSE_PLAN.to_string()),
@@ -753,7 +746,7 @@ pub async fn licence_portal_handler(
     let Some(customer) = earlier_customer(&store, &licence.email).await else {
         return fail(StatusCode::NOT_FOUND, "No subscription to manage");
     };
-    let return_url = site_url().unwrap_or_default();
+    let return_url = crate::email::plans_page();
     match payment_service
         .create_portal_session(&customer, &return_url, plans::portal_configuration(&store).await.as_deref())
         .await {
@@ -992,7 +985,7 @@ pub async fn portal_handler(
     let Some(customer) = earlier_customer(&store, &email).await else {
         return fail(StatusCode::NOT_FOUND, "No subscription to manage");
     };
-    let return_url = site_url().unwrap_or_default();
+    let return_url = crate::email::plans_page();
     match payment_service
         .create_portal_session(&customer, &return_url, plans::portal_configuration(&store).await.as_deref())
         .await {
