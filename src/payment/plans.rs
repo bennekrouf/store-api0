@@ -27,7 +27,8 @@
 // follow the plan as it is now, from their next paid month.
 //
 // Stripe is kept in step with the plans on sale (sync_stripe), at start-up and
-// after every save: each plan's product carries its logo, and the customer
+// after every save: each plan's product carries its description, tax code
+// and logo, and the customer
 // portal lets a subscriber switch between those plans. The portal's
 // configuration id is kept in system_config (plans.portal_configuration).
 //
@@ -244,8 +245,8 @@ pub async fn portal_configuration(store: &EndpointStore) -> Option<String> {
     Some(row.get::<_, String>(0)).filter(|v| !v.is_empty())
 }
 
-/// Gives each plan on sale its logo (when one is published for its id) and
-/// lists them all in the customer portal as the plans to switch between.
+/// Gives each plan on sale's product its description, tax code and logo (when
+/// one is published for its id), and lists them all in the customer portal as the plans to switch between.
 /// Safe to run any number of times.
 pub async fn sync_stripe(store: &EndpointStore, stripe: &PaymentService) -> Result<(), String> {
     let on_sale: Vec<Plan> = list_plans(store, true)
@@ -258,13 +259,20 @@ pub async fn sync_stripe(store: &EndpointStore, stripe: &PaymentService) -> Resu
     for plan in &on_sale {
         let (Some(product), url) = (plan.stripe_product_id.as_deref(), logo_url(&plan.id)) else { continue };
         // A plan added later may have no logo yet: Stripe would show a broken image.
-        let published = http.head(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false);
-        if !published {
-            app_log!(warn, plan = %plan.id, url = %url, "No logo published for this plan; Stripe keeps its current image");
-            continue;
-        }
-        if let Err(e) = stripe.set_product_image(product, &url).await {
-            app_log!(warn, error = %e, plan = %plan.id, "Could not set a plan's logo on Stripe");
+        let published = match http.head(&url).send().await {
+            Ok(r) if r.status().is_success() => true,
+            Ok(r) => {
+                app_log!(warn, plan = %plan.id, url = %url, status = %r.status(), "No logo published for this plan; Stripe keeps its current image");
+                false
+            }
+            Err(e) => {
+                app_log!(warn, plan = %plan.id, url = %url, error = %e, "Could not check a plan's logo; Stripe keeps its current image");
+                false
+            }
+        };
+        let image = published.then_some(url.as_str());
+        if let Err(e) = stripe.update_plan_product(product, &plan.description, image).await {
+            app_log!(warn, error = %e, plan = %plan.id, "Could not update a plan's product on Stripe");
         }
     }
 

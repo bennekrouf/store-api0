@@ -20,7 +20,9 @@
 // its own runs on the region's model. The app still sees only the region.
 //
 // Stored in system_config as `llm.regions`:
-// { "<region>": { provider, model, tasks: { "<task>": { provider, model } } } }.
+// { "<region>": { provider, model, tasks: { "<task>": { provider, model } } } };
+// until it is saved, defaults() stands. A region is offered only once its
+// provider's key is set.
 // The keys are the platform ones set in Admin → Platform (assistant_config).
 // Both need X-Internal-Secret; the gateway restricts them to the super admin.
 
@@ -104,6 +106,42 @@ pub(crate) fn task_of(named: Option<&str>, app: &str) -> Option<&'static str> {
         .copied()
 }
 
+fn backing(provider: &str, model: &str, tasks: &[(&str, &str, &str)]) -> Backing {
+    Backing {
+        provider: provider.into(),
+        model: model.into(),
+        tasks: tasks
+            .iter()
+            .map(|(t, p, m)| (t.to_string(), Pick { provider: p.to_string(), model: m.to_string() }))
+            .collect(),
+    }
+}
+
+/// The regions before the super admin saves any: the strongest all-rounder
+/// of each region by default, and per task the model that suits it at the
+/// best margin. A task on the region's own model is left out.
+pub(crate) fn defaults() -> HashMap<String, Backing> {
+    HashMap::from([
+        // Only three models here, so Small covers both chat and text.
+        ("europe".to_string(), backing("mistral", "mistral-medium-latest", &[
+            ("code", "mistral", "codestral-latest"),
+            ("chat", "mistral", "mistral-small-latest"),
+            ("text", "mistral", "mistral-small-latest"),
+        ])),
+        // DeepSeek V4 Pro is the other choice for code, within DeepSeek.
+        ("china".to_string(), backing("deepseek", "deepseek-flash", &[
+            ("code", "qwen", "qwen3-coder-next"),
+            ("chat", "zai", "glm-5.3-flash"),
+            ("text", "zai", "glm-5.3-flash"),
+        ])),
+        // Haiku is the only code model with a confirmed price, so code stays on it.
+        ("usa".to_string(), backing("anthropic", "claude-haiku-5-5", &[
+            ("chat", "google", "gemini-3.1-flash-lite"),
+            ("text", "google", "gemini-3.1-flash-lite"),
+        ])),
+    ])
+}
+
 /// What `llm.regions` holds, without regions that no longer exist.
 fn parse(value: &str) -> HashMap<String, Backing> {
     serde_json::from_str::<HashMap<String, Backing>>(value)
@@ -113,14 +151,14 @@ fn parse(value: &str) -> HashMap<String, Backing> {
         .collect()
 }
 
-/// Every region with something behind it, by region id.
+/// Every region with something behind it, by region id: as saved, else defaults().
 pub(crate) async fn read_regions(store: &EndpointStore) -> Result<HashMap<String, Backing>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let row = client
         .query_opt("SELECT value FROM system_config WHERE key = $1", &[&CONFIG_KEY])
         .await
         .map_err(|e| e.to_string())?;
-    Ok(row.map(|r| parse(r.get::<_, &str>(0))).unwrap_or_default())
+    Ok(row.map(|r| parse(r.get::<_, &str>(0))).unwrap_or_else(defaults))
 }
 
 /// The regions an app can use now — set, and their provider's key too — in
@@ -401,6 +439,27 @@ mod tests {
         assert_eq!(b.for_task(None, &keyed), ("mistral", "mistral-small-latest"));
         assert_eq!(b.for_task(Some("text"), &keyed), ("mistral", "mistral-small-latest"), "its key is gone");
         assert_eq!(b.picks().count(), 3);
+    }
+
+    #[test]
+    fn the_defaults_are_what_saving_them_would_keep() {
+        let d = defaults();
+        let keyed: Vec<String> = PROVIDERS.iter().map(|p| p.id.to_string()).collect();
+        let choices: Vec<RegionChoice> = REGIONS
+            .iter()
+            .map(|r| {
+                let b = &d[r.id];
+                let mut c = choice(r.id, &b.provider, &b.model);
+                for (t, p) in &b.tasks {
+                    c = with_task(c, t, &p.provider, &p.model);
+                }
+                c
+            })
+            .collect();
+        assert_eq!(validate(&choices, &keyed, &llm_models::defaults()).unwrap(), d);
+        assert_eq!(d["usa"].for_task(Some("code"), &keyed), ("anthropic", "claude-haiku-5-5"));
+        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("qwen", "qwen3-coder-next"));
+        assert_eq!(d["europe"].for_task(None, &keyed), ("mistral", "mistral-medium-latest"));
     }
 
     #[test]

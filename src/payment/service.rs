@@ -12,6 +12,10 @@ use std::collections::HashMap;
 use crate::app_log;
 use crate::payment::topup::PURPOSE_CREDITS;
 
+/// Stripe's "General - Electronically Supplied Services", as the app licences
+/// sold before the plans had.
+const PLAN_TAX_CODE: &str = "txcd_10000000";
+
 pub struct PaymentService {
     client: Client,
 }
@@ -124,11 +128,17 @@ impl PaymentService {
         Ok(())
     }
 
-    /// The picture Checkout and the customer portal show for the product.
-    pub async fn set_product_image(&self, product_id: &str, image_url: &str) -> Result<()> {
+    /// What Checkout, the customer portal and invoices show for a plan's
+    /// product: its description, its logo (`None` keeps the current one), and
+    /// the tax code Stripe Tax works VAT out from.
+    pub async fn update_plan_product(&self, product_id: &str, description: &str, image_url: Option<&str>) -> Result<()> {
         let id: ProductId = product_id.parse()?;
         let mut params = UpdateProduct::new();
-        params.images = Some(vec![image_url.to_string()]);
+        if !description.is_empty() {
+            params.description = Some(description.to_string());
+        }
+        params.images = image_url.map(|u| vec![u.to_string()]);
+        params.tax_code = Some(PLAN_TAX_CODE.to_string());
         Product::update(&self.client, &id, params).await?;
         Ok(())
     }
