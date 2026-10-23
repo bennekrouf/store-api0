@@ -30,6 +30,7 @@
 // super admin sets in Admin → Platform (assistant_config).
 
 use crate::admin::assistant_config::{self, PROVIDERS};
+use crate::admin::llm_models;
 use crate::admin::llm_regions::{self, Backing, Region};
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
@@ -198,6 +199,7 @@ pub async fn authorize_handler(
                 "region": region.map(|(r, _)| r.id),
                 "task": task,
                 "public_model": public_name(requested, region.map(|(r, _)| r), &tenant_name),
+                "sampling": llm_models::sampling(model),
             }),
             Ok(None) => serde_json::Value::Null,
             Err(e) => {
@@ -254,6 +256,9 @@ pub struct ChargeRequest {
     /// The region the app chose, when it chose one.
     #[serde(default)]
     pub region: Option<String>,
+    /// The answer stopped at max_tokens.
+    #[serde(default)]
+    pub cut_off: bool,
 }
 
 pub async fn charge_handler(
@@ -297,12 +302,12 @@ pub async fn charge_handler(
     let result = client
         .execute(
             "INSERT INTO llm_usage (id, tenant_id, license_id, email, product, provider, model,
-                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms, region)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms, region, cut_off)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
             &[
                 &usage_id, &tenant_id, &b.subscription_id, &b.email, &b.app, &b.provider, &b.model,
                 &b.input_tokens, &b.output_tokens, &total, &b.estimated, &credits, &b.status_code,
-                &b.response_time_ms, &b.region,
+                &b.response_time_ms, &b.region, &b.cut_off,
             ],
         )
         .await;

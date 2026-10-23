@@ -108,7 +108,8 @@ pub(crate) fn defaults() -> Vec<CatalogModel> {
             "Stronger, about 4× Flash. Peak price shown."),
         entry("deepseek", "deepseek-chat", "DeepSeek (old name)", "china", &["chat", "text"], Some((0.30, 1.20)), Some(0.003),
             "Old name, billed as Flash."),
-        entry("qwen", "qwen3-coder-next", "Qwen3 Coder Next", "china", &["code"], Some((0.11, 0.80)), None, UNCONFIRMED),
+        entry("qwen", "qwen3-coder-next", "Qwen3 Coder Next", "china", &["code"], Some((0.11, 0.80)), None,
+            "Id and price from a third-party listing — test before use. Looped on JSON reviews at temperature 0."),
         entry("zai", "glm-5.3-flash", "GLM-5.3 Flash", "china", &["chat", "text"], Some((0.15, 0.50)), None, UNCONFIRMED),
         // United States
         entry("anthropic", "claude-haiku-5-5", "Claude Haiku 5.5", "usa", &["code", "chat"], Some((0.10, 0.50)), None,
@@ -119,6 +120,25 @@ pub(crate) fn defaults() -> Vec<CatalogModel> {
             "Most capable and most expensive. Set its price before offering it."),
         entry("google", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "usa", &["chat", "text"], Some((0.25, 1.50)), None, UNCONFIRMED),
     ]
+}
+
+/// What the gateway sets on a call to a model known to loop without it: a
+/// temperature floor, and a presence penalty when the app sends none. By model
+/// id prefix, in code rather than the list, so it holds whatever the super
+/// admin saves. Qwen3's card warns that greedy decoding repeats endlessly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub(crate) struct Sampling {
+    pub min_temperature: f64,
+    pub presence_penalty: f64,
+}
+
+const SAMPLING: &[(&str, Sampling)] = &[
+    ("qwen3", Sampling { min_temperature: 0.7, presence_penalty: 1.0 }),
+];
+
+pub(crate) fn sampling(model: &str) -> Option<Sampling> {
+    let model = model.to_ascii_lowercase();
+    SAMPLING.iter().find(|(prefix, _)| model.starts_with(prefix)).map(|(_, s)| *s)
 }
 
 /// The saved list, or DEFAULTS.
@@ -297,6 +317,13 @@ pub async fn test_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_models_known_to_loop_get_a_sampling_guard() {
+        assert_eq!(sampling("Qwen3-Coder-Next").map(|s| s.min_temperature), Some(0.7));
+        assert!(sampling("deepseek-flash").is_none());
+        assert!(sampling("codestral-latest").is_none());
+    }
 
     #[test]
     fn every_default_names_a_known_provider_and_region_once() {

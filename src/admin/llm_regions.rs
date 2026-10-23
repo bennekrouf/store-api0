@@ -128,9 +128,10 @@ pub(crate) fn defaults() -> HashMap<String, Backing> {
             ("chat", "mistral", "mistral-small-latest"),
             ("text", "mistral", "mistral-small-latest"),
         ])),
-        // DeepSeek V4 Pro is the other choice for code, within DeepSeek.
+        // Code stays on DeepSeek, which documents JSON output and holds up at
+        // temperature 0; Qwen3 Coder Next looped on GitAgent's JSON reviews.
+        // DeepSeek V4 Pro is the other choice for code.
         ("china".to_string(), backing("deepseek", "deepseek-flash", &[
-            ("code", "qwen", "qwen3-coder-next"),
             ("chat", "zai", "glm-5.3-flash"),
             ("text", "zai", "glm-5.3-flash"),
         ])),
@@ -458,7 +459,7 @@ mod tests {
             .collect();
         assert_eq!(validate(&choices, &keyed, &llm_models::defaults()).unwrap(), d);
         assert_eq!(d["usa"].for_task(Some("code"), &keyed), ("anthropic", "claude-haiku-5-5"));
-        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("qwen", "qwen3-coder-next"));
+        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("deepseek", "deepseek-flash"));
         assert_eq!(d["europe"].for_task(None, &keyed), ("mistral", "mistral-medium-latest"));
     }
 

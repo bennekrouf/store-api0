@@ -1073,3 +1073,6 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_llm_ts ON api_usage_logs(timestamp DES
 -- The region the app chose (admin/llm_regions.rs), which is all its user sees
 -- of the call; provider and model say what ran. NULL: a model named directly.
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS region VARCHAR;
+-- The answer stopped at max_tokens (finish_reason "length"): a model that
+-- starts looping shows as a rising share of these per region and model.
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cut_off BOOLEAN NOT NULL DEFAULT FALSE;
