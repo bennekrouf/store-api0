@@ -199,7 +199,7 @@ pub async fn spend_handler(
         }
     }
     if let Some(id) = &plan_id {
-        log_plan_use(&store, id, &email, &caller.name().to_string(), &body.action_type, from_plan).await;
+        log_plan_use(&store, id, &email, caller.name(), &body.action_type, from_plan).await;
     }
     app_log!(info, email = %email, caller = %caller.name(), action = %body.action_type,
         from_plan = from_plan, from_balance = from_balance, "Credits spent");

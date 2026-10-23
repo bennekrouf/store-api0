@@ -10,10 +10,17 @@
 //   GET /api/admin/llm-regions   every region with what is behind it, the
 //                                providers (with whether their key is set) and
 //                                the models to choose from, priced (llm_models.rs)
-//   PUT /api/admin/llm-regions   { regions: [{ id, provider, model }] } — an
-//                                empty provider takes the region off offer
+//   PUT /api/admin/llm-regions   { regions: [{ id, provider, model, tasks? }] } —
+//                                an empty provider takes the region off offer;
+//                                `tasks` is { "<task>": { provider, model } }
 //
-// Stored in system_config as `llm.regions`: { "<region>": { provider, model } }.
+// A region may run another model for one task (llm_models::TASKS): code for
+// GitAgent, text for PublishKit. A call's task is the one it names in
+// `X-Task`, else the one its app does (APP_TASKS), and a task with nothing of
+// its own runs on the region's model. The app still sees only the region.
+//
+// Stored in system_config as `llm.regions`:
+// { "<region>": { provider, model, tasks: { "<task>": { provider, model } } } }.
 // The keys are the platform ones set in Admin → Platform (assistant_config).
 // Both need X-Internal-Secret; the gateway restricts them to the super admin.
 
@@ -24,7 +31,7 @@ use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 const CONFIG_KEY: &str = "llm.regions";
@@ -46,11 +53,55 @@ pub(crate) fn region(id: &str) -> Option<&'static Region> {
     REGIONS.iter().find(|r| r.id.eq_ignore_ascii_case(id.trim()))
 }
 
-/// The provider and model behind a region.
+/// A provider and one of its models.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Pick {
+    pub provider: String,
+    pub model: String,
+}
+
+/// The provider and model behind a region, and the tasks that run on another.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Backing {
     pub provider: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tasks: BTreeMap<String, Pick>,
+}
+
+impl Backing {
+    /// What runs `task`: its own model when its provider has a key, else the region's.
+    pub(crate) fn for_task<'a>(&'a self, task: Option<&str>, keyed: &[String]) -> (&'a str, &'a str) {
+        match task.and_then(|t| self.tasks.get(t)).filter(|p| keyed.contains(&p.provider)) {
+            Some(p) => (&p.provider, &p.model),
+            None => (&self.provider, &self.model),
+        }
+    }
+
+    /// Every provider and model it runs on.
+    pub(crate) fn picks(&self) -> impl Iterator<Item = (&str, &str)> {
+        std::iter::once((self.provider.as_str(), self.model.as_str()))
+            .chain(self.tasks.values().map(|p| (p.provider.as_str(), p.model.as_str())))
+    }
+}
+
+/// The task each app's calls do, by the id it sends in X-Client-App.
+const APP_TASKS: &[(&str, &str)] = &[
+    ("gitagent", "code"),
+    ("publishkit", "text"),
+    ("jobscout", "text"),
+    ("cvenom", "text"),
+    ("bridge", "chat"),
+];
+
+/// A call's task: the one it names, if known, else its app's; None for neither.
+pub(crate) fn task_of(named: Option<&str>, app: &str) -> Option<&'static str> {
+    let named = named.map(|t| t.trim().to_lowercase());
+    llm_models::TASKS
+        .iter()
+        .find(|t| named.as_deref() == Some(**t))
+        .or_else(|| APP_TASKS.iter().find(|(a, _)| *a == app).map(|(_, t)| t))
+        .copied()
 }
 
 /// What `llm.regions` holds, without regions that no longer exist.
@@ -78,14 +129,17 @@ pub(crate) fn live<'a>(regions: &'a HashMap<String, Backing>, keyed: &[String]) 
     REGIONS
         .iter()
         .filter_map(|r| regions.get(r.id).map(|b| (r, b)))
-        .filter(|(_, b)| keyed.iter().any(|k| *k == b.provider))
+        .filter(|(_, b)| keyed.contains(&b.provider))
         .collect()
 }
 
 /// Whether a region is set to `provider`, so its key must stay.
 pub(crate) async fn uses_provider(store: &EndpointStore, provider: &str) -> Option<&'static str> {
     let regions = read_regions(store).await.ok()?;
-    REGIONS.iter().find(|r| regions.get(r.id).is_some_and(|b| b.provider == provider)).map(|r| r.label)
+    REGIONS
+        .iter()
+        .find(|r| regions.get(r.id).is_some_and(|b| b.picks().any(|(p, _)| p == provider)))
+        .map(|r| r.label)
 }
 
 fn fail(status: StatusCode, msg: impl Into<String>) -> HttpResponse {
@@ -119,7 +173,8 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
                 "flag": r.flag,
                 "provider": b.map(|b| &b.provider),
                 "model": b.map(|b| &b.model),
-                "live": b.is_some_and(|b| keyed.iter().any(|k| *k == b.provider)),
+                "tasks": b.map(|b| &b.tasks),
+                "live": b.is_some_and(|b| keyed.contains(&b.provider)),
             })
         })
         .collect();
@@ -151,6 +206,32 @@ pub struct RegionChoice {
     pub provider: String,
     #[serde(default)]
     pub model: String,
+    /// By task; an empty provider leaves the task on the region's model.
+    #[serde(default)]
+    pub tasks: HashMap<String, PickChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PickChoice {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+/// A provider and model as chosen: known, in the list, and with a key.
+fn checked_pick(provider: &str, model: &str, what: &str, keyed: &[String], catalog: &[CatalogModel]) -> Result<Pick, String> {
+    let Some(p) = assistant_config::provider(provider.trim()) else {
+        return Err(format!("Unknown provider '{}' for {}", provider, what));
+    };
+    let model = model.trim();
+    if !catalog.iter().any(|m| m.provider == p.id && m.model == model) {
+        return Err(format!("'{}' is not in the model list for {}", model, p.label));
+    }
+    if !keyed.iter().any(|k| k == p.id) {
+        return Err(format!("Add a {} API key before putting it behind {}", p.label, what));
+    }
+    Ok(Pick { provider: p.id.to_string(), model: model.to_string() })
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,20 +246,26 @@ fn validate(choices: &[RegionChoice], keyed: &[String], catalog: &[CatalogModel]
         let Some(r) = region(&c.id) else {
             return Err(format!("Unknown region '{}'", c.id));
         };
+        let chosen: Vec<_> = c.tasks.iter().filter(|(_, t)| !t.provider.trim().is_empty()).collect();
         if c.provider.trim().is_empty() {
+            if !chosen.is_empty() {
+                return Err(format!("Choose {}'s own model before one for a task", r.label));
+            }
             continue;
         }
-        let Some(p) = assistant_config::provider(c.provider.trim()) else {
-            return Err(format!("Unknown provider '{}' for {}", c.provider, r.label));
-        };
-        let model = c.model.trim();
-        if !catalog.iter().any(|m| m.provider == p.id && m.model == model) {
-            return Err(format!("'{}' is not in the model list for {}", model, p.label));
+        let main = checked_pick(&c.provider, &c.model, r.label, keyed, catalog)?;
+        let mut tasks = BTreeMap::new();
+        for (task, t) in chosen {
+            let Some(task) = llm_models::TASKS.iter().find(|x| **x == task.trim()) else {
+                return Err(format!("Unknown task '{}' for {}", task, r.label));
+            };
+            let pick = checked_pick(&t.provider, &t.model, &format!("{} {}", r.label, task), keyed, catalog)?;
+            // The region's own model already runs it.
+            if pick != main {
+                tasks.insert(task.to_string(), pick);
+            }
         }
-        if !keyed.iter().any(|k| k == p.id) {
-            return Err(format!("Add a {} API key before putting it behind {}", p.label, r.label));
-        }
-        out.insert(r.id.to_string(), Backing { provider: p.id.to_string(), model: model.to_string() });
+        out.insert(r.id.to_string(), Backing { provider: main.provider, model: main.model, tasks });
     }
     Ok(out)
 }
@@ -231,7 +318,16 @@ mod tests {
     use super::*;
 
     fn choice(id: &str, provider: &str, model: &str) -> RegionChoice {
-        RegionChoice { id: id.into(), provider: provider.into(), model: model.into() }
+        RegionChoice { id: id.into(), provider: provider.into(), model: model.into(), tasks: HashMap::new() }
+    }
+
+    fn with_task(mut c: RegionChoice, task: &str, provider: &str, model: &str) -> RegionChoice {
+        c.tasks.insert(task.into(), PickChoice { provider: provider.into(), model: model.into() });
+        c
+    }
+
+    fn pick(provider: &str, model: &str) -> Pick {
+        Pick { provider: provider.into(), model: model.into() }
     }
 
     #[test]
@@ -241,7 +337,7 @@ mod tests {
         let validate = |c: &[RegionChoice], k: &[String]| validate(c, k, &catalog);
         let ok = validate(&[choice("china", "deepseek", "deepseek-chat"), choice("usa", "", "")], &keyed).unwrap();
         assert_eq!(ok.len(), 1);
-        assert_eq!(ok["china"], Backing { provider: "deepseek".into(), model: "deepseek-chat".into() });
+        assert_eq!(ok["china"], Backing { provider: "deepseek".into(), model: "deepseek-chat".into(), tasks: BTreeMap::new() });
 
         assert!(validate(&[choice("mars", "deepseek", "deepseek-chat")], &keyed).is_err());
         assert!(validate(&[choice("europe", "mistral", "gpt-5")], &keyed).is_err());
@@ -261,5 +357,58 @@ mod tests {
         let ids: Vec<&str> = live(&saved, &keyed).iter().map(|(r, _)| r.id).collect();
         assert_eq!(ids, ["europe", "china"]);
         assert!(parse("not json").is_empty());
+        assert!(saved["china"].tasks.is_empty(), "a region saved before tasks has none");
+    }
+
+    #[test]
+    fn a_task_may_run_on_its_own_model_of_a_provider_with_a_key() {
+        let keyed = vec!["mistral".to_string(), "deepseek".to_string()];
+        let catalog = llm_models::defaults();
+        let europe = choice("europe", "mistral", "mistral-small-latest");
+        let ok = validate(
+            &[with_task(with_task(with_task(europe, "code", "mistral", "codestral-latest"), "text", "mistral", "mistral-small-latest"), "chat", "", "")],
+            &keyed,
+            &catalog,
+        )
+        .unwrap();
+        let tasks = &ok["europe"].tasks;
+        assert_eq!(tasks.len(), 1, "the region's own model and an empty choice are not kept");
+        assert_eq!(tasks["code"], pick("mistral", "codestral-latest"));
+
+        let europe = || choice("europe", "mistral", "mistral-small-latest");
+        assert!(validate(&[with_task(europe(), "poetry", "mistral", "codestral-latest")], &keyed, &catalog).is_err());
+        assert!(validate(&[with_task(europe(), "code", "mistral", "gpt-5")], &keyed, &catalog).is_err());
+        assert!(validate(&[with_task(europe(), "code", "anthropic", "claude-opus-5-5")], &keyed, &catalog).is_err(), "no key");
+        assert!(
+            validate(&[with_task(choice("europe", "", ""), "code", "mistral", "codestral-latest")], &keyed, &catalog).is_err(),
+            "a task needs the region's own model first"
+        );
+    }
+
+    #[test]
+    fn a_call_runs_on_its_task_model_else_the_regions() {
+        let b = Backing {
+            provider: "mistral".into(),
+            model: "mistral-small-latest".into(),
+            tasks: BTreeMap::from([
+                ("code".to_string(), pick("mistral", "codestral-latest")),
+                ("text".to_string(), pick("anthropic", "claude-sonnet-5-5")),
+            ]),
+        };
+        let keyed = vec!["mistral".to_string()];
+        assert_eq!(b.for_task(Some("code"), &keyed), ("mistral", "codestral-latest"));
+        assert_eq!(b.for_task(Some("chat"), &keyed), ("mistral", "mistral-small-latest"));
+        assert_eq!(b.for_task(None, &keyed), ("mistral", "mistral-small-latest"));
+        assert_eq!(b.for_task(Some("text"), &keyed), ("mistral", "mistral-small-latest"), "its key is gone");
+        assert_eq!(b.picks().count(), 3);
+    }
+
+    #[test]
+    fn a_calls_task_is_the_one_it_names_else_its_apps() {
+        assert_eq!(task_of(None, "gitagent"), Some("code"));
+        assert_eq!(task_of(Some(" Text "), "gitagent"), Some("text"), "named wins");
+        assert_eq!(task_of(Some("poetry"), "publishkit"), Some("text"), "unknown name: the app's");
+        assert_eq!(task_of(None, "shipscreen"), None);
+        assert_eq!(task_of(Some("chat"), "unknown"), Some("chat"));
     }
 }

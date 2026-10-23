@@ -96,8 +96,9 @@ pub struct DigestItem {
     pub url: String,
 }
 
-/// Where a subscriber sees, changes or cancels their plan, signed in.
-fn plans_page() -> String {
+/// Where a subscriber sees, changes or cancels their plan, signed in. Also
+/// where Stripe Checkout and the portal send people back to.
+pub(crate) fn plans_page() -> String {
     std::env::var("PLANS_SITE_URL")
         .ok()
         .map(|s| s.trim_end_matches('/').to_string())

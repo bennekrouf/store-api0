@@ -6,13 +6,14 @@
 // subscription, and calls are paid from that subscription's monthly credits
 // (payment::subscription).
 //
-//   POST /api/internal/llm/authorize  { licence, model?, app? }
+//   POST /api/internal/llm/authorize  { licence, model?, app?, task? }
 //        → whose licence it is, the credits left, the regions on offer (with
 //          what a credit buys on each) and, when one matches, the upstream
 //          provider to forward to (with its key) and the name the app may see
 //
 // An app names a region ("europe", admin/llm_regions.rs) and is only ever told
-// the region back. "default" (or the tenant's name) is the platform's choice;
+// the region back, whichever model its task runs on (llm_regions::task_of).
+// "default" (or the tenant's name) is the platform's choice;
 // a model named directly still works for older apps, but is never listed.
 //   POST /api/internal/llm/charge     one completion's tokens
 //        → { credits, balance }: spends the subscription's credits and records
@@ -26,7 +27,7 @@
 // record_platform_call, with no licence and no credits.
 //
 // All need X-Internal-Secret. The upstream keys are the platform ones the
-// super admin sets in Admin → Messaging assistant (assistant_config).
+// super admin sets in Admin → Platform (assistant_config).
 
 use crate::admin::assistant_config::{self, PROVIDERS};
 use crate::admin::llm_regions::{self, Backing, Region};
@@ -101,6 +102,9 @@ pub struct AuthorizeRequest {
     /// The app calling, for the usage log ("gitagent"); free text.
     #[serde(default)]
     pub app: Option<String>,
+    /// What the call does (llm_models::TASKS), from X-Task; else the app's.
+    #[serde(default)]
+    pub task: Option<String>,
 }
 
 /// An app id for the usage log: short, plain, never empty.
@@ -170,6 +174,8 @@ pub async fn authorize_handler(
         Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
 
+    let app = app_label(body.app.as_deref());
+    let task = llm_regions::task_of(body.task.as_deref(), &app);
     let requested = body.model.as_deref().unwrap_or_default();
     let region = pick_region(requested, &live);
     let choice = match region {
@@ -177,7 +183,7 @@ pub async fn authorize_handler(
         None => assistant_config::read_choice(&store).await.ok().flatten(),
     };
     let picked: Option<(&str, &str)> = match region {
-        Some((_, b)) => Some((b.provider.as_str(), b.model.as_str())),
+        Some((_, b)) => Some(b.for_task(task, &keyed)),
         None => {
             let default = choice.as_ref().map(|(p, m)| (p.as_str(), m.as_str()));
             pick_model(requested, &tenant_name, default, &offered)
@@ -190,6 +196,7 @@ pub async fn authorize_handler(
                 "provider": prov.id, "base_url": prov.base_url, "chat_url": prov.chat_url(),
                 "model": model, "api_key": key,
                 "region": region.map(|(r, _)| r.id),
+                "task": task,
                 "public_model": public_name(requested, region.map(|(r, _)| r), &tenant_name),
             }),
             Ok(None) => serde_json::Value::Null,
@@ -205,7 +212,7 @@ pub async fn authorize_handler(
         "success": true,
         "subscription_id": who.subscription_id,
         "email": who.email,
-        "app": app_label(body.app.as_deref()),
+        "app": app,
         "tenant_id": tenant_id,
         "tenant_name": tenant_name,
         "plan": who.active,
@@ -219,7 +226,8 @@ pub async fn authorize_handler(
                 "id": r.id,
                 "label": r.label,
                 "flag": r.flag,
-                "multiplier": pricing.model_multipliers.get(&b.model).copied().unwrap_or(1.0),
+                // What a credit buys for this call's task, so the app shows its real price.
+                "multiplier": pricing.model_multipliers.get(b.for_task(task, &keyed).1).copied().unwrap_or(1.0),
             }))
             .collect::<Vec<_>>(),
         "tokens_per_credit": pricing.tokens_per_credit,
@@ -474,7 +482,7 @@ mod tests {
 
     #[test]
     fn a_region_is_picked_by_id_and_the_answer_names_only_what_was_asked() {
-        let china = Backing { provider: "deepseek".into(), model: "deepseek-chat".into() };
+        let china = Backing { provider: "deepseek".into(), model: "deepseek-chat".into(), tasks: Default::default() };
         let live = [(&llm_regions::REGIONS[1], &china)];
         let (r, b) = pick_region(" China ", &live).unwrap();
         assert_eq!((r.id, b.model.as_str()), ("china", "deepseek-chat"));
