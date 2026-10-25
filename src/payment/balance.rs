@@ -10,6 +10,8 @@ use std::sync::Arc;
 /// Asked by email, it also reports the credits left on the email's plan, and
 /// `available`: what POST /api/user/credits/spend can charge (payment::spend).
 /// `balance` stays the account's own, for callers that show its transactions.
+/// `plan` describes the email's live plan (name, credits, when the month ends),
+/// or is null; it never carries the licence, which only its owner may see.
 pub async fn get_credit_balance_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
@@ -43,6 +45,7 @@ pub async fn get_credit_balance_handler(
                     "balance": 0,
                     "plan_credits_left": plan,
                     "available": plan,
+                    "plan": plan_summary(&store, &tenant_id).await,
                     "message": "Credit balance retrieved successfully",
                 }));
             }
@@ -63,15 +66,16 @@ pub async fn get_credit_balance_handler(
                 balance = balance,
                 "Successfully retrieved credit balance"
             );
-            let plan = match &email {
-                Some(e) => plan_credits(&store, e).await,
-                None => 0,
+            let (plan, summary) = match &email {
+                Some(e) => (plan_credits(&store, e).await, plan_summary(&store, e).await),
+                None => (0, serde_json::Value::Null),
             };
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "balance": balance,
                 "plan_credits_left": plan,
                 "available": balance.max(0) + plan,
+                "plan": summary,
                 "message": "Credit balance retrieved successfully",
             }))
         }
@@ -96,4 +100,25 @@ async fn plan_credits(store: &EndpointStore, email: &str) -> i64 {
         app_log!(warn, error = %e, "Could not read plan credits for a balance read");
         0
     })
+}
+
+/// The email's live plan, for showing next to the balance; null when it has
+/// none or it cannot be read. The licence is left out on purpose: partner
+/// backends read this, and the licence is the plan's key to every app.
+async fn plan_summary(store: &EndpointStore, email: &str) -> serde_json::Value {
+    match crate::payment::subscription::current_subscription(store, email).await {
+        Ok(Some(s)) if s.live => serde_json::json!({
+            "name": s.plan_name,
+            "credits_granted": s.credits_granted,
+            "credits_left": s.credits_left,
+            "period_end": s.period_end,
+            "cancel_at_period_end": s.cancel_at_period_end,
+            "is_free": s.is_free,
+        }),
+        Ok(_) => serde_json::Value::Null,
+        Err(e) => {
+            app_log!(warn, error = %e, "Could not read the plan for a balance read");
+            serde_json::Value::Null
+        }
+    }
 }
