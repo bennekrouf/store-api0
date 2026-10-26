@@ -117,28 +117,23 @@ fn backing(provider: &str, model: &str, tasks: &[(&str, &str, &str)]) -> Backing
     }
 }
 
-/// The regions before the super admin saves any: the strongest all-rounder
-/// of each region by default, and per task the model that suits it at the
-/// best margin. A task on the region's own model is left out.
+/// The regions before the super admin saves any: each region's strongest
+/// model, for code reviews and writing, where answers have to hold up. Only
+/// the messaging assistant's chat runs on a lighter model, where the region
+/// has one with a confirmed id and price. A task on the region's own model is
+/// left out.
 pub(crate) fn defaults() -> HashMap<String, Backing> {
     HashMap::from([
-        // Only three models here, so Small covers both chat and text.
-        ("europe".to_string(), backing("mistral", "mistral-medium-latest", &[
-            ("code", "mistral", "codestral-latest"),
-            ("chat", "mistral", "mistral-small-latest"),
-            ("text", "mistral", "mistral-small-latest"),
+        // Medium does all three; Codestral and Small cut reviews short.
+        ("europe".to_string(), backing("mistral", "mistral-medium-latest", &[])),
+        // V4 Pro for code and text: Flash ran out of room on GitAgent's
+        // reviews. Qwen3 Coder Next looped on them; GLM's id is unconfirmed.
+        ("china".to_string(), backing("deepseek", "deepseek-v4-pro", &[
+            ("chat", "deepseek", "deepseek-flash"),
         ])),
-        // Code stays on DeepSeek, which documents JSON output and holds up at
-        // temperature 0; Qwen3 Coder Next looped on GitAgent's JSON reviews.
-        // DeepSeek V4 Pro is the other choice for code.
-        ("china".to_string(), backing("deepseek", "deepseek-flash", &[
-            ("chat", "zai", "glm-5.3-flash"),
-            ("text", "zai", "glm-5.3-flash"),
-        ])),
-        // Haiku is the only code model with a confirmed price, so code stays on it.
-        ("usa".to_string(), backing("anthropic", "claude-haiku-5-5", &[
-            ("chat", "google", "gemini-3.1-flash-lite"),
-            ("text", "google", "gemini-3.1-flash-lite"),
+        // Sonnet for code and text; Haiku answers the bots.
+        ("usa".to_string(), backing("anthropic", "claude-sonnet-5-5", &[
+            ("chat", "anthropic", "claude-haiku-5-5"),
         ])),
     ])
 }
@@ -458,9 +453,11 @@ mod tests {
             })
             .collect();
         assert_eq!(validate(&choices, &keyed, &llm_models::defaults()).unwrap(), d);
-        assert_eq!(d["usa"].for_task(Some("code"), &keyed), ("anthropic", "claude-haiku-5-5"));
-        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("deepseek", "deepseek-flash"));
-        assert_eq!(d["europe"].for_task(None, &keyed), ("mistral", "mistral-medium-latest"));
+        assert_eq!(d["usa"].for_task(Some("code"), &keyed), ("anthropic", "claude-sonnet-5-5"));
+        assert_eq!(d["usa"].for_task(Some("chat"), &keyed), ("anthropic", "claude-haiku-5-5"));
+        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("deepseek", "deepseek-v4-pro"));
+        assert_eq!(d["china"].for_task(Some("chat"), &keyed), ("deepseek", "deepseek-flash"));
+        assert_eq!(d["europe"].for_task(Some("code"), &keyed), ("mistral", "mistral-medium-latest"));
     }
 
     #[test]

@@ -170,7 +170,8 @@ pub async fn authorize_handler(
         }
     };
     let live = llm_regions::live(&regions, &keyed);
-    let pricing = match crate::payment::plans::read_pricing(&store).await {
+    // What the app is told a credit buys must be what the charge spends.
+    let pricing = match crate::payment::plans::effective_pricing(&store).await {
         Ok(p) => p,
         Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, e),
     };

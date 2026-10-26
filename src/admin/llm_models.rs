@@ -113,11 +113,11 @@ pub(crate) fn defaults() -> Vec<CatalogModel> {
         entry("zai", "glm-5.3-flash", "GLM-5.3 Flash", "china", &["chat", "text"], Some((0.15, 0.50)), None, UNCONFIRMED),
         // United States
         entry("anthropic", "claude-haiku-5-5", "Claude Haiku 5.5", "usa", &["code", "chat"], Some((0.10, 0.50)), None,
-            "Good for reviews. Price from a third-party listing — check Anthropic's."),
-        entry("anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5", "usa", &["code", "text"], None, None,
-            "Premium. Set its price from Anthropic's page before offering it."),
-        entry("anthropic", "claude-opus-5-5", "Claude Opus 5.5", "usa", &["code", "text"], None, None,
-            "Most capable and most expensive. Set its price before offering it."),
+            "Good for reviews. Price for prompts up to 100K tokens; 5× above that."),
+        entry("anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5", "usa", &["code", "text"], Some((2.00, 10.00)), None,
+            "Premium, about 20× Haiku."),
+        entry("anthropic", "claude-opus-5-5", "Claude Opus 5.5", "usa", &["code", "text"], Some((4.00, 20.00)), None,
+            "Most capable and most expensive, about 2× Sonnet."),
         entry("google", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "usa", &["chat", "text"], Some((0.25, 1.50)), None, UNCONFIRMED),
     ]
 }
@@ -139,6 +139,45 @@ const SAMPLING: &[(&str, Sampling)] = &[
 pub(crate) fn sampling(model: &str) -> Option<Sampling> {
     let model = model.to_ascii_lowercase();
     SAMPLING.iter().find(|(prefix, _)| model.starts_with(prefix)).map(|(_, s)| *s)
+}
+
+/// The share of a call's tokens that are input, for one blended price per
+/// model (the dashboard's LlmRegionsPanel uses the same).
+pub(crate) const INPUT_SHARE: f64 = 0.9;
+
+impl CatalogModel {
+    /// $ per million tokens at INPUT_SHARE; None while either price is unknown.
+    pub(crate) fn blended_price(&self) -> Option<f64> {
+        Some(INPUT_SHARE * self.input_price? + (1.0 - INPUT_SHARE) * self.output_price?)
+    }
+}
+
+/// A credit multiplier for every model the live regions run (llm_regions),
+/// from its price: the cheapest is ×1 and the others cost as many times more
+/// as they do at the provider, to one decimal. A model with no price in the
+/// catalog gets none. Multipliers the super admin set win over these
+/// (plans::Pricing::with_derived).
+pub(crate) fn derived_multipliers(
+    catalog: &[CatalogModel],
+    regions: &std::collections::HashMap<String, llm_regions::Backing>,
+    keyed: &[String],
+) -> std::collections::BTreeMap<String, f64> {
+    let priced: Vec<(&str, f64)> = llm_regions::live(regions, keyed)
+        .iter()
+        .flat_map(|(_, b)| b.picks())
+        .filter(|(p, _)| keyed.iter().any(|k| k == p))
+        .filter_map(|(p, m)| {
+            let price = catalog.iter().find(|c| c.provider == p && c.model == m)?.blended_price()?;
+            (price > 0.0).then_some((m, price))
+        })
+        .collect();
+    let Some(cheapest) = priced.iter().map(|(_, p)| *p).reduce(f64::min) else {
+        return Default::default();
+    };
+    priced
+        .into_iter()
+        .map(|(m, p)| (m.to_string(), ((p / cheapest) * 10.0).round().max(10.0) / 10.0))
+        .collect()
 }
 
 /// The saved list, or DEFAULTS.
@@ -355,5 +394,36 @@ mod tests {
         let mut messy = m;
         messy.tasks = vec!["text".into(), " code".into(), "text".into()];
         assert_eq!(validate(vec![messy]).unwrap()[0].tasks, ["code", "text"], "in TASKS' order, once");
+    }
+
+    #[test]
+    fn multipliers_follow_the_prices_of_what_the_regions_run() {
+        let keyed: Vec<String> = ["mistral", "deepseek", "anthropic"].iter().map(|s| s.to_string()).collect();
+        let d = derived_multipliers(&defaults(), &llm_regions::defaults(), &keyed);
+        // Haiku ($0.10 in, $0.50 out), the USA bots' model, is the cheapest
+        // the default regions run.
+        assert_eq!(d["claude-haiku-5-5"], 1.0);
+        assert_eq!(d["deepseek-flash"], 2.8);
+        assert_eq!(d["deepseek-v4-pro"], 11.3);
+        assert_eq!(d["mistral-medium-latest"], 15.0);
+        assert_eq!(d["claude-sonnet-5-5"], 20.0);
+        assert!(!d.contains_key("claude-opus-5-5"), "not run by any region");
+
+        // A region off offer (no key) neither gets multipliers nor sets the ×1.
+        let no_usa: Vec<String> = keyed.iter().filter(|k| *k != "anthropic").cloned().collect();
+        let d = derived_multipliers(&defaults(), &llm_regions::defaults(), &no_usa);
+        assert_eq!(d["deepseek-flash"], 1.0);
+        assert!(!d.contains_key("claude-haiku-5-5"));
+        assert!(derived_multipliers(&defaults(), &llm_regions::defaults(), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_model_without_a_price_gets_no_multiplier() {
+        let mut catalog = defaults();
+        catalog.iter_mut().filter(|m| m.model == "deepseek-flash").for_each(|m| m.output_price = None);
+        let keyed = vec!["deepseek".to_string()];
+        let d = derived_multipliers(&catalog, &llm_regions::defaults(), &keyed);
+        assert!(!d.contains_key("deepseek-flash"));
+        assert_eq!(d["deepseek-v4-pro"], 1.0);
     }
 }
