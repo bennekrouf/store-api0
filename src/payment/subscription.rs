@@ -264,7 +264,7 @@ impl std::fmt::Display for SpendError {
 /// call that was allowed to start is always charged, even past the allowance;
 /// usage is capped at what was granted, so the balance never shows below zero.
 pub async fn spend_credits(store: &EndpointStore, subscription_id: &str, model: &str, tokens: i64) -> Result<Spent, SpendError> {
-    let pricing = plans::read_pricing(store).await.map_err(SpendError::Store)?;
+    let pricing = plans::effective_pricing(store).await.map_err(SpendError::Store)?;
     let cost = pricing.credits_for(model, tokens);
     let client = store.get_admin_conn().await.map_err(|e| SpendError::Store(e.to_string()))?;
     let sql = format!(

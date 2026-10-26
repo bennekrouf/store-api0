@@ -33,7 +33,8 @@
 // configuration id is kept in system_config (plans.portal_configuration).
 //
 // Credits: an AI call costs ceil(tokens × multiplier ÷ tokens_per_credit), at
-// least 1. With the default 10,000 tokens per credit, one credit is one
+// least 1. A model with no multiplier set gets one from its price
+// (llm_models::derived_multipliers): the cheapest model the regions run is ×1. With the default 10,000 tokens per credit, one credit is one
 // ordinary call (scoring a job, writing a commit message: 2–6k tokens), so
 // "500 credits" reads as "about 500 AI actions".
 
@@ -162,6 +163,15 @@ impl Pricing {
         ((tokens as f64 * factor / per).ceil() as i64).max(1)
     }
 
+    /// These multipliers, with `derived` (llm_models::derived_multipliers)
+    /// filling in the models that have none.
+    pub fn with_derived(mut self, derived: &std::collections::BTreeMap<String, f64>) -> Self {
+        for (model, factor) in derived {
+            self.model_multipliers.entry(model.clone()).or_insert(*factor);
+        }
+        self
+    }
+
     fn check(&self) -> Result<(), String> {
         if self.tokens_per_credit < 1 {
             return Err("tokens_per_credit must be at least 1".into());
@@ -220,6 +230,28 @@ pub async fn read_pricing(store: &EndpointStore) -> Result<Pricing, String> {
         }
     }
     Ok(pricing)
+}
+
+/// The multipliers the catalog's prices give the models the live regions run
+/// (llm_models::derived_multipliers). Empty when they cannot be read: the
+/// set multipliers, or ×1, then apply.
+pub async fn derived_multipliers(store: &EndpointStore) -> std::collections::BTreeMap<String, f64> {
+    let read = async {
+        let regions = crate::admin::llm_regions::read_regions(store).await?;
+        let keyed = crate::admin::assistant_config::providers_with_key(store).await?;
+        let catalog = crate::admin::llm_models::read_catalog(store).await?;
+        Ok::<_, String>(crate::admin::llm_models::derived_multipliers(&catalog, &regions, &keyed))
+    };
+    read.await.unwrap_or_else(|e| {
+        app_log!(warn, error = %e, "Could not derive credit multipliers from prices; using the set ones only");
+        Default::default()
+    })
+}
+
+/// What an AI call is charged at: the set pricing, with the multipliers
+/// derived from prices for the models that have none.
+pub async fn effective_pricing(store: &EndpointStore) -> Result<Pricing, String> {
+    Ok(read_pricing(store).await?.with_derived(&derived_multipliers(store).await))
 }
 
 // ── Stripe: logos and the customer portal ────────────────────────────────────
@@ -349,7 +381,10 @@ pub async fn admin_plans_handler(req: HttpRequest, store: web::Data<Arc<Endpoint
         (Ok(plans), Ok(pricing)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "plans": plans,
+            // As set: what the editor saves back.
             "pricing": pricing,
+            // From the catalog's prices, for the models with no set multiplier.
+            "derived_multipliers": derived_multipliers(&store).await,
             "currencies": CURRENCIES,
         })),
         (Err(e), _) | (_, Err(e)) => {
@@ -651,4 +686,15 @@ mod tests {
         let old: Pricing = serde_json::from_str(r#"{"tokens_per_credit":10000,"model_multipliers":{}}"#).unwrap();
         assert!(old.app_uses.is_empty());
     }
+
+    #[test]
+    fn a_set_multiplier_wins_over_one_derived_from_prices() {
+        let set = Pricing { model_multipliers: HashMap::from([("deepseek-flash".to_string(), 1.0)]), ..Pricing::default() };
+        let derived = std::collections::BTreeMap::from([("deepseek-flash".to_string(), 2.8), ("mistral-medium-latest".to_string(), 15.0)]);
+        let p = set.with_derived(&derived);
+        assert_eq!(p.model_multipliers["deepseek-flash"], 1.0);
+        assert_eq!(p.model_multipliers["mistral-medium-latest"], 15.0);
+        assert_eq!(p.credits_for("mistral-medium-latest", 10_000), 15);
+    }
 }
+
