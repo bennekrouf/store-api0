@@ -6,7 +6,8 @@
 // the end of the month, the account balance does not. The account balance
 // (tenants.credit_balance, filled by top-ups) covers the rest.
 //
-//   POST /api/user/credits/spend   { email, amount, action_type, description? }
+//   POST /api/user/credits/spend   { email, amount, action_type, description?,
+//                                    input_tokens?, output_tokens?, model? }
 //        → 200 { from_plan, from_balance, plan_credits_left, balance, available }
 //        → 402 { available } when the plan and the balance together fall short;
 //          nothing is taken then
@@ -14,6 +15,11 @@
 // Needs a service key with `credits.write` (or the internal secret). The
 // balance read, GET /api/user/credits/{email}, reports the plan's credits left
 // too (plan_credits_left_for).
+//
+// The tokens and model are what the partner's own AI call reported; api0 does
+// not see that call. They go on the plan's usage row, the action then moving
+// to `region`, which is what the subscriber's history shows in place of the
+// model (llm_wallet::recent_usage).
 //
 // A refund goes back to the account balance, through POST /api/user/credits:
 // the caller does not know which side paid, and a refunded credit kept past
@@ -79,20 +85,32 @@ async fn give_back_to_plan(store: &EndpointStore, subscription_id: &str, amount:
 
 /// The plan's side of the charge in the plan's usage history, next to the
 /// apps' AI calls, so the subscriber sees where their credits went.
-async fn log_plan_use(store: &EndpointStore, subscription_id: &str, email: &str, product: &str, action: &str, credits: i64) {
+async fn log_plan_use(store: &EndpointStore, subscription_id: &str, email: &str, product: &str, body: &SpendRequest, credits: i64) {
     let Ok(client) = store.get_admin_conn().await else { return };
     let id = format!("spend_{}", uuid::Uuid::new_v4().simple());
+    let (model, region) = usage_model(&body.action_type, body.model.as_deref());
+    let input = body.input_tokens.unwrap_or(0).max(0);
+    let output = body.output_tokens.unwrap_or(0).max(0);
     let result = client
         .execute(
-            "INSERT INTO llm_usage (id, tenant_id, license_id, email, product, provider, model,
+            "INSERT INTO llm_usage (id, tenant_id, license_id, email, product, provider, model, region,
                 input_tokens, output_tokens, total_tokens, estimated, credits, status_code)
              VALUES ($1, COALESCE((SELECT default_tenant_id FROM user_preferences WHERE email = $3), ''),
-                $2, $3, $4, $4, $5, 0, 0, 0, FALSE, $6, 200)",
-            &[&id, &subscription_id, &email, &product, &action, &credits],
+                $2, $3, $4, $4, $5, $6, $7, $8, $7 + $8, FALSE, $9, 200)",
+            &[&id, &subscription_id, &email, &product, &model, &region, &input, &output, &credits],
         )
         .await;
     if let Err(e) = result {
         app_log!(warn, error = %e, email = %email, "Could not log a plan's credits spent by a partner");
+    }
+}
+
+/// The usage row's model and region: the model the partner names, with the
+/// action as the region; without one, the action as the model.
+fn usage_model(action: &str, model: Option<&str>) -> (String, Option<String>) {
+    match model.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => (m.to_string(), Some(action.to_string())),
+        None => (action.to_string(), None),
     }
 }
 
@@ -104,6 +122,11 @@ pub struct SpendRequest {
     /// What the caller logs it as, e.g. "cv_generation".
     pub action_type: String,
     pub description: Option<String>,
+    /// The tokens the partner's AI call took, as its provider reported them.
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    /// The model that ran, e.g. "deepseek-chat".
+    pub model: Option<String>,
 }
 
 fn reply(status: StatusCode, body: serde_json::Value) -> HttpResponse {
@@ -199,7 +222,7 @@ pub async fn spend_handler(
         }
     }
     if let Some(id) = &plan_id {
-        log_plan_use(&store, id, &email, caller.name(), &body.action_type, from_plan).await;
+        log_plan_use(&store, id, &email, caller.name(), &body, from_plan).await;
     }
     app_log!(info, email = %email, caller = %caller.name(), action = %body.action_type,
         from_plan = from_plan, from_balance = from_balance, "Credits spent");
@@ -222,7 +245,7 @@ pub async fn spend_handler(
 #[cfg(test)]
 mod tests {
     // The charge order lives in SQL; these keep its two rules written down.
-    use super::{LIVE, PLAN_ORDER};
+    use super::{usage_model, LIVE, PLAN_ORDER};
 
     #[test]
     fn only_a_paid_up_plan_in_its_month_gives_credits() {
@@ -232,5 +255,12 @@ mod tests {
     #[test]
     fn a_paid_plan_is_spent_before_the_free_allowance() {
         assert!(PLAN_ORDER.starts_with("s.is_free ASC"));
+    }
+
+    #[test]
+    fn a_named_model_keeps_the_action_as_what_the_subscriber_sees() {
+        assert_eq!(usage_model("cv_generation", Some("deepseek-chat")), ("deepseek-chat".into(), Some("cv_generation".into())));
+        assert_eq!(usage_model("cv_generation", Some("  ")), ("cv_generation".into(), None));
+        assert_eq!(usage_model("cv_generation", None), ("cv_generation".into(), None));
     }
 }
