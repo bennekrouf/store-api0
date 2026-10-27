@@ -17,6 +17,11 @@
 //
 // All require X-Internal-Secret; the gateway is the only caller.
 //
+// The partner credit routes follow the same mode when the service key is bound
+// to a workspace (middleware::service_key): payment::spend reads and spends with
+// spend_strict, payment::balance reports only the payer's credits, and
+// payment::update_balance sends a refund back where the mode says.
+//
 // A charge follows a call that already ran, so it is always taken: the balance
 // may end below zero, and a plan is used up to its allowance, as the AI endpoint
 // does. The read before the call is what refuses one that cannot be paid.
@@ -25,6 +30,7 @@ use crate::app_log;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
+use crate::middleware::service_key::Caller;
 use crate::payment::spend::{self, SpendRequest};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
@@ -124,6 +130,114 @@ pub async fn charge(
             }
             let left = spend::plan_credits_left_for(store, &email).await?;
             Ok((mode, charged, left))
+        }
+    }
+}
+
+/// The workspace a service key is bound to, and how it bills. `None` for the
+/// gateway and for keys bound to no workspace, which keep the older rule.
+pub async fn caller_mode(store: &EndpointStore, caller: &Caller) -> Result<Option<(String, BillingMode)>, String> {
+    let Some(tenant_id) = caller.tenant_id() else {
+        return Ok(None);
+    };
+    let mode = billing_mode(store, tenant_id).await?;
+    Ok(Some((tenant_id.to_string(), mode)))
+}
+
+#[derive(Debug, PartialEq)]
+pub enum StrictSpend {
+    /// Paid in full; `available` is what the payer has left.
+    Paid { from_plan: i64, from_balance: i64, available: i64 },
+    /// Nothing was taken: the payer has only `available`.
+    Short { available: i64 },
+}
+
+/// Takes `amount` before an operation runs, from the one payer the mode names,
+/// or nothing at all when that payer cannot cover it. Unlike `charge`, which
+/// follows a call that already ran, this one refuses.
+#[allow(clippy::too_many_arguments)]
+pub async fn spend_strict(
+    store: &EndpointStore,
+    tenant_id: &str,
+    mode: BillingMode,
+    email: &str,
+    amount: i64,
+    action_type: &str,
+    description: Option<&str>,
+    product: &str,
+) -> Result<StrictSpend, String> {
+    match mode {
+        BillingMode::Tenant => {
+            let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+            // Checked and taken in one statement, so two charges at once cannot
+            // both spend the same credits.
+            let row = client
+                .query_opt(
+                    "UPDATE tenants SET credit_balance = credit_balance - $1 \
+                     WHERE id = $2 AND credit_balance >= $1 RETURNING credit_balance",
+                    &[&amount, &tenant_id],
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(row) = row else {
+                let balance = store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?;
+                return Ok(StrictSpend::Short { available: balance.max(0) });
+            };
+            let after: i64 = row.get(0);
+            let description = description.map(str::to_string);
+            if let Err(e) = client
+                .execute(
+                    "INSERT INTO credit_transactions (tenant_id, email, amount, balance_after, action_type, description) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[&tenant_id, &email, &-amount, &after, &action_type, &description],
+                )
+                .await
+            {
+                app_log!(error, error = %e, tenant_id = %tenant_id, email = %email, "Failed to record a workspace charge");
+            }
+            Ok(StrictSpend::Paid { from_plan: 0, from_balance: amount, available: after })
+        }
+        BillingMode::User => {
+            let email = email.trim().to_lowercase();
+            let left = spend::plan_credits_left_for(store, &email).await?;
+            if left < amount {
+                return Ok(StrictSpend::Short { available: left });
+            }
+            // A paid plan and the free allowance can each cover part of it.
+            let mut taken: Vec<(String, i64)> = Vec::new();
+            let mut total = 0;
+            while total < amount {
+                let Some((subscription_id, took, _)) = spend::take_from_plan(store, &email, amount - total).await? else {
+                    break;
+                };
+                total += took;
+                taken.push((subscription_id, took));
+            }
+            if total < amount {
+                // Another charge spent the plan since it was read: put back what
+                // this one took, so a refused operation costs nothing.
+                for (subscription_id, took) in &taken {
+                    if let Err(e) = spend::give_back_to_plan(store, subscription_id, *took).await {
+                        app_log!(error, error = %e, subscription_id = %subscription_id, credits = took, "Could not give credits back to a plan");
+                    }
+                }
+                let left = spend::plan_credits_left_for(store, &email).await?;
+                return Ok(StrictSpend::Short { available: left });
+            }
+            for (subscription_id, took) in &taken {
+                let logged = SpendRequest {
+                    email: email.clone(),
+                    amount: *took,
+                    action_type: action_type.to_string(),
+                    description: description.map(str::to_string),
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                };
+                spend::log_plan_use(store, subscription_id, &email, product, &logged, *took).await;
+            }
+            let left = spend::plan_credits_left_for(store, &email).await?;
+            Ok(StrictSpend::Paid { from_plan: amount, from_balance: 0, available: left })
         }
     }
 }

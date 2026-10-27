@@ -233,6 +233,24 @@ async fn start_free_month(store: &EndpointStore, licence: &str) -> Result<(), St
     Ok(())
 }
 
+/// The same for the email's free licence, when its credits are read by email
+/// (a partner's balance read or charge) rather than by licence: someone who only
+/// uses the allowance through a partner still gets a new month.
+pub async fn start_free_month_for_email(store: &EndpointStore, email: &str) -> Result<(), String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    client
+        .execute(
+            "UPDATE subscriptions s SET period_start = NOW(), period_end = NOW() + INTERVAL '1 month', \
+                credits_used = 0, credits_granted = p.monthly_credits, updated_at = NOW() \
+             FROM plans p \
+             WHERE p.id = s.plan_id AND s.is_free AND s.email = $1 AND s.status = 'active' AND s.period_end <= NOW()",
+            &[&email.trim().to_lowercase()],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 async fn licence_of_subscription(store: &EndpointStore, subscription_id: &str) -> Result<Option<LicenceStatus>, String> {
     licence_where(store, "s.id = $1", subscription_id).await
 }
@@ -613,14 +631,16 @@ pub struct FreeRequest {
 }
 
 /// POST /api/plans/free — the free allowance, for an app to offer. Answers the
-/// same whether the licence is new or sent again, and never contains it.
+/// same whether the licence is new or sent again, and never contains it. A
+/// partner whose workspace bills each person's plan starts it for a new user
+/// (service key with credits.write).
 pub async fn free_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     body: web::Json<FreeRequest>,
 ) -> impl Responder {
     use actix_web::http::StatusCode;
-    if let Some(deny) = require_internal_secret(&req) {
+    if let Err(deny) = crate::middleware::service_key::require_scope(&req, crate::middleware::service_key::Scope::CreditsWrite) {
         return deny;
     }
     let email = body.email.trim().to_lowercase();

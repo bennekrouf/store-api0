@@ -443,14 +443,16 @@ pub struct UsageQuery {
     pub offset: Option<i64>,
 }
 
-/// GET /api/plans/usage/{email}?limit=N&offset=M
+/// GET /api/plans/usage/{email}?limit=N&offset=M — also for partners with
+/// credits.read, whose users' history is their plan's when the workspace bills
+/// each person's plan.
 pub async fn usage_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
     query: web::Query<UsageQuery>,
 ) -> impl Responder {
-    if let Some(deny) = require_internal_secret(&req) {
+    if let Err(deny) = crate::middleware::service_key::require_scope(&req, crate::middleware::service_key::Scope::CreditsRead) {
         return deny;
     }
     match recent_usage(&store, &email, query.limit, query.offset).await {

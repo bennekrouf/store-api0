@@ -1078,10 +1078,21 @@ ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS region VARCHAR;
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cut_off BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Who pays for a tenant's paid tools — one or the other, never both:
---   'tenant'  the tenant's credit_balance pays for every call made with its keys,
---             whoever the caller is;
 --   'user'    each caller pays from their own plan's monthly credits
---             (subscriptions), and the tenant's balance is never touched.
--- See payment::tenant_billing.
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_mode VARCHAR NOT NULL DEFAULT 'tenant'
+--             (subscriptions), and the tenant's balance is never touched;
+--   'tenant'  the tenant's credit_balance pays for every call made with its keys,
+--             whoever the caller is.
+-- See payment::tenant_billing. Per-user is the default.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_mode VARCHAR NOT NULL DEFAULT 'user'
     CHECK (billing_mode IN ('tenant', 'user'));
+-- The column first shipped defaulting to 'tenant'. A database still on that
+-- default moves every tenant to per-user once; the new default stops this
+-- running again, so a tenant switched back to 'tenant' afterwards stays there.
+DO $$
+BEGIN
+    IF (SELECT column_default FROM information_schema.columns
+         WHERE table_name = 'tenants' AND column_name = 'billing_mode') LIKE '''tenant''%' THEN
+        UPDATE tenants SET billing_mode = 'user';
+        ALTER TABLE tenants ALTER COLUMN billing_mode SET DEFAULT 'user';
+    END IF;
+END $$;

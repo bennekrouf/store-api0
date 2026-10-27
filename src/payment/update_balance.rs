@@ -2,6 +2,7 @@ use crate::app_log;
 use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::{EndpointStore, UpdateCreditRequest};
 use crate::middleware::service_key::{require_scope, Scope};
+use crate::payment::tenant_billing::BillingMode;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::sync::Arc;
 
@@ -33,8 +34,27 @@ pub async fn update_credit_balance_handler(
     }
     let amount = request.amount;
 
-    // Resolve tenant_id: use explicit one if provided, otherwise fallback to default for email.
-    let tenant_id = if let Some(tid) = &request.tenant_id {
+    // A key bound to a workspace adds where that workspace bills. Per person,
+    // there is no balance to add to: a refund goes back to the plan it came
+    // from, and anything else is refused. Per workspace, its balance it is.
+    let bound = match crate::payment::tenant_billing::caller_mode(&store, &caller).await {
+        Ok(b) => b,
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read the caller's billing mode");
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": "Billing mode lookup failed",
+            }));
+        }
+    };
+    if let Some((_, BillingMode::User)) = &bound {
+        return per_person_credit(&store, &email, amount, &request.action_type, request.description.as_deref(), caller.name()).await;
+    }
+
+    // Resolve tenant_id: the bound workspace, else an explicit one, else the email's default.
+    let tenant_id = if let Some((bound_tenant, _)) = bound {
+        bound_tenant
+    } else if let Some(tid) = &request.tenant_id {
         tid.clone()
     } else {
         use crate::endpoint_store::tenant_management;
@@ -75,6 +95,66 @@ pub async fn update_credit_balance_handler(
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
                 "message": format!("Failed to update credit balance: {}", e),
+            }))
+        }
+    }
+}
+
+/// What a refund ends with, for the action types partners use ("cv_generation_refund").
+const REFUND_SUFFIX: &str = "_refund";
+
+/// POST /api/user/credits from a key bound to a workspace that bills each
+/// person's plan. Only a refund has somewhere to go: back to the plan.
+async fn per_person_credit(
+    store: &EndpointStore,
+    email: &str,
+    amount: i64,
+    action_type: &str,
+    description: Option<&str>,
+    caller: &str,
+) -> HttpResponse {
+    if amount <= 0 || !action_type.ends_with(REFUND_SUFFIX) {
+        app_log!(warn, email = %email, amount = amount, action = %action_type, caller = %caller,
+            "Refused a balance change: the workspace bills each person's plan");
+        return HttpResponse::Conflict().json(serde_json::json!({
+            "success": false,
+            "message": "This workspace bills each person's plan, so credits cannot be added to or taken from a balance",
+        }));
+    }
+    match crate::payment::spend::refund_to_plan(store, email, amount).await {
+        Ok(refunded) => {
+            match &refunded {
+                // In the plan's usage history beside the charge, as credits back.
+                Some(subscription_id) => {
+                    let logged = crate::payment::spend::SpendRequest {
+                        email: email.to_string(),
+                        amount,
+                        action_type: action_type.to_string(),
+                        description: description.map(str::to_string),
+                        input_tokens: None,
+                        output_tokens: None,
+                        model: None,
+                    };
+                    crate::payment::spend::log_plan_use(store, subscription_id, email, caller, &logged, -amount).await;
+                }
+                None => app_log!(warn, email = %email, amount = amount, "A refund found no live plan that had spent credits; nothing given back"),
+            }
+            let left = crate::payment::spend::plan_credits_left_for(store, email).await.unwrap_or(0);
+            app_log!(info, email = %email, amount = amount, caller = %caller, "Refunded credits to a plan");
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "mode": "user",
+                "message": format!("Refunded {} credits to the plan", amount),
+                "balance": 0,
+                "plan_credits_left": left,
+                "available": left,
+            }))
+        }
+        Err(e) => {
+            app_log!(error, error = %e, email = %email, "Failed to refund credits to a plan");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": "Failed to refund credits",
             }))
         }
     }
