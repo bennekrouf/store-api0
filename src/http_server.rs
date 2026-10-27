@@ -253,6 +253,11 @@ pub async fn start_http_server(
                             // LLM provider tenant: licence-keyed chat completions (gateway /v1)
                             .route("/internal/llm/authorize", web::post().to(crate::payment::llm_wallet::authorize_handler))
                             .route("/internal/llm/charge", web::post().to(crate::payment::llm_wallet::charge_handler))
+                            // Paid tools: the tenant's balance or the caller's plan, by tenants.billing_mode
+                            .route("/internal/billing/charge", web::post().to(crate::payment::tenant_billing::charge_handler))
+                            .route("/internal/billing/{tenant_id}", web::get().to(crate::payment::tenant_billing::available_handler))
+                            .route("/user/billing-mode", web::get().to(crate::payment::tenant_billing::get_my_billing_mode_handler))
+                            .route("/user/billing-mode", web::put().to(crate::payment::tenant_billing::set_my_billing_mode_handler))
                             // Email: SMTP config admin + internal send endpoint + broadcast
                             .route("/admin/smtp-config", web::get().to(get_smtp_config_handler))
                             .route("/admin/smtp-config", web::put().to(update_smtp_config_handler))
