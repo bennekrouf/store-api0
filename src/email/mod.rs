@@ -701,7 +701,8 @@ pub async fn send_email_handler(
             HttpResponse::Ok().json(serde_json::json!({"success":true}))
         }
         Err(e) => {
-            app_log!(error, to = %body.to, "Email send failed: {}", e);
+            // No alert: the alert would go out this same broken way.
+            app_log!(error, alert = false, to = %body.to, "Email send failed: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({"success":false,"error":format!("{e}")}))
         }
     }
