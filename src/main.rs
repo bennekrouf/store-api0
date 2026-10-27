@@ -9,6 +9,7 @@ mod admin;
 mod api;
 mod whatsapp;
 mod email;
+mod error_mail;
 mod infra;
 mod mcp;
 mod payment;
@@ -21,7 +22,6 @@ mod http_server;
 use infra::config::Config;
 use infra::formatter::YamlFormatter;
 use graflog::app_log;
-use graflog::init_logging;
 
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroup, ApiGroupWithEndpoints, ApiStorage, Endpoint, EndpointStore,
@@ -63,12 +63,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         _ => (LogOption::Info, "h2=info,store=info,tokio_postgres=warn"),
     };
 
-    init_logging!(
-        &log_path,
-        "api0",
-        "store",
-        &[level_option, LogOption::Custom(crate_filter.to_string())]
-    );
+    // Also mails every error to ALERT_EMAIL, once the HTTP port is known below.
+    error_mail::init_logging(&log_path, &[level_option, LogOption::Custom(crate_filter.to_string())]);
     ensure_database_url();
 
     app_log!(info, "Starting API Store service");
@@ -257,6 +253,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Get HTTP configuration
     let http_host = config.http_host().to_string();
     let http_port = config.http_port();
+    error_mail::start("store", &format!("http://127.0.0.1:{}", http_port));
 
     // Clone for the HTTP server
     let http_formatter = Arc::clone(&formatter);
