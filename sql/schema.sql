@@ -1076,3 +1076,12 @@ ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS region VARCHAR;
 -- The answer stopped at max_tokens (finish_reason "length"): a model that
 -- starts looping shows as a rising share of these per region and model.
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cut_off BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Who pays for a tenant's paid tools — one or the other, never both:
+--   'tenant'  the tenant's credit_balance pays for every call made with its keys,
+--             whoever the caller is;
+--   'user'    each caller pays from their own plan's monthly credits
+--             (subscriptions), and the tenant's balance is never touched.
+-- See payment::tenant_billing.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_mode VARCHAR NOT NULL DEFAULT 'tenant'
+    CHECK (billing_mode IN ('tenant', 'user'));

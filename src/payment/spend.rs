@@ -54,7 +54,7 @@ pub async fn plan_credits_left_for(store: &EndpointStore, email: &str) -> Result
 /// Takes up to `amount` from the email's live plan, in one statement so two
 /// charges at once cannot both spend the same credits. Returns the plan's id,
 /// what it gave and what that plan has left; `None` when no live plan has any.
-async fn take_from_plan(store: &EndpointStore, email: &str, amount: i64) -> Result<Option<(String, i64, i64)>, String> {
+pub(crate) async fn take_from_plan(store: &EndpointStore, email: &str, amount: i64) -> Result<Option<(String, i64, i64)>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let sql = format!(
         "WITH pick AS ( \
@@ -85,7 +85,7 @@ async fn give_back_to_plan(store: &EndpointStore, subscription_id: &str, amount:
 
 /// The plan's side of the charge in the plan's usage history, next to the
 /// apps' AI calls, so the subscriber sees where their credits went.
-async fn log_plan_use(store: &EndpointStore, subscription_id: &str, email: &str, product: &str, body: &SpendRequest, credits: i64) {
+pub(crate) async fn log_plan_use(store: &EndpointStore, subscription_id: &str, email: &str, product: &str, body: &SpendRequest, credits: i64) {
     let Ok(client) = store.get_admin_conn().await else { return };
     let id = format!("spend_{}", uuid::Uuid::new_v4().simple());
     let (model, region) = usage_model(&body.action_type, body.model.as_deref());
