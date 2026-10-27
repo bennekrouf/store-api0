@@ -9,6 +9,14 @@
 //
 //   API0_SERVICE_KEYS = "billing-app:<sha256 hex>:credits.read,credits.write,email.send"
 //
+// A fourth field binds the key to the workspace (tenant id) the service runs
+// as, so the credit routes follow that workspace's billing mode
+// (payment::tenant_billing) for the service's users:
+//
+//   API0_SERVICE_KEYS = "billing-app:<sha256 hex>:credits.read,credits.write:<tenant id>"
+//
+// A key without one keeps the older rule: a person's plan, then their balance.
+//
 // Several services are separated by `;`. To issue a key:
 //
 //   key=$(openssl rand -hex 32)
@@ -62,15 +70,24 @@ impl Scope {
 pub enum Caller {
     /// The gateway or the bridge, with the shared secret.
     Internal,
-    /// A named service holding a key with the required scope.
-    Service(String),
+    /// A named service holding a key with the required scope, and the
+    /// workspace its key is bound to, if any.
+    Service { name: String, tenant_id: Option<String> },
 }
 
 impl Caller {
     pub fn name(&self) -> &str {
         match self {
             Caller::Internal => "internal",
-            Caller::Service(name) => name,
+            Caller::Service { name, .. } => name,
+        }
+    }
+
+    /// The workspace whose billing mode decides who pays for this caller's users.
+    pub fn tenant_id(&self) -> Option<&str> {
+        match self {
+            Caller::Internal => None,
+            Caller::Service { tenant_id, .. } => tenant_id.as_deref(),
         }
     }
 }
@@ -80,6 +97,7 @@ struct ServiceEntry {
     name: String,
     hash: [u8; 32],
     scopes: Vec<Scope>,
+    tenant_id: Option<String>,
 }
 
 /// Parse API0_SERVICE_KEYS. Entries that do not parse are dropped and logged —
@@ -101,10 +119,11 @@ fn parse_entries(raw: &str) -> Vec<ServiceEntry> {
 }
 
 fn parse_entry(entry: &str) -> Option<ServiceEntry> {
-    let mut parts = entry.splitn(3, ':');
+    let mut parts = entry.splitn(4, ':');
     let name = parts.next()?.trim();
     let hash_hex = parts.next()?.trim();
     let scopes_raw = parts.next()?;
+    let tenant_id = parts.next().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
 
     if name.is_empty() {
         return None;
@@ -115,7 +134,7 @@ fn parse_entry(entry: &str) -> Option<ServiceEntry> {
     let scopes: Option<Vec<Scope>> = scopes_raw.split(',').map(Scope::parse).collect();
     let scopes = scopes.filter(|s| !s.is_empty())?;
 
-    Some(ServiceEntry { name: name.to_string(), hash, scopes })
+    Some(ServiceEntry { name: name.to_string(), hash, scopes, tenant_id })
 }
 
 /// Compare without leaking how many leading bytes matched.
@@ -145,7 +164,9 @@ fn decide(
 
     match service_keys.iter().find(|e| constant_time_eq(&e.hash, &digest)) {
         None => Err(Denial::Unauthenticated),
-        Some(e) if e.scopes.contains(&scope) => Ok(Caller::Service(e.name.clone())),
+        Some(e) if e.scopes.contains(&scope) => {
+            Ok(Caller::Service { name: e.name.clone(), tenant_id: e.tenant_id.clone() })
+        }
         Some(e) => Err(Denial::OutOfScope(e.name.clone())),
     }
 }
@@ -218,8 +239,16 @@ mod tests {
         let entries = billing_app();
         assert_eq!(
             decide(None, None, &entries, Some(KEY), Scope::CreditsWrite),
-            Ok(Caller::Service("billing-app".into()))
+            Ok(Caller::Service { name: "billing-app".into(), tenant_id: None })
         );
+    }
+
+    #[test]
+    fn a_fourth_field_binds_the_key_to_a_workspace() {
+        let entries = parse_entries(&format!("billing-app:{}:credits.read:tenant-42", hash_hex(KEY)));
+        let caller = decide(None, None, &entries, Some(KEY), Scope::CreditsRead).unwrap();
+        assert_eq!(caller.tenant_id(), Some("tenant-42"));
+        assert_eq!(caller.name(), "billing-app");
     }
 
     #[test]

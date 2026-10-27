@@ -17,11 +17,28 @@ pub async fn get_credit_balance_handler(
     store: web::Data<Arc<EndpointStore>>,
     tenant_id: web::Path<String>,
 ) -> impl Responder {
-    if let Err(deny) = require_scope(&req, Scope::CreditsRead) {
-        return deny;
-    }
+    let caller = match require_scope(&req, Scope::CreditsRead) {
+        Ok(c) => c,
+        Err(deny) => return deny,
+    };
     let mut tenant_id = tenant_id.into_inner();
     let email = tenant_id.contains('@').then(|| tenant_id.clone());
+
+    // A key bound to a workspace sees only what pays for its users: the
+    // workspace's balance, or the person's plan — never the two added up.
+    if let Some(email) = &email {
+        match crate::payment::tenant_billing::caller_mode(&store, &caller).await {
+            Ok(Some((bound, mode))) => return bound_balance(&store, &bound, mode, email).await,
+            Ok(None) => {}
+            Err(e) => {
+                app_log!(error, error = %e, "Could not read the caller's billing mode");
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "message": "Billing mode lookup failed"
+                }));
+            }
+        }
+    }
     app_log!(info, tenant_id = %tenant_id, "Received HTTP get credit balance request");
 
     // If tenant_id looks like an email, resolve it to the actual tenant ID
@@ -91,6 +108,39 @@ pub async fn get_credit_balance_handler(
             }))
         }
     }
+}
+
+/// The balance read for a key bound to a workspace, in the usual shape plus
+/// `mode`: "user" reports the person's plan only, "tenant" the workspace's balance.
+async fn bound_balance(
+    store: &EndpointStore,
+    tenant_id: &str,
+    mode: crate::payment::tenant_billing::BillingMode,
+    email: &str,
+) -> HttpResponse {
+    use crate::payment::tenant_billing::BillingMode;
+    let (balance, plan_left, plan) = match mode {
+        BillingMode::User => (0, plan_credits(store, email).await, plan_summary(store, email).await),
+        BillingMode::Tenant => match store.get_credit_balance(tenant_id).await {
+            Ok(b) => (b.max(0), 0, serde_json::Value::Null),
+            Err(e) => {
+                app_log!(error, error = %e, tenant_id = %tenant_id, "Failed to read a workspace balance");
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "success": false,
+                    "message": "Error retrieving credit balance",
+                }));
+            }
+        },
+    };
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "mode": mode.as_str(),
+        "balance": balance,
+        "plan_credits_left": plan_left,
+        "available": balance + plan_left,
+        "plan": plan,
+        "message": "Credit balance retrieved successfully",
+    }))
 }
 
 /// The email's plan credits left; 0 when they cannot be read, so a balance

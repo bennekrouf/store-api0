@@ -16,6 +16,10 @@
 // balance read, GET /api/user/credits/{email}, reports the plan's credits left
 // too (plan_credits_left_for).
 //
+// A service key bound to a workspace (middleware::service_key) does not mix the
+// two: the workspace's billing mode picks its balance or the person's plan, and
+// only that one is read and spent (payment::tenant_billing::spend_strict).
+//
 // The tokens and model are what the partner's own AI call reported; api0 does
 // not see that call. They go on the plan's usage row, the action then moving
 // to `region`, which is what the subscriber's history shows in place of the
@@ -27,6 +31,7 @@
 
 use crate::app_log;
 use crate::endpoint_store::{tenant_management, EndpointStore};
+use crate::payment::tenant_billing::{self, BillingMode, StrictSpend};
 use crate::middleware::service_key::{require_scope, Scope};
 use actix_web::http::StatusCode;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
@@ -40,8 +45,10 @@ const LIVE: &str = "s.status IN ('active', 'trialing') AND s.period_end > NOW()"
 /// plan before the free allowance, the one ending last first.
 const PLAN_ORDER: &str = "s.is_free ASC, s.period_end DESC";
 
-/// Credits left this month on the email's live plans.
+/// Credits left this month on the email's live plans. A free allowance whose
+/// month is over starts the next one first.
 pub async fn plan_credits_left_for(store: &EndpointStore, email: &str) -> Result<i64, String> {
+    crate::payment::subscription::start_free_month_for_email(store, email).await?;
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let sql = format!(
         "SELECT COALESCE(SUM(GREATEST(s.credits_granted - s.credits_used, 0)), 0)::BIGINT \
@@ -71,7 +78,7 @@ pub(crate) async fn take_from_plan(store: &EndpointStore, email: &str, amount: i
 }
 
 /// Puts back what take_from_plan gave, when the balance then could not pay the rest.
-async fn give_back_to_plan(store: &EndpointStore, subscription_id: &str, amount: i64) -> Result<(), String> {
+pub(crate) async fn give_back_to_plan(store: &EndpointStore, subscription_id: &str, amount: i64) -> Result<(), String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     client
         .execute(
@@ -81,6 +88,21 @@ async fn give_back_to_plan(store: &EndpointStore, subscription_id: &str, amount:
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Gives `amount` back to the email's live plan that has used credits, in the
+/// order they are spent. Returns that plan's id; `None` when no live plan has
+/// anything to take back, so the credits have nowhere to go.
+pub(crate) async fn refund_to_plan(store: &EndpointStore, email: &str, amount: i64) -> Result<Option<String>, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let sql = format!(
+        "UPDATE subscriptions SET credits_used = GREATEST(credits_used - $2, 0), updated_at = NOW() \
+         WHERE id = (SELECT s.id FROM subscriptions s WHERE s.email = $1 AND {LIVE} AND s.credits_used > 0 \
+                     ORDER BY {PLAN_ORDER} LIMIT 1) \
+         RETURNING id"
+    );
+    let row = client.query_opt(sql.as_str(), &[&email, &amount]).await.map_err(|e| e.to_string())?;
+    Ok(row.map(|r| r.get(0)))
 }
 
 /// The plan's side of the charge in the plan's usage history, next to the
@@ -157,6 +179,48 @@ pub async fn spend_handler(
             serde_json::json!({ "success": false, "message": "Credits could not be charged" }),
         )
     };
+
+    // A key bound to a workspace spends the way that workspace bills: its own
+    // balance, or each person's plan — never the two together.
+    match tenant_billing::caller_mode(&store, &caller).await {
+        Ok(Some((tenant_id, mode))) => {
+            let description = body.description.as_deref();
+            return match tenant_billing::spend_strict(&store, &tenant_id, mode, &email, body.amount, &body.action_type, description, caller.name()).await {
+                Ok(StrictSpend::Paid { from_plan, from_balance, available }) => {
+                    app_log!(info, email = %email, caller = %caller.name(), action = %body.action_type, mode = mode.as_str(),
+                        from_plan = from_plan, from_balance = from_balance, "Credits spent");
+                    let (plan_left, balance) = match mode {
+                        BillingMode::User => (available, 0),
+                        BillingMode::Tenant => (0, available),
+                    };
+                    reply(
+                        StatusCode::OK,
+                        serde_json::json!({
+                            "success": true,
+                            "mode": mode.as_str(),
+                            "from_plan": from_plan,
+                            "from_balance": from_balance,
+                            "plan_credits_left": plan_left,
+                            "balance": balance,
+                            "available": available,
+                        }),
+                    )
+                }
+                Ok(StrictSpend::Short { available }) => reply(
+                    StatusCode::PAYMENT_REQUIRED,
+                    serde_json::json!({
+                        "success": false,
+                        "message": "Not enough credits",
+                        "mode": mode.as_str(),
+                        "available": available,
+                    }),
+                ),
+                Err(e) => failed("charge by billing mode", e),
+            };
+        }
+        Ok(None) => {}
+        Err(e) => return failed("billing mode lookup", e),
+    }
 
     // What the account can add. Read without creating an account: someone who
     // only has a plan has none, and needs none.

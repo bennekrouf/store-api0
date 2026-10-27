@@ -259,7 +259,9 @@ pub async fn tenants_overview(
                  -- Consumers reach this tenant's tools through a connector but
                  -- have no authority over it, so they are counted separately.
                  (SELECT count(*) FROM tenant_users tu4
-                   WHERE tu4.tenant_id = t.id AND tu4.role = 'consumer')
+                   WHERE tu4.tenant_id = t.id AND tu4.role = 'consumer'),
+                 -- Who pays for its paid tools (payment::tenant_billing).
+                 t.billing_mode
              FROM tenants t
              LEFT JOIN tenant_downstream_auth d ON d.tenant_id = t.id
              ORDER BY lower(t.name), t.id",
@@ -332,6 +334,9 @@ pub async fn tenants_overview(
             "id": id,
             "name": facts.name,
             "credit_balance": r.get::<_, i64>(2),
+            // 'tenant': the balance above pays for every call made with its keys;
+            // 'user': each caller pays from their own plan, and the balance is unused.
+            "billing_mode": r.get::<_, String>(23),
             "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
             "mcp_client_id": facts.mcp_client_id,
             "google_client_id": facts.google_client_id,
@@ -661,6 +666,8 @@ pub struct UpdateTenantConfig {
     pub google_client_id: Option<Option<String>>,
     pub allow_api0_signin: Option<bool>,
     pub name: Option<String>,
+    /// 'tenant' or 'user' (payment::tenant_billing). Absent leaves it alone.
+    pub billing_mode: Option<String>,
 }
 
 pub fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
@@ -700,6 +707,19 @@ pub async fn update_tenant_config(
         }
     }
 
+    let billing_mode = match body.billing_mode.as_deref() {
+        None => None,
+        Some(m) => match crate::payment::tenant_billing::BillingMode::parse(m) {
+            Some(mode) => Some(mode.as_str()),
+            None => {
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "success": false,
+                    "error": "billing_mode must be 'tenant' or 'user'"
+                }))
+            }
+        },
+    };
+
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(e) => {
@@ -738,7 +758,8 @@ pub async fn update_tenant_config(
                 SET mcp_client_id     = CASE WHEN $2 THEN $3 ELSE mcp_client_id END,
                     google_client_id  = CASE WHEN $4 THEN $5 ELSE google_client_id END,
                     allow_api0_signin = COALESCE($6, allow_api0_signin),
-                    name              = COALESCE(NULLIF(btrim($7), ''), name)
+                    name              = COALESCE(NULLIF(btrim($7), ''), name),
+                    billing_mode      = COALESCE($8, billing_mode)
               WHERE id = $1",
             &[
                 &tenant_id,
@@ -748,6 +769,7 @@ pub async fn update_tenant_config(
                 &google.clone().flatten(),
                 &body.allow_api0_signin,
                 &body.name,
+                &billing_mode,
             ],
         )
         .await
@@ -761,6 +783,7 @@ pub async fn update_tenant_config(
                 info,
                 tenant_id = %tenant_id,
                 allow_api0_signin = ?body.allow_api0_signin,
+                billing_mode = ?billing_mode,
                 "Admin updated tenant configuration"
             );
             HttpResponse::Ok().json(serde_json::json!({"success": true}))

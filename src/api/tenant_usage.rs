@@ -8,7 +8,10 @@
 //   - unified paginated `events` array: MCP tool calls UNION ALL credit events,
 //     each row tagged with source = "mcp" | "event"
 //
-// MCP rows come from api_usage_logs.
+// MCP rows come from api_usage_logs: calls into the tenant's tools, and calls
+// made with the tenant's own keys. A consumer key's calls are logged under the
+// provider whose tools they reach, so without the second half a tenant that
+// only calls others' tools saw its charges but none of its calls.
 // Event rows come from credit_transactions: top-ups, welcome grants and spending
 // (e.g. 'cv_generation', 'translate', 'mcp_tool_call').
 //
@@ -39,6 +42,12 @@ use std::sync::Arc;
 //  12  web_user      TEXT  (nullable — Web only)
 //  13  description   TEXT  (nullable — Web only)
 
+/// Which api_usage_logs rows (aliased `l`) belong to tenant $1: calls into its
+/// tools, or calls made with its keys. Read on the admin connection, because
+/// row-level security only shows the first kind; this filter is the scope.
+const MCP_SCOPE: &str =
+    "(l.tenant_id = $1 OR l.key_id IN (SELECT k2.id FROM api_keys k2 WHERE k2.tenant_id = $1))";
+
 const MCP_SEL: &str =
     "SELECT
         l.id,
@@ -57,7 +66,7 @@ const MCP_SEL: &str =
         NULL::TEXT                     AS description
      FROM api_usage_logs l
      LEFT JOIN api_keys k ON l.key_id = k.id
-     WHERE l.tenant_id = $1";
+     WHERE ";
 
 const WEB_SEL: &str =
     "SELECT
@@ -125,7 +134,9 @@ pub async fn get_tenant_stats(
         }
     };
 
-    let client = match store.get_conn(Some(&tenant_id)).await {
+    // Every query below names the tenant itself; see MCP_SCOPE for why this is
+    // not the tenant-scoped connection.
+    let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(e) => {
             app_log!(error, error = %e, "DB connection failed for stats");
@@ -148,13 +159,14 @@ pub async fn get_tenant_stats(
             ROUND(COALESCE(AVG(response_time_ms), 0))::BIGINT                   AS avg_latency_ms,
             COUNT(DISTINCT NULLIF(consumer_id, ''))::BIGINT                     AS unique_consumers,
             COUNT(DISTINCT endpoint_path)::BIGINT                               AS unique_tools
-         FROM api_usage_logs
-         WHERE tenant_id = $1";
+         FROM api_usage_logs l
+         WHERE ";
 
     let summary_row = if hours == 0 {
-        client.query_one(summary_sql_base, &[&tenant_id]).await
+        let sql = format!("{}{}", summary_sql_base, MCP_SCOPE);
+        client.query_one(&sql, &[&tenant_id]).await
     } else {
-        let sql = format!("{} AND timestamp >= NOW() - make_interval(hours => $2)", summary_sql_base);
+        let sql = format!("{}{} AND l.timestamp >= NOW() - make_interval(hours => $2)", summary_sql_base, MCP_SCOPE);
         client.query_one(&sql, &[&tenant_id, &hours]).await
     };
 
@@ -216,17 +228,18 @@ pub async fn get_tenant_stats(
     // $4 = hours (only in the time-filtered branch, shared by both halves)
     let events_rows = if hours == 0 {
         let sql = format!(
-            "{} UNION ALL {} ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
-            MCP_SEL, WEB_SEL
+            "{}{} UNION ALL {} ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
+            MCP_SEL, MCP_SCOPE, WEB_SEL
         );
         client.query(&sql, &[&tenant_id, &limit, &offset]).await
     } else {
         let sql = format!(
-            "{mcp} AND l.timestamp  >= NOW() - make_interval(hours => $4) \
+            "{mcp}{scope} AND l.timestamp  >= NOW() - make_interval(hours => $4) \
              UNION ALL \
              {web} AND ct.created_at >= NOW() - make_interval(hours => $4) \
              ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
             mcp = MCP_SEL,
+            scope = MCP_SCOPE,
             web = WEB_SEL,
         );
         client.query(&sql, &[&tenant_id, &limit, &offset, &hours]).await
