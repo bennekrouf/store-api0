@@ -1096,3 +1096,8 @@ BEGIN
         ALTER TABLE tenants ALTER COLUMN billing_mode SET DEFAULT 'user';
     END IF;
 END $$;
+
+-- The region a tenant's messaging assistant (WhatsApp, Telegram, Teams) answers
+-- from — one of the regions the desktop apps offer (admin/llm_regions.rs).
+-- NULL: the platform's assistant provider (admin/assistant_config.rs).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS llm_region VARCHAR;

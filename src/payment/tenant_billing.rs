@@ -262,7 +262,7 @@ pub async fn set_billing_mode(store: &EndpointStore, email: &str, mode: BillingM
     Ok(tenant.id)
 }
 
-async fn can_edit(store: &EndpointStore, tenant_id: &str, email: &str) -> Result<bool, String> {
+pub(crate) async fn can_edit(store: &EndpointStore, tenant_id: &str, email: &str) -> Result<bool, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let row = client
         .query_opt(

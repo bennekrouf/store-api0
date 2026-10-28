@@ -7,3 +7,4 @@ pub mod user_roles;
 pub mod llm_calls;
 pub mod llm_regions;
 pub mod llm_models;
+pub mod tenant_region;
