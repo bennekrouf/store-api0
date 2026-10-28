@@ -82,8 +82,9 @@ pub struct SubscriptionView {
     pub is_free: bool,
 }
 
-/// The subscription that counts for `email`: a live one if any, else the
-/// latest, so a lapsed subscriber still sees what they had.
+/// The subscription that counts for `email`: a live one if any, a paid or
+/// granted plan before the free allowance, else the latest, so a lapsed
+/// subscriber still sees what they had.
 pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<Option<SubscriptionView>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let sql = format!(
@@ -93,7 +94,7 @@ pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<
                 s.licence, p.products, s.is_free \
          FROM subscriptions s JOIN plans p ON p.id = s.plan_id \
          WHERE s.email = $1 AND s.status <> 'upgraded' \
-         ORDER BY live DESC, s.period_end DESC LIMIT 1",
+         ORDER BY live DESC, s.is_free ASC, s.period_end DESC LIMIT 1",
         live = LIVE_STATUSES
     );
     let row = client.query_opt(sql.as_str(), &[&email.to_lowercase()]).await.map_err(|e| e.to_string())?;
