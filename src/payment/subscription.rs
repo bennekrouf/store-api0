@@ -80,21 +80,24 @@ pub struct SubscriptionView {
     /// The apps it makes Pro; "*" is every app.
     pub products: Vec<String>,
     pub is_free: bool,
+    /// Paid through Stripe, so changed and cancelled on its portal; a plan
+    /// granted by hand (scripts/grant-licence.sh) and the free allowance are not.
+    pub on_stripe: bool,
 }
 
-/// The subscription that counts for `email`: a live one if any, a paid or
-/// granted plan before the free allowance, else the latest, so a lapsed
-/// subscriber still sees what they had.
+/// The subscription that counts for `email`: a live one if any, a Stripe plan
+/// before a granted one before the free allowance, else the latest, so a
+/// lapsed subscriber still sees what they had.
 pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<Option<SubscriptionView>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let sql = format!(
         "SELECT s.id, s.plan_id, p.name, s.status, \
                 (s.status IN {live} AND s.period_end > NOW()) AS live, \
                 s.cancel_at_period_end, s.period_start, s.period_end, s.credits_granted, s.credits_used, \
-                s.licence, p.products, s.is_free \
+                s.licence, p.products, s.is_free, s.stripe_customer_id <> '' AS on_stripe \
          FROM subscriptions s JOIN plans p ON p.id = s.plan_id \
          WHERE s.email = $1 AND s.status <> 'upgraded' \
-         ORDER BY live DESC, s.is_free ASC, s.period_end DESC LIMIT 1",
+         ORDER BY live DESC, s.is_free ASC, on_stripe DESC, s.period_end DESC LIMIT 1",
         live = LIVE_STATUSES
     );
     let row = client.query_opt(sql.as_str(), &[&email.to_lowercase()]).await.map_err(|e| e.to_string())?;
@@ -115,6 +118,7 @@ pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<
             licence: r.get(10),
             products: r.get(11),
             is_free: r.get(12),
+            on_stripe: r.get(13),
         }
     }))
 }
@@ -586,8 +590,10 @@ pub async fn checkout_handler(
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Checkout could not be started");
         }
     };
-    // A paid plan already running wins over anything asked for here.
-    match has_live_paid_plan(&store, &email).await {
+    // A Stripe plan already running is changed on the portal, not bought
+    // again. The free allowance and a plan granted by hand never stop a
+    // purchase: paying is how they move on to a plan of their own.
+    match live_stripe_subscription(&store, &email).await.map(|id| id.is_some()) {
         Ok(true) => {
             return fail(StatusCode::CONFLICT, "You already have a plan — change it from Manage subscription");
         }
@@ -900,7 +906,7 @@ pub async fn cancel_handler(
         return deny;
     }
     let email = body.email.trim().to_lowercase();
-    let sub_id = match live_paid_subscription(&store, &email).await {
+    let sub_id = match live_stripe_subscription(&store, &email).await {
         Ok(Some(id)) => id,
         Ok(None) => return fail(StatusCode::NOT_FOUND, "No plan to cancel"),
         Err(e) => {
@@ -929,12 +935,14 @@ pub async fn cancel_handler(
     }
 }
 
-/// The email's paid plan that is running now, if any.
-async fn live_paid_subscription(store: &EndpointStore, email: &str) -> Result<Option<String>, String> {
+/// The email's Stripe plan that is running now, if any: the one its portal
+/// and cancel act on.
+async fn live_stripe_subscription(store: &EndpointStore, email: &str) -> Result<Option<String>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let sql = format!(
         "SELECT id FROM subscriptions \
-         WHERE email = $1 AND NOT is_free AND status IN {live} AND period_end > NOW() \
+         WHERE email = $1 AND NOT is_free AND stripe_customer_id <> '' \
+           AND status IN {live} AND period_end > NOW() \
          ORDER BY period_end DESC LIMIT 1",
         live = LIVE_STATUSES
     );
