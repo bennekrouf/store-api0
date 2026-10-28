@@ -1,7 +1,8 @@
 // src/admin/assistant_config.rs
 //
-// The AI provider behind the messaging assistant (Telegram, WhatsApp): one
-// platform-wide setting the super admin chooses, used for every workspace.
+// The AI provider behind the messaging assistant (Telegram, WhatsApp, Teams):
+// one platform-wide setting the super admin chooses, used for every workspace
+// that has not chosen a region of its own (tenant_region.rs).
 //
 // The provider API keys kept here are api0's, shared by every AI feature: the
 // YAML import (model_config.rs) reads them too, so a key is entered once, in
@@ -11,7 +12,8 @@
 //   PUT    /api/admin/config/assistant               { provider?, model? }
 //   PUT    /api/admin/config/assistant/keys/{prov}   { api_key }
 //   DELETE /api/admin/config/assistant/keys/{prov}
-//   GET    /api/internal/assistant-config            the active provider with its key — the bridge
+//   GET    /api/internal/assistant-config            the active provider with its key — the bridge;
+//                                                    ?tenant_id= for a workspace's region (tenant_region.rs)
 //
 // All require X-Internal-Secret; the gateway restricts the admin routes to the
 // super admin. A key is sealed with secret_box on the way in and is never
@@ -366,17 +368,44 @@ pub async fn delete_assistant_key(
 }
 
 // ── GET /api/internal/assistant-config ── the bridge ─────────────────────────
+//
+// With `?tenant_id=`, the provider that workspace's assistant answers with: its
+// region's (tenant_region.rs) when it chose one on offer, else the platform's.
 
-pub async fn internal_assistant_config(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
+#[derive(Debug, Deserialize)]
+pub struct InternalConfigQuery {
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+}
+
+pub async fn internal_assistant_config(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    query: web::Query<InternalConfigQuery>,
+) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    let choice = match read_choice(&store).await {
-        Ok(c) => c,
-        Err(e) => {
-            app_log!(error, error = %e, "Could not read the assistant configuration");
-            return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the configuration");
-        }
+    let by_region = match query.tenant_id.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => match crate::admin::tenant_region::resolve(&store, t).await {
+            Ok(r) => r,
+            Err(e) => {
+                // The platform's provider still answers rather than none.
+                app_log!(warn, error = %e, tenant_id = %t, "Could not read the workspace's region");
+                None
+            }
+        },
+        None => None,
+    };
+    let (region, choice) = match by_region {
+        Some((r, p, m)) => (Some(r.id), Some((p, m))),
+        None => match read_choice(&store).await {
+            Ok(c) => (None, c),
+            Err(e) => {
+                app_log!(error, error = %e, "Could not read the assistant configuration");
+                return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the configuration");
+            }
+        },
     };
     let Some((id, model)) = choice else {
         return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false }));
@@ -397,7 +426,9 @@ pub async fn internal_assistant_config(req: HttpRequest, store: web::Data<Arc<En
         "configured": true,
         "provider": p.id,
         "base_url": p.base_url,
+        "chat_path": p.chat_path,
         "model": model,
+        "region": region,
         "api_key": api_key,
     }))
 }
