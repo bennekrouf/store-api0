@@ -22,7 +22,10 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub mod mayorana;
 pub mod unsubscribe;
+
+pub use mayorana::Lang;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -73,12 +76,15 @@ pub enum EmailKind {
     WinBack { name: String },
     WhatsNew { feature_title: String, description: String },
     // ── Plan subscriptions (the desktop apps' licence) ───────────────────────
+    // Written in the subscriber's language, see mayorana.rs.
     /// `apps`: the apps the plan makes Pro, comma-separated; "*" for all, empty for none.
-    LicenceIssued { plan_name: String, licence: String, apps: String, monthly_credits: i64 },
+    /// `renews_on`: when the credits refill, as shown; None for the free allowance.
+    LicenceIssued { plan_name: String, licence: String, apps: String, monthly_credits: i64, renews_on: Option<String>, lang: Lang },
     /// A plan was cancelled; `ends_on` is the last day it still works, as shown.
-    PlanCancelled { plan_name: String, ends_on: String },
+    /// `ended`: it is already over (a card Stripe gave up on), not running to `ends_on`.
+    PlanCancelled { plan_name: String, ends_on: String, credits_left: i64, ended: bool, lang: Lang },
     /// Once, some days after a cancelled plan ended. Optional.
-    PlanComeBack { plan_name: String },
+    PlanComeBack { plan_name: String, lang: Lang },
     /// What a desktop app found for the licence holder, sent to them only, at
     /// their asking (POST /v1/licence/email). Every field is the app's text and
     /// is escaped when rendered.
@@ -152,9 +158,9 @@ impl EmailKind {
             Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
             Self::WhatsNew { feature_title, .. }             => format!("New on api0: {}", feature_title),
-            Self::LicenceIssued { plan_name, .. }            => format!("Your {} licence", plan_name),
-            Self::PlanCancelled { plan_name, .. }            => format!("Your {} plan is cancelled", plan_name),
-            Self::PlanComeBack { .. }                        => "Your apps are waiting for you".into(),
+            Self::LicenceIssued { plan_name, lang, .. }      => mayorana::licence_subject(plan_name, *lang),
+            Self::PlanCancelled { plan_name, ended, lang, .. } => mayorana::cancelled_subject(plan_name, *ended, *lang),
+            Self::PlanComeBack { lang, .. }                  => mayorana::come_back_subject(*lang),
             Self::AppDigest { app, title, .. }               => format!("{app}: {title}"),
         }
     }
@@ -172,13 +178,22 @@ impl EmailKind {
         )
     }
 
-    /// The name the email is sent as. Licence emails go to people who bought a
-    /// desktop app from mayorana.ch and have never heard of api0.
+    /// The name the email is sent as. Plan emails go to people who bought a
+    /// desktop app from mayorana.ch and have never heard of api0, and come from
+    /// Mohamed so that a reply is a conversation.
     fn sender_name(&self) -> &'static str {
         match self {
-            Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. } | Self::AppDigest { .. } => "mayorana",
+            Self::LicenceIssued { lang, .. } | Self::PlanCancelled { lang, .. } | Self::PlanComeBack { lang, .. } => {
+                lang.sender_name()
+            }
+            Self::AppDigest { .. } => "mayorana",
             _ => "api0",
         }
+    }
+
+    /// Whether replies should reach Mohamed rather than the sending address.
+    fn replies_to_founder(&self) -> bool {
+        matches!(self, Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. })
     }
 
     #[cfg(test)]
@@ -188,20 +203,8 @@ impl EmailKind {
 
     /// The body, with an unsubscribe link in the footer when one is given.
     pub fn html_body_with(&self, unsubscribe: Option<&str>) -> String {
-        if let Self::LicenceIssued { plan_name, licence, apps, monthly_credits } = self {
-            let what = match apps.as_str() {
-                "*" => "to turn on Pro in every app".to_string(),
-                "" => "to use the apps' AI features".to_string(),
-                list => format!("to turn on Pro in {list}"),
-            };
-            return wrap_mayorana_layout(&format!(
-                r#"<h1>Your {plan_name} licence</h1>
-<p>Here is your licence number. Paste it into the app's licence window {what}.</p>
-<pre style="font-size:20px;letter-spacing:2px;background:#F1F5F9;padding:12px;border-radius:6px;text-align:center">{licence}</pre>
-<p>It also includes <strong>{monthly_credits} AI credits</strong> every month, used by the apps' AI features. They renew with each paid month.</p>
-<p style="color:#64748B;font-size:13px">Keep this email: the same licence works on every computer you use. To see, change or cancel your subscription, sign in with this email address at <a href="{page}" style="color:#475569">{page}</a>.</p>"#,
-                page = plans_page(),
-            ), None);
+        if let Self::LicenceIssued { plan_name, licence, apps, monthly_credits, renews_on, lang } = self {
+            return mayorana::licence_body(plan_name, licence, apps, *monthly_credits, renews_on.as_deref(), *lang);
         }
         if let Self::AppDigest { app, title, intro, items } = self {
             let lines: String = items
@@ -222,32 +225,19 @@ impl EmailKind {
                 })
                 .collect();
             let intro = if intro.is_empty() { String::new() } else { format!("<p>{}</p>", escape_html(intro)) };
-            return wrap_mayorana_layout(&format!(
+            return mayorana::layout(&format!(
                 r#"<h1>{title}</h1>
 {intro}<ul style="padding-left:18px">{lines}</ul>
 <p style="color:#64748B;font-size:13px">Sent by {app} on your computer, to the email of its licence. Turn these emails off in {app}.</p>"#,
                 title = escape_html(title),
                 app = escape_html(app),
-            ), None);
+            ), None, Lang::En);
         }
-        if let Self::PlanCancelled { plan_name, ends_on } = self {
-            return wrap_mayorana_layout(&format!(
-                r#"<h1>Your {plan_name} plan is cancelled</h1>
-<p>We're sorry to see you go. Nothing more will be charged.</p>
-<p>Your licence keeps working, with its apps and AI credits, until <strong>{ends_on}</strong>. After that the apps go back to their free version.</p>
-<p>Changed your mind? You can resume the plan before that date, and keep the same licence number.</p>
-<p><a href="{page}" style="display:inline-block;padding:10px 20px;background:#0F172A;color:white;text-decoration:none;border-radius:6px">Manage my subscription</a></p>"#,
-                page = plans_page(),
-            ), None);
+        if let Self::PlanCancelled { plan_name, ends_on, credits_left, ended, lang } = self {
+            return mayorana::cancelled_body(plan_name, ends_on, *credits_left, *ended, *lang);
         }
-        if let Self::PlanComeBack { plan_name } = self {
-            return wrap_mayorana_layout(&format!(
-                r#"<h1>Your apps are waiting for you</h1>
-<p>Your {plan_name} plan ended a little while ago. Everything you set up in the apps is still there.</p>
-<p>Subscribe again whenever you like: it takes a minute, and your AI credits start again straight away.</p>
-<p><a href="{page}" style="display:inline-block;padding:10px 20px;background:#0F172A;color:white;text-decoration:none;border-radius:6px">See the plans</a></p>"#,
-                page = plans_page(),
-            ), unsubscribe);
+        if let Self::PlanComeBack { plan_name, lang } = self {
+            return mayorana::come_back_body(plan_name, unsubscribe, *lang);
         }
         let content = match self {
             // ── Tier 1 ───────────────────────────────────────────────────────
@@ -479,31 +469,6 @@ fn wrap_layout(content: &str, unsubscribe: Option<&str>) -> String {
     )
 }
 
-/// mayorana.ch's plainer layout, for subscribers who may never have heard of
-/// api0. The postal address and opt-out link are only on optional emails.
-fn wrap_mayorana_layout(content: &str, unsubscribe: Option<&str>) -> String {
-    let unsubscribe = unsubscribe
-        .map(|url| format!(
-            r#"<br>{POSTAL_ADDRESS}<br><a href="{}" style="color:#64748B">Unsubscribe from these emails</a> — emails about your subscription are still sent."#,
-            escape_html(url)
-        ))
-        .unwrap_or_default();
-    format!(
-        r#"<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#F8FAFC;font-family:Arial,Helvetica,sans-serif">
-<div style="max-width:600px;margin:24px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
-  <div style="padding:32px;color:#1E293B;line-height:1.6">{content}</div>
-  <div style="padding:16px 32px;background:#F8FAFC;color:#64748B;font-size:12px;text-align:center">
-    <a href="https://mayorana.ch" style="color:#475569">mayorana.ch</a>{unsubscribe}
-  </div>
-</div>
-</body>
-</html>"#
-    )
-}
-
 // ── Fire-and-forget helper (call from any handler) ────────────────────────────
 
 pub fn send_async(store: Arc<EndpointStore>, to: impl Into<String>, kind: EmailKind) {
@@ -544,6 +509,11 @@ async fn deliver_internal(store: &EndpointStore, to: &str, kind: &EmailKind) -> 
     if let Some(url) = &unsubscribe {
         builder = with_list_unsubscribe(builder, url);
     }
+    if kind.replies_to_founder() {
+        if let Some(reply_to) = founder_reply_to() {
+            builder = builder.reply_to(reply_to);
+        }
+    }
     let email = builder.body(kind.html_body_with(unsubscribe.as_deref()))?;
 
     let creds = Credentials::new(cfg.user.clone(), cfg.password.clone());
@@ -554,6 +524,20 @@ async fn deliver_internal(store: &EndpointStore, to: &str, kind: &EmailKind) -> 
 
     transport.send(email).await?;
     Ok(())
+}
+
+/// Where replies to the plan emails go: MAYORANA_REPLY_TO, e.g.
+/// "Mohamed <mohamed@mayorana.ch>". Unset or invalid, replies go to the sending
+/// address, as before.
+fn founder_reply_to() -> Option<lettre::message::Mailbox> {
+    let raw = std::env::var("MAYORANA_REPLY_TO").ok()?;
+    match raw.trim().parse() {
+        Ok(mailbox) => Some(mailbox),
+        Err(e) => {
+            app_log!(warn, error = %e, "MAYORANA_REPLY_TO is not an email address; replies go to the sender");
+            None
+        }
+    }
 }
 
 // ── SMTP config (DB + env fallback) ──────────────────────────────────────────
@@ -905,38 +889,44 @@ mod send_request_tests {
 
 #[cfg(test)]
 mod licence_tests {
-    use super::EmailKind;
+    use super::{EmailKind, Lang};
 
-    fn body(apps: &str) -> String {
-        EmailKind::LicenceIssued {
-            plan_name: "Free".into(),
+    // The wording itself is tested in mayorana.rs.
+
+    #[test]
+    fn the_plan_emails_come_from_mohamed_in_the_readers_language() {
+        let licence = EmailKind::LicenceIssued {
+            plan_name: "Pro".into(),
             licence: "ABCDE-FGHJK-LMNPQ-RSTUV".into(),
-            apps: apps.into(),
-            monthly_credits: 20,
-        }
-        .html_body()
-    }
+            apps: "*".into(),
+            monthly_credits: 2000,
+            renews_on: Some("22 novembre 2026".into()),
+            lang: Lang::Fr,
+        };
+        assert_eq!(licence.sender_name(), "Mohamed de Mayorana");
+        assert_eq!(licence.subject(), "Votre licence Pro");
+        assert!(licence.replies_to_founder() && !licence.is_optional());
 
-    #[test]
-    fn the_licence_email_says_what_the_plan_unlocks() {
-        assert!(body("*").contains("Pro in every app"));
-        assert!(body("gitagent, jobscout").contains("Pro in gitagent, jobscout"));
-        let free = body("");
-        assert!(free.contains("use the apps' AI features") && !free.contains("Pro in"));
-        assert!(free.contains("ABCDE-FGHJK-LMNPQ-RSTUV") && free.contains("20 AI credits"));
-    }
+        let cancelled = EmailKind::PlanCancelled {
+            plan_name: "Pro".into(),
+            ends_on: "22 November 2026".into(),
+            credits_left: 12,
+            ended: false,
+            lang: Lang::En,
+        };
+        assert_eq!(cancelled.sender_name(), "Mohamed from Mayorana");
+        assert!(!cancelled.is_optional() && !cancelled.html_body().contains("Unsubscribe"));
 
-    #[test]
-    fn the_plan_emails_point_at_the_pricing_page() {
-        let cancelled = EmailKind::PlanCancelled { plan_name: "Pro".into(), ends_on: "22 November 2026".into() };
-        assert!(!cancelled.is_optional());
-        let body = cancelled.html_body();
-        assert!(body.contains("until <strong>22 November 2026</strong>") && body.contains("mayorana.ch/pricing"));
-        assert!(!body.contains("Unsubscribe"));
-
-        let come_back = EmailKind::PlanComeBack { plan_name: "Pro".into() };
-        assert!(come_back.is_optional());
+        let come_back = EmailKind::PlanComeBack { plan_name: "Pro".into(), lang: Lang::En };
+        assert!(come_back.is_optional() && come_back.replies_to_founder());
         let body = come_back.html_body_with(Some("https://gateway.api0.ai/api/email/unsubscribe?e=a&t=b"));
         assert!(body.contains("Your Pro plan ended") && body.contains("Unsubscribe from these emails"));
+    }
+
+    #[test]
+    fn an_app_digest_stays_under_the_mayorana_name() {
+        let digest = EmailKind::AppDigest { app: "JobScout".into(), title: "3 new jobs".into(), intro: String::new(), items: vec![] };
+        assert_eq!(digest.sender_name(), "mayorana");
+        assert!(!digest.replies_to_founder());
     }
 }

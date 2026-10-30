@@ -15,6 +15,22 @@
 //
 //   POST /api/internal/email/unsubscribe   { email, token }
 //   POST /api/internal/email/resubscribe   { email, token }
+//
+// This is also the one record of who wants mayorana.ch's product emails (tips
+// for the apps, credit reminders, the monthly digest), set from the box on the
+// pricing page. The gateway passes the email of the person signed in:
+//
+//   GET  /api/internal/email/consent/{email}  → { opt_in: true|false|null, receives }
+//   PUT  /api/internal/email/consent          { email, opt_in, source, locale? }
+//
+// An address is opted in (email_opt_ins), opted out (email_opt_outs) or has
+// not chosen. Whether it gets product emails (`receives`):
+//   opted in    yes
+//   opted out   never, whatever its plan
+//   not chosen  only while it has a plan it bought: an existing customer, told
+//               before buying that they can refuse, may get news of similar
+//               products (Swiss UWG art. 3 al. 1 let. o)
+// Unsubscribing from any email opts out; undoing it opts back in.
 
 use super::{check_internal_secret, path_segment};
 use crate::app_log;
@@ -82,20 +98,62 @@ pub async fn is_opted_out(store: &EndpointStore, email: &str) -> bool {
     }
 }
 
-async fn set_opted_out(store: &EndpointStore, email: &str, opted_out: bool) -> anyhow::Result<()> {
+/// The address's own choice: Some(true) opted in, Some(false) opted out, None
+/// not chosen yet.
+pub async fn choice(store: &EndpointStore, email: &str) -> anyhow::Result<Option<bool>> {
     let client = store.get_admin_conn().await?;
+    let row = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM email_opt_ins WHERE email = $1), \
+                    EXISTS (SELECT 1 FROM email_opt_outs WHERE email = $1)",
+            &[&normalise(email)],
+        )
+        .await?;
+    Ok(match (row.get::<_, bool>(0), row.get::<_, bool>(1)) {
+        (_, true) => Some(false),
+        (true, false) => Some(true),
+        (false, false) => None,
+    })
+}
+
+/// Whether the address gets product emails, by the rule at the top.
+pub fn receives(choice: Option<bool>, bought_plan: bool) -> bool {
+    choice.unwrap_or(bought_plan)
+}
+
+/// Records a choice, replacing any earlier one. `source` says where it was made.
+async fn set_choice(
+    store: &EndpointStore,
+    email: &str,
+    opt_in: bool,
+    source: &str,
+    locale: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut client = store.get_admin_conn().await?;
     let email = normalise(email);
-    if opted_out {
-        client
-            .execute(
-                "INSERT INTO email_opt_outs (email) VALUES ($1) ON CONFLICT (email) DO NOTHING",
-                &[&email],
-            )
-            .await?;
+    let tx = client.transaction().await?;
+    if opt_in {
+        tx.execute("DELETE FROM email_opt_outs WHERE email = $1", &[&email]).await?;
+        tx.execute(
+            "INSERT INTO email_opt_ins (email, source, locale) VALUES ($1, $2, $3) \
+             ON CONFLICT (email) DO UPDATE SET source = EXCLUDED.source, locale = EXCLUDED.locale, created_at = NOW()",
+            &[&email, &source, &locale],
+        )
+        .await?;
     } else {
-        client.execute("DELETE FROM email_opt_outs WHERE email = $1", &[&email]).await?;
+        tx.execute("DELETE FROM email_opt_ins WHERE email = $1", &[&email]).await?;
+        tx.execute(
+            "INSERT INTO email_opt_outs (email) VALUES ($1) ON CONFLICT (email) DO NOTHING",
+            &[&email],
+        )
+        .await?;
     }
+    tx.commit().await?;
     Ok(())
+}
+
+async fn set_opted_out(store: &EndpointStore, email: &str, opted_out: bool) -> anyhow::Result<()> {
+    set_choice(store, email, !opted_out, "email-link", None).await
 }
 
 #[derive(Deserialize)]
@@ -146,6 +204,71 @@ pub async fn resubscribe_handler(
     change(req, store, body, false).await
 }
 
+// ── The box on mayorana.ch ───────────────────────────────────────────────────
+
+/// GET /api/internal/email/consent/{email}
+pub async fn consent_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+    let email = normalise(&path.into_inner());
+    let (choice, bought) = match (
+        choice(&store, &email).await,
+        crate::payment::subscription::has_bought_plan(&store, &email).await,
+    ) {
+        (Ok(c), Ok(b)) => (c, b),
+        (Err(e), _) => return consent_failed(&e.to_string()),
+        (_, Err(e)) => return consent_failed(&e),
+    };
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "opt_in": choice,
+        "receives": receives(choice, bought),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ConsentRequest {
+    pub email: String,
+    pub opt_in: bool,
+    /// Where the choice was made: "pricing", "founding".
+    pub source: String,
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+/// PUT /api/internal/email/consent
+pub async fn set_consent_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<ConsentRequest>,
+) -> HttpResponse {
+    if !check_internal_secret(&req) {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"success": false, "error": "Unauthorized"}));
+    }
+    let source = body.source.trim();
+    if source.is_empty() || source.len() > 32 || !source.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"success": false, "error": "Unknown source"}));
+    }
+    let locale = body.locale.as_deref().map(|l| super::Lang::from_tag(Some(l)).tag());
+    if let Err(e) = set_choice(&store, &body.email, body.opt_in, source, locale).await {
+        return consent_failed(&e.to_string());
+    }
+    app_log!(info, opt_in = %body.opt_in, source = %source, "Email consent changed");
+    HttpResponse::Ok().json(serde_json::json!({"success": true, "opt_in": body.opt_in}))
+}
+
+fn consent_failed(error: &str) -> HttpResponse {
+    app_log!(error, error = %error, "Could not read or save email consent");
+    HttpResponse::InternalServerError()
+        .json(serde_json::json!({"success": false, "error": "Could not read or save the preference"}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +292,14 @@ mod tests {
             let t = token("jane+test@example.com").unwrap();
             assert!(url.ends_with(&format!("?e=jane%2Btest%40example.com&t={t}")), "{url}");
         });
+    }
+
+    #[test]
+    fn a_choice_wins_over_the_plan_and_no_choice_follows_it() {
+        assert!(receives(Some(true), false));
+        assert!(!receives(Some(false), true), "a no stays a no for a customer");
+        assert!(receives(None, true), "a customer who never chose gets them");
+        assert!(!receives(None, false), "anyone else must ask");
     }
 
     #[test]
