@@ -824,7 +824,7 @@ pub struct DeleteTenantBody {
 /// `tenant_users` and `api_keys.provider_tenant_id` hold foreign keys that would
 /// block, and `api_groups.tenant_id` has no foreign key at all and would be
 /// orphaned silently. Every statement takes the tenant id as `$1`.
-fn cascade_steps() -> Vec<(&'static str, String)> {
+pub(crate) fn cascade_steps() -> Vec<(&'static str, String)> {
     // Endpoints of this tenant's groups, named once and reused: every child of an
     // endpoint has to go before the endpoint itself.
     const OWNED_ENDPOINTS: &str =

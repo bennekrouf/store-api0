@@ -11,6 +11,7 @@ pub mod key_revoke;
 pub mod key_revoke_all;
 pub mod key_status;
 pub mod key_validate;
+pub mod key_acts_for;
 pub mod key_consumer;
 pub mod usage_key;
 pub mod usage_log;

@@ -7,6 +7,7 @@ use stripe::{
     CreatePriceRecurringInterval, CreateProduct, Currency, CustomerId, IdOrCreate, PaymentIntent,
     PaymentIntentId, PaymentIntentStatus, Price, PriceId, PriceTaxBehavior, Product, ProductId,
     Subscription, SubscriptionId, UpdatePrice, UpdateProduct, UpdateSubscription,
+    UpdateSubscriptionItems,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -217,6 +218,31 @@ impl PaymentService {
     pub async fn set_cancel_at_period_end(&self, subscription_id: &str, cancel: bool) -> Result<Subscription> {
         let id: SubscriptionId = subscription_id.parse()?;
         let params = UpdateSubscription { cancel_at_period_end: Some(cancel), ..Default::default() };
+        Ok(Subscription::update(&self.client, &id, params).await?)
+    }
+
+    /// Moves a subscription to another plan's price, as a switch in the
+    /// customer portal does: prorated, the difference billed or credited on
+    /// the next invoice.
+    pub async fn change_subscription_price(&self, subscription_id: &str, price_id: &str) -> Result<Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        let current = Subscription::retrieve(&self.client, &id, &[]).await?;
+        let item = current
+            .items
+            .data
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Subscription {} has no item", subscription_id))?
+            .id
+            .to_string();
+        let params = UpdateSubscription {
+            items: Some(vec![UpdateSubscriptionItems {
+                id: Some(item),
+                price: Some(price_id.to_string()),
+                ..Default::default()
+            }]),
+            proration_behavior: Some(stripe::generated::billing::subscription::SubscriptionProrationBehavior::CreateProrations),
+            ..Default::default()
+        };
         Ok(Subscription::update(&self.client, &id, params).await?)
     }
 
