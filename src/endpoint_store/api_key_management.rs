@@ -266,6 +266,38 @@ pub async fn validate_api_key(
     )))
 }
 
+/// Whether a key of `tenant_id` may act for `email` — name them in X-User-Email,
+/// so that their plan pays and the tenant's backend sees and signs in as them.
+///
+/// Only a tenant the person agreed to: their own default tenant, or a provider
+/// they hold an active consumer key for, which the OAuth consent flow or they
+/// themselves issued. Membership is not enough: an owner can add anyone api0
+/// already knows without asking them (tenant_members::add_or_invite).
+pub async fn tenant_may_act_for(
+    store: &EndpointStore,
+    tenant_id: &str,
+    email: &str,
+) -> Result<bool, StoreError> {
+    let client = store.get_admin_conn().await?;
+    let row = client
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM user_preferences
+                  WHERE LOWER(email) = $1 AND default_tenant_id = $2
+             ) OR EXISTS (
+                 SELECT 1 FROM api_keys
+                  WHERE LOWER(email) = $1
+                    AND provider_tenant_id = $2
+                    AND is_active = true
+                    AND (expires_at IS NULL OR expires_at > NOW())
+             )",
+            &[&email.trim().to_lowercase(), &tenant_id],
+        )
+        .await
+        .to_store_error()?;
+    Ok(row.get(0))
+}
+
 /// Get usage statistics for a specific API key
 pub async fn get_api_key_usage(
     store: &EndpointStore,

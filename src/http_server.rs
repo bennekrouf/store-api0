@@ -198,6 +198,7 @@ pub async fn start_http_server(
                             )
                             // Key validation and usage
                             .route("/key/validate", web::post().to(validate_api_key))
+                            .route("/internal/key/acts-for", web::get().to(crate::api::key_acts_for::acts_for_handler))
                             // Alias used by the gateway's OAuth token-exchange flow
                             .route("/key/generate", web::post().to(generate_api_key))
                             .route(
@@ -238,6 +239,9 @@ pub async fn start_http_server(
                             // Super admin: every user and their workspaces, paged
                             .route("/admin/users", web::get().to(crate::admin::users_directory::list_users))
                             .route("/admin/tenant-names", web::get().to(crate::admin::users_directory::tenant_names))
+                            // Super admin: move a licence to another plan, delete a user
+                            .route("/admin/licences/plan", web::post().to(crate::admin::user_admin::change_licence_plan))
+                            .route("/admin/users/delete", web::post().to(crate::admin::user_admin::delete_user))
                             // Super admin: every AI call, its model and tokens, paged
                             .route("/admin/llm-calls", web::get().to(crate::admin::llm_calls::list_llm_calls))
                             // Super admin: the provider and model behind each region the apps offer
