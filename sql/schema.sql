@@ -931,6 +931,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_one_free ON subscriptions(em
 --                       after a cancelled plan ended
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancel_emailed_at TIMESTAMPTZ;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS comeback_emailed_at TIMESTAMPTZ;
+--   locale              the language of the site the plan was bought from ('en',
+--                       'fr'): its emails are written in it. NULL is English.
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS locale VARCHAR;
 
 -- ── The default lineup ───────────────────────────────────────────────────────
 -- The apps themselves are the free version; plans are for Pro and AI credits.
@@ -1036,6 +1039,16 @@ UPDATE user_preferences up
 -- src/email/unsubscribe.rs.
 CREATE TABLE IF NOT EXISTS email_opt_outs (
     email      TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Addresses that asked for them: the box on mayorana.ch, or undoing an
+-- unsubscribe. An address is in at most one of the two tables, and in neither
+-- until it chooses. `source` is where the choice was made, `locale` the site's
+-- language then: together with created_at, the record of consent.
+CREATE TABLE IF NOT EXISTS email_opt_ins (
+    email      TEXT PRIMARY KEY,
+    source     TEXT NOT NULL,
+    locale     TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

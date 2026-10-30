@@ -45,7 +45,8 @@
 // unless they have a plan again by then (send_come_back_reminders, daily).
 
 use crate::app_log;
-use crate::email::{send_async, DigestItem, EmailKind};
+use crate::email::mayorana::format_date;
+use crate::email::{send_async, DigestItem, EmailKind, Lang};
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::payment::plans::{self, PURPOSE_PLAN};
@@ -321,6 +322,8 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
         return Err(format!("Plan subscription {} has no email metadata", sub.id));
     };
     let email = email.trim().to_lowercase();
+    // The site's language at Checkout; older subscriptions have none.
+    let locale: Option<String> = meta.get("locale").map(|l| Lang::from_tag(Some(l)).tag().to_string());
     // Set by sign-ups from before subscriptions needed no account.
     let tenant_id: Option<String> = meta.get("tenant_id").filter(|t| !t.is_empty()).cloned();
 
@@ -345,10 +348,11 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
     client
         .execute(
             "INSERT INTO subscriptions (id, tenant_id, email, plan_id, stripe_customer_id, status, \
-                                        cancel_at_period_end, period_start, period_end, credits_granted, credits_used, licence) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11) \
+                                        cancel_at_period_end, period_start, period_end, credits_granted, credits_used, licence, locale) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12) \
              ON CONFLICT (id) DO UPDATE SET \
                 licence = COALESCE(subscriptions.licence, EXCLUDED.licence), \
+                locale = COALESCE(EXCLUDED.locale, subscriptions.locale), \
                 plan_id = EXCLUDED.plan_id, status = EXCLUDED.status, \
                 stripe_customer_id = EXCLUDED.stripe_customer_id, \
                 cancel_at_period_end = EXCLUDED.cancel_at_period_end, \
@@ -372,6 +376,7 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
                 &timestamp(sub.current_period_end),
                 &plan.monthly_credits,
                 &new_licence(),
+                &locale,
             ],
         )
         .await
@@ -407,14 +412,15 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
     let sql = format!(
         "UPDATE subscriptions SET licence_emailed_at = NOW() \
          WHERE id = $1 AND licence_emailed_at IS NULL AND status IN {live} \
-         RETURNING licence",
+         RETURNING licence, period_end, locale",
         live = LIVE_STATUSES
     );
     let fresh = client.query_opt(sql.as_str(), &[&sub.id.to_string()]).await.map_err(|e| e.to_string())?;
     if let Some(row) = fresh {
         let licence: String = row.get(0);
+        let lang = Lang::from_tag(row.get::<_, Option<String>>(2).as_deref());
         app_log!(info, subscription_id = %sub.id, email = %email, "Licence issued");
-        send_async(Arc::clone(store), email.clone(), licence_email(&plan, licence));
+        send_async(Arc::clone(store), email.clone(), licence_email(&plan, licence, Some(row.get(1)), lang));
     }
 
     // Resumed: a later cancel is confirmed again.
@@ -433,18 +439,26 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
             "UPDATE subscriptions SET cancel_emailed_at = NOW() \
              WHERE id = $1 AND cancel_emailed_at IS NULL AND licence_emailed_at IS NOT NULL \
                AND (cancel_at_period_end OR status = 'canceled') \
-             RETURNING GREATEST(period_end, NOW())",
+             RETURNING GREATEST(period_end, NOW()), GREATEST(credits_granted - credits_used, 0), \
+                       status = 'canceled', locale",
             &[&sub.id.to_string()],
         )
         .await
         .map_err(|e| e.to_string())?;
     if let Some(row) = cancelled {
         let ends: DateTime<Utc> = row.get(0);
+        let lang = Lang::from_tag(row.get::<_, Option<String>>(3).as_deref());
         app_log!(info, subscription_id = %sub.id, email = %email, "Plan cancelled");
         send_async(
             Arc::clone(store),
             email,
-            EmailKind::PlanCancelled { plan_name: plan.name.clone(), ends_on: ends.format("%-d %B %Y").to_string() },
+            EmailKind::PlanCancelled {
+                plan_name: plan.name.clone(),
+                ends_on: format_date(ends, lang),
+                credits_left: row.get(1),
+                ended: row.get(2),
+                lang,
+            },
         );
     }
     Ok(())
@@ -477,7 +491,7 @@ pub async fn send_come_back_reminders(store: &Arc<EndpointStore>) {
            AND NOT EXISTS (SELECT 1 FROM subscriptions o \
                            WHERE o.email = s.email AND NOT o.is_free \
                              AND o.status IN {live} AND o.period_end > NOW()) \
-         RETURNING s.email, p.name",
+         RETURNING s.email, p.name, s.locale",
         live = LIVE_STATUSES
     );
     let rows = match client.query(sql.as_str(), &[]).await {
@@ -492,18 +506,23 @@ pub async fn send_come_back_reminders(store: &Arc<EndpointStore>) {
     for row in rows {
         let email: String = row.get(0);
         if sent.insert(email.clone()) {
-            send_async(Arc::clone(store), email, EmailKind::PlanComeBack { plan_name: row.get(1) });
+            let lang = Lang::from_tag(row.get::<_, Option<String>>(2).as_deref());
+            send_async(Arc::clone(store), email, EmailKind::PlanComeBack { plan_name: row.get(1), lang });
         }
     }
     app_log!(info, count = sent.len(), "Come-back reminders sent");
 }
 
-fn licence_email(plan: &plans::Plan, licence: String) -> EmailKind {
+/// `renews_on`: the end of the paid month; None for the free allowance, which
+/// refills on its own and gets the shorter email.
+fn licence_email(plan: &plans::Plan, licence: String, renews_on: Option<DateTime<Utc>>, lang: Lang) -> EmailKind {
     EmailKind::LicenceIssued {
         plan_name: plan.name.clone(),
         licence,
         apps: if plans::includes(&plan.products, "*") { "*".into() } else { plan.products.join(", ") },
         monthly_credits: plan.monthly_credits,
+        renews_on: renews_on.map(|d| format_date(d, lang)),
+        lang,
     }
 }
 
@@ -523,7 +542,7 @@ async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &
     );
     if let Some(row) = client.query_opt(resend_sql.as_str(), &[&email]).await.map_err(|e| e.to_string())? {
         app_log!(info, email = %email, "Free licence sent again");
-        send_async(Arc::clone(store), email.to_string(), licence_email(plan, row.get(0)));
+        send_async(Arc::clone(store), email.to_string(), licence_email(plan, row.get(0), None, Lang::En));
         return Ok(());
     }
     let id = format!("free_{}", uuid::Uuid::new_v4().simple());
@@ -541,7 +560,7 @@ async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &
     match inserted {
         Some(row) => {
             app_log!(info, email = %email, plan = %plan.id, "Free licence issued");
-            send_async(Arc::clone(store), email.to_string(), licence_email(plan, row.get(0)));
+            send_async(Arc::clone(store), email.to_string(), licence_email(plan, row.get(0), None, Lang::En));
         }
         // Already has one, sent within the hour: nothing more to send.
         None => app_log!(info, email = %email, "Free licence asked for again within the hour; not resent"),
@@ -565,6 +584,9 @@ fn fail(status: actix_web::http::StatusCode, message: &str) -> HttpResponse {
 pub struct CheckoutRequest {
     pub email: String,
     pub plan_id: String,
+    /// The site's language ("en", "fr"): the Checkout page's and the emails'.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 /// POST /api/plans/checkout
@@ -609,6 +631,7 @@ pub async fn checkout_handler(
         ("purpose".to_string(), PURPOSE_PLAN.to_string()),
         ("plan_id".to_string(), plan.id.clone()),
         ("email".to_string(), email.clone()),
+        ("locale".to_string(), Lang::from_tag(body.locale.as_deref()).tag().to_string()),
     ]);
     let success_url = format!("{}?checkout=success&session_id={{CHECKOUT_SESSION_ID}}", site);
     let price_id = plan.stripe_price_id.as_deref().unwrap_or_default();
@@ -948,6 +971,12 @@ async fn live_stripe_subscription(store: &EndpointStore, email: &str) -> Result<
     );
     let row = client.query_opt(sql.as_str(), &[&email]).await.map_err(|e| e.to_string())?;
     Ok(row.map(|r| r.get(0)))
+}
+
+/// Whether the email is a customer now: a plan bought through Stripe and still
+/// running. A plan granted by hand or the free allowance was not bought.
+pub(crate) async fn has_bought_plan(store: &EndpointStore, email: &str) -> Result<bool, String> {
+    Ok(live_stripe_subscription(store, &email.trim().to_lowercase()).await?.is_some())
 }
 
 async fn has_live_paid_plan(store: &EndpointStore, email: &str) -> Result<bool, String> {

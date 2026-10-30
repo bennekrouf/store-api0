@@ -1,5 +1,6 @@
 use stripe::{
-    BillingPortalConfiguration, BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionMode, Client,
+    BillingPortalConfiguration, BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionLocale,
+    CheckoutSessionMode, Client,
     CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionAutomaticTax,
     CreateCheckoutSessionLineItems,
     CreateCheckoutSessionSubscriptionData, CreatePaymentIntent, CreatePrice, CreatePriceRecurring,
@@ -185,6 +186,12 @@ impl PaymentService {
             quantity: Some(1),
             ..Default::default()
         }]);
+        // The site's language, when it sent one; Stripe guesses otherwise.
+        params.locale = match metadata.get("locale").map(String::as_str) {
+            Some("fr") => Some(CheckoutSessionLocale::Fr),
+            Some("en") => Some(CheckoutSessionLocale::En),
+            _ => Some(CheckoutSessionLocale::Auto),
+        };
         params.metadata = Some(metadata.clone());
         params.subscription_data = Some(CreateCheckoutSessionSubscriptionData {
             metadata: Some(metadata),
