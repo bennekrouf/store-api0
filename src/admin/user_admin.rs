@@ -12,7 +12,8 @@
 //        customer pays: the dearer plan's price, nothing prorated, and a coupon
 //        taking the difference off every invoice for as long as the gift lasts.
 //        Any later move without gift ends it (the coupon comes off, nothing
-//        prorated, since the month was paid at the gifted price).
+//        prorated, since the month was paid at the gifted price). A gift is
+//        announced to the customer by email (EmailKind::PlanGifted).
 //   POST /api/admin/users/delete    { email, confirm_email }
 //        Deletes a person: their account, memberships, keys, the workspaces
 //        only they belong to, and their licences. Refused while they pay
@@ -23,6 +24,7 @@
 
 use crate::admin::tenant_overview::cascade_steps;
 use crate::app_log;
+use crate::email::{send_async, EmailKind, Lang};
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::payment::plans;
@@ -81,7 +83,7 @@ pub async fn change_licence_plan(
     };
     let row = match client
         .query_opt(
-            "SELECT email, plan_id, stripe_customer_id, is_free, gift_paid_plan_id FROM subscriptions \
+            "SELECT email, plan_id, stripe_customer_id, is_free, gift_paid_plan_id, locale FROM subscriptions \
               WHERE id = $1 AND licence IS NOT NULL",
             &[&body.subscription_id],
         )
@@ -100,6 +102,9 @@ pub async fn change_licence_plan(
     let is_free: bool = row.get(3);
     // The plan they pay for while a gift lasts.
     let gifted_from: Option<String> = row.get(4);
+    let lang = Lang::from_tag(row.get::<_, Option<String>>(5).as_deref());
+    // Set once a gift is given: the plan they go on paying for, for the email.
+    let mut gift_paid_name: Option<String> = None;
     if from == body.plan_id {
         return bad_request("The licence is already on that plan");
     }
@@ -142,6 +147,7 @@ pub async fn change_licence_plan(
                 Err(e) => Err(e),
             };
             if gifted.is_ok() {
+                gift_paid_name = Some(paid.name.clone());
                 if let Err(e) = client
                     .execute("UPDATE subscriptions SET gift_paid_plan_id = $2 WHERE id = $1", &[&id, &paid.id])
                     .await
@@ -174,6 +180,19 @@ pub async fn change_licence_plan(
         if let Err(e) = sync_subscription(store.get_ref(), &sub).await {
             app_log!(error, error = %e, subscription_id = %body.subscription_id, "Sync after plan change failed");
             return server_error("Changed in Stripe, but the sync failed: the webhook will catch up");
+        }
+        if let Some(paid_plan_name) = gift_paid_name {
+            send_async(
+                Arc::clone(store.get_ref()),
+                email.clone(),
+                EmailKind::PlanGifted {
+                    plan_name: plan.name.clone(),
+                    paid_plan_name,
+                    apps: if plans::includes(&plan.products, "*") { "*".into() } else { plan.products.join(", ") },
+                    monthly_credits: plan.monthly_credits,
+                    lang,
+                },
+            );
         }
     } else {
         // A free licence starts every month with its plan's credits, so it
