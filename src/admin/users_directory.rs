@@ -156,7 +156,10 @@ pub async fn list_users(
                         'status', s.status, 'live', ({LIVE}),
                         'cancel_at_period_end', s.cancel_at_period_end,
                         'period_end', s.period_end,
-                        'credits_used', s.credits_used, 'credits_granted', s.credits_granted)
+                        'credits_used', s.credits_used, 'credits_granted', s.credits_granted,
+                        -- While a gift lasts, the plan they still pay for.
+                        'gift_paid_plan_id', s.gift_paid_plan_id,
+                        'gift_paid_plan', (SELECT g.name FROM plans g WHERE g.id = s.gift_paid_plan_id))
                         ORDER BY ({LIVE}) DESC, s.is_free, s.created_at DESC), '[]'::json)
                 FROM subscriptions s JOIN plans p ON p.id = s.plan_id
                WHERE s.email = lower(up.email) AND s.licence IS NOT NULL) AS licences

@@ -3,11 +3,16 @@
 // The super admin's changes to one person in the user directory
 // (admin/users_directory.rs).
 //
-//   POST /api/admin/licences/plan   { subscription_id, plan_id }
+//   POST /api/admin/licences/plan   { subscription_id, plan_id, gift? }
 //        Moves a licence to another plan. A Stripe subscription switches price
 //        as the customer portal would (prorated: the difference is billed or
 //        credited on the next invoice) and is synced back from Stripe; a free
 //        or hand-granted licence changes in the database only.
+//        gift: true upgrades a Stripe subscription without changing what the
+//        customer pays: the dearer plan's price, nothing prorated, and a coupon
+//        taking the difference off every invoice for as long as the gift lasts.
+//        Any later move without gift ends it (the coupon comes off, nothing
+//        prorated, since the month was paid at the gifted price).
 //   POST /api/admin/users/delete    { email, confirm_email }
 //        Deletes a person: their account, memberships, keys, the workspaces
 //        only they belong to, and their licences. Refused while they pay
@@ -43,6 +48,22 @@ fn server_error(error: &str) -> HttpResponse {
 pub struct ChangePlanBody {
     pub subscription_id: String,
     pub plan_id: String,
+    /// Give the plan, keeping what the customer pays (Stripe subscriptions only).
+    #[serde(default)]
+    pub gift: bool,
+}
+
+/// What a gift takes off each invoice so the customer goes on paying for
+/// `paid` while on `to`, in cents; an error when `to` is not an upgrade.
+fn gift_amount_off(paid: &plans::Plan, to: &plans::Plan) -> Result<i64, String> {
+    if !paid.currency.eq_ignore_ascii_case(&to.currency) {
+        return Err(format!("{} and {} are in different currencies: a gift needs the same", paid.name, to.name));
+    }
+    let off = to.price_cents - paid.price_cents;
+    if off <= 0 {
+        return Err(format!("A gift is an upgrade: pick a plan dearer than {}, which they pay for", paid.name));
+    }
+    Ok(off)
 }
 
 pub async fn change_licence_plan(
@@ -60,7 +81,7 @@ pub async fn change_licence_plan(
     };
     let row = match client
         .query_opt(
-            "SELECT email, plan_id, stripe_customer_id, is_free FROM subscriptions \
+            "SELECT email, plan_id, stripe_customer_id, is_free, gift_paid_plan_id FROM subscriptions \
               WHERE id = $1 AND licence IS NOT NULL",
             &[&body.subscription_id],
         )
@@ -77,8 +98,13 @@ pub async fn change_licence_plan(
     let from: String = row.get(1);
     let on_stripe = !row.get::<_, String>(2).is_empty();
     let is_free: bool = row.get(3);
+    // The plan they pay for while a gift lasts.
+    let gifted_from: Option<String> = row.get(4);
     if from == body.plan_id {
         return bad_request("The licence is already on that plan");
+    }
+    if body.gift && !on_stripe {
+        return bad_request("Only a paid subscription can be a gift: moving this licence costs them nothing already");
     }
     let plan = match plans::get_plan(&store, &body.plan_id).await {
         Ok(Some(p)) => p,
@@ -96,10 +122,51 @@ pub async fn change_licence_plan(
         let Some(price) = plan.stripe_price_id.as_deref() else {
             return bad_request("That plan has no Stripe price yet: put it on sale in Plans first");
         };
-        let sub = match stripe.change_subscription_price(&body.subscription_id, price).await {
+        let id = body.subscription_id.as_str();
+        let changed = if body.gift {
+            let paid_id = gifted_from.clone().unwrap_or_else(|| from.clone());
+            let paid = match plans::get_plan(&store, &paid_id).await {
+                Ok(Some(p)) => p,
+                Ok(None) => return server_error("The plan they pay for no longer exists"),
+                Err(e) => {
+                    app_log!(error, error = %e, "Plan lookup failed");
+                    return server_error("Query failed");
+                }
+            };
+            let off = match gift_amount_off(&paid, &plan) {
+                Ok(off) => off,
+                Err(why) => return bad_request(&why),
+            };
+            let gifted = match stripe.gift_coupon(off, &plan.currency).await {
+                Ok(coupon) => stripe.switch_subscription_price(id, price, Some(&coupon)).await,
+                Err(e) => Err(e),
+            };
+            if gifted.is_ok() {
+                if let Err(e) = client
+                    .execute("UPDATE subscriptions SET gift_paid_plan_id = $2 WHERE id = $1", &[&id, &paid.id])
+                    .await
+                {
+                    app_log!(error, error = %e, subscription_id = %id, "Marking the gift failed");
+                }
+            }
+            gifted
+        } else if gifted_from.is_some() {
+            // Ending a gift: this month was paid at the gifted price, so
+            // nothing is prorated, and the next invoice is the new plan's.
+            match stripe.switch_subscription_price(id, price, None).await {
+                Ok(_) => match stripe.remove_subscription_discount(id).await {
+                    Ok(()) => stripe.retrieve_subscription(id).await,
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            stripe.change_subscription_price(id, price).await
+        };
+        let sub = match changed {
             Ok(s) => s,
             Err(e) => {
-                app_log!(error, error = %e, subscription_id = %body.subscription_id, "Stripe plan change failed");
+                app_log!(error, error = %e, subscription_id = %id, gift = body.gift, "Stripe plan change failed");
                 return server_error(&format!("Stripe refused the change: {}", e));
             }
         };
@@ -128,8 +195,11 @@ pub async fn change_licence_plan(
     }
 
     app_log!(warn, subscription_id = %body.subscription_id, email = %email, from = %from, to = %plan.id,
-        on_stripe, is_free, "Licence plan changed by an administrator");
-    HttpResponse::Ok().json(serde_json::json!({ "success": true, "plan_id": plan.id, "on_stripe": on_stripe }))
+        on_stripe, is_free, gift = body.gift, gift_ended = gifted_from.is_some() && !body.gift,
+        "Licence plan changed by an administrator");
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true, "plan_id": plan.id, "on_stripe": on_stripe, "gift": body.gift,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,4 +356,37 @@ pub async fn delete_user(
         "workspaces_deleted": workspaces,
         "removed": removed,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan(id: &str, price_cents: i64, currency: &str) -> plans::Plan {
+        plans::Plan {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            price_cents,
+            currency: currency.into(),
+            monthly_credits: 0,
+            products: vec![],
+            stripe_product_id: None,
+            stripe_price_id: None,
+            active: true,
+            sort_order: 0,
+        }
+    }
+
+    #[test]
+    fn a_gift_takes_the_difference_off() {
+        assert_eq!(gift_amount_off(&plan("basic", 900, "eur"), &plan("pro", 1900, "EUR")), Ok(1000));
+    }
+
+    #[test]
+    fn a_gift_is_only_an_upgrade_in_one_currency() {
+        assert!(gift_amount_off(&plan("pro", 1900, "eur"), &plan("basic", 900, "eur")).is_err());
+        assert!(gift_amount_off(&plan("pro", 1900, "eur"), &plan("pro2", 1900, "eur")).is_err());
+        assert!(gift_amount_off(&plan("basic", 900, "eur"), &plan("pro", 1900, "chf")).is_err());
+    }
 }

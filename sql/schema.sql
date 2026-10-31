@@ -934,6 +934,10 @@ ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS comeback_emailed_at TIMESTAMP
 --   locale              the language of the site the plan was bought from ('en',
 --                       'fr'): its emails are written in it. NULL is English.
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS locale VARCHAR;
+--   gift_paid_plan_id   set while an administrator gives the plan as a gift: the
+--                       plan the customer still pays for, a Stripe coupon taking
+--                       the difference off (admin/user_admin.rs). NULL otherwise.
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS gift_paid_plan_id VARCHAR REFERENCES plans(id);
 
 -- ── The default lineup ───────────────────────────────────────────────────────
 -- The apps themselves are the free version; plans are for Pro and AI credits.

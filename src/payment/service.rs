@@ -1,6 +1,6 @@
 use stripe::{
     BillingPortalConfiguration, BillingPortalSession, CheckoutSession, CheckoutSessionId, CheckoutSessionLocale,
-    CheckoutSessionMode, Client,
+    CheckoutSessionMode, Client, Coupon, CouponDuration, CouponId, CreateCoupon,
     CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionAutomaticTax,
     CreateCheckoutSessionLineItems,
     CreateCheckoutSessionSubscriptionData, CreatePaymentIntent, CreatePrice, CreatePriceRecurring,
@@ -244,6 +244,63 @@ impl PaymentService {
             ..Default::default()
         };
         Ok(Subscription::update(&self.client, &id, params).await?)
+    }
+
+    /// Moves a subscription to another price without billing or crediting the
+    /// rest of this month: the next invoice is the new price's. `coupon`, when
+    /// given, replaces its discount (an upgrade given as a gift: see
+    /// admin/user_admin.rs).
+    pub async fn switch_subscription_price(
+        &self,
+        subscription_id: &str,
+        price_id: &str,
+        coupon: Option<&str>,
+    ) -> Result<Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        let current = Subscription::retrieve(&self.client, &id, &[]).await?;
+        let item = current
+            .items
+            .data
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Subscription {} has no item", subscription_id))?
+            .id
+            .to_string();
+        let params = UpdateSubscription {
+            items: Some(vec![UpdateSubscriptionItems {
+                id: Some(item),
+                price: Some(price_id.to_string()),
+                ..Default::default()
+            }]),
+            proration_behavior: Some(stripe::generated::billing::subscription::SubscriptionProrationBehavior::None),
+            coupon: coupon.map(|c| c.parse()).transpose()?,
+            ..Default::default()
+        };
+        Ok(Subscription::update(&self.client, &id, params).await?)
+    }
+
+    /// Takes the discount off a subscription (a gift ending).
+    pub async fn remove_subscription_discount(&self, subscription_id: &str) -> Result<()> {
+        let _: serde_json::Value = self.client.delete(&format!("/subscriptions/{}/discount", subscription_id)).await?;
+        Ok(())
+    }
+
+    /// The coupon taking `amount_off` (in cents) off every invoice for as long
+    /// as it is on a subscription. One per amount and currency, made the first
+    /// time it is needed.
+    pub async fn gift_coupon(&self, amount_off: i64, currency: &str) -> Result<String> {
+        let code = currency.to_lowercase();
+        let id = format!("api0-gift-{}-{}", amount_off, code);
+        if Coupon::retrieve(&self.client, &id.parse::<CouponId>()?, &[]).await.is_ok() {
+            return Ok(id);
+        }
+        let mut params = CreateCoupon::new();
+        params.id = Some(&id);
+        params.name = Some("Upgrade gift");
+        params.amount_off = Some(amount_off);
+        params.currency = Some(code.parse().map_err(|_| anyhow::anyhow!("Unknown currency {}", currency))?);
+        params.duration = Some(CouponDuration::Forever);
+        Coupon::create(&self.client, params).await?;
+        Ok(id)
     }
 
     /// Stripe's customer portal: change card, see invoices, cancel.

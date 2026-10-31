@@ -383,6 +383,18 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
         .map_err(|e| e.to_string())?;
     app_log!(info, subscription_id = %sub.id, email = %email, plan = %plan.id, status = %sub.status.as_str(), "Plan subscription synced");
 
+    // A gift is its coupon: once the discount is gone (ended here or in
+    // Stripe), the customer pays for the plan they are on.
+    if sub.discount.is_none() {
+        client
+            .execute(
+                "UPDATE subscriptions SET gift_paid_plan_id = NULL WHERE id = $1 AND gift_paid_plan_id IS NOT NULL",
+                &[&sub.id.to_string()],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
     // A free licence of the same email moves to the first paid subscription,
     // so the number already pasted into the apps keeps working — but only
     // once this one is paid, and before its own licence has been emailed.
