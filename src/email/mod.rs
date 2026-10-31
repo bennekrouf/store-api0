@@ -85,6 +85,9 @@ pub enum EmailKind {
     PlanCancelled { plan_name: String, ends_on: String, credits_left: i64, ended: bool, lang: Lang },
     /// Once, some days after a cancelled plan ended. Optional.
     PlanComeBack { plan_name: String, lang: Lang },
+    /// An administrator moved a paying subscriber up to `plan_name` as a gift;
+    /// they go on paying for `paid_plan_name`. `apps` as in `LicenceIssued`.
+    PlanGifted { plan_name: String, paid_plan_name: String, apps: String, monthly_credits: i64, lang: Lang },
     /// What a desktop app found for the licence holder, sent to them only, at
     /// their asking (POST /v1/licence/email). Every field is the app's text and
     /// is escaped when rendered.
@@ -132,6 +135,7 @@ impl EmailKind {
             Self::LicenceIssued { .. }     => "licence_issued",
             Self::PlanCancelled { .. }     => "plan_cancelled",
             Self::PlanComeBack { .. }      => "plan_come_back",
+            Self::PlanGifted { .. }        => "plan_gifted",
             Self::AppDigest { .. }         => "app_digest",
         }
     }
@@ -161,6 +165,7 @@ impl EmailKind {
             Self::LicenceIssued { plan_name, lang, .. }      => mayorana::licence_subject(plan_name, *lang),
             Self::PlanCancelled { plan_name, ended, lang, .. } => mayorana::cancelled_subject(plan_name, *ended, *lang),
             Self::PlanComeBack { lang, .. }                  => mayorana::come_back_subject(*lang),
+            Self::PlanGifted { plan_name, lang, .. }         => mayorana::gift_subject(plan_name, *lang),
             Self::AppDigest { app, title, .. }               => format!("{app}: {title}"),
         }
     }
@@ -180,20 +185,24 @@ impl EmailKind {
 
     /// The name the email is sent as. Plan emails go to people who bought a
     /// desktop app from mayorana.ch and have never heard of api0, and come from
-    /// Mohamed so that a reply is a conversation.
+    /// Benek so that a reply is a conversation.
     fn sender_name(&self) -> &'static str {
         match self {
-            Self::LicenceIssued { lang, .. } | Self::PlanCancelled { lang, .. } | Self::PlanComeBack { lang, .. } => {
-                lang.sender_name()
-            }
+            Self::LicenceIssued { lang, .. }
+            | Self::PlanCancelled { lang, .. }
+            | Self::PlanComeBack { lang, .. }
+            | Self::PlanGifted { lang, .. } => lang.sender_name(),
             Self::AppDigest { .. } => "mayorana",
             _ => "api0",
         }
     }
 
-    /// Whether replies should reach Mohamed rather than the sending address.
+    /// Whether replies should reach Benek rather than the sending address.
     fn replies_to_founder(&self) -> bool {
-        matches!(self, Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. })
+        matches!(
+            self,
+            Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. } | Self::PlanGifted { .. }
+        )
     }
 
     #[cfg(test)]
@@ -238,6 +247,9 @@ impl EmailKind {
         }
         if let Self::PlanComeBack { plan_name, lang } = self {
             return mayorana::come_back_body(plan_name, unsubscribe, *lang);
+        }
+        if let Self::PlanGifted { plan_name, paid_plan_name, apps, monthly_credits, lang } = self {
+            return mayorana::gift_body(plan_name, paid_plan_name, apps, *monthly_credits, *lang);
         }
         let content = match self {
             // ── Tier 1 ───────────────────────────────────────────────────────
@@ -419,7 +431,11 @@ impl EmailKind {
 <p>{description}</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Try It Now</a></p>"#
             ),
-            Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. } | Self::AppDigest { .. } => {
+            Self::LicenceIssued { .. }
+            | Self::PlanCancelled { .. }
+            | Self::PlanComeBack { .. }
+            | Self::PlanGifted { .. }
+            | Self::AppDigest { .. } => {
                 unreachable!("rendered above")
             }
         };
@@ -903,7 +919,7 @@ mod licence_tests {
             renews_on: Some("22 novembre 2026".into()),
             lang: Lang::Fr,
         };
-        assert_eq!(licence.sender_name(), "Mohamed de Mayorana");
+        assert_eq!(licence.sender_name(), "Benek de Mayorana");
         assert_eq!(licence.subject(), "Votre licence Pro");
         assert!(licence.replies_to_founder() && !licence.is_optional());
 
@@ -914,13 +930,23 @@ mod licence_tests {
             ended: false,
             lang: Lang::En,
         };
-        assert_eq!(cancelled.sender_name(), "Mohamed from Mayorana");
+        assert_eq!(cancelled.sender_name(), "Benek from Mayorana");
         assert!(!cancelled.is_optional() && !cancelled.html_body().contains("Unsubscribe"));
 
         let come_back = EmailKind::PlanComeBack { plan_name: "Pro".into(), lang: Lang::En };
         assert!(come_back.is_optional() && come_back.replies_to_founder());
         let body = come_back.html_body_with(Some("https://gateway.api0.ai/api/email/unsubscribe?e=a&t=b"));
         assert!(body.contains("Your Pro plan ended") && body.contains("Unsubscribe from these emails"));
+
+        let gift = EmailKind::PlanGifted {
+            plan_name: "Pro".into(),
+            paid_plan_name: "Basic".into(),
+            apps: "*".into(),
+            monthly_credits: 2000,
+            lang: Lang::En,
+        };
+        assert_eq!(gift.sender_name(), "Benek from Mayorana");
+        assert!(gift.replies_to_founder() && !gift.is_optional() && gift.subject().starts_with("🎁"));
     }
 
     #[test]

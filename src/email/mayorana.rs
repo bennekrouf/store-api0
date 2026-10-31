@@ -2,7 +2,7 @@
 //
 // The emails a mayorana.ch subscriber gets about their plan: the licence, the
 // cancellation and the one "come back" reminder. They go out in the language
-// of the site the plan was bought from (subscriptions.locale), from Mohamed by
+// of the site the plan was bought from (subscriptions.locale), from Benek by
 // name, and a reply reaches him (MAYORANA_REPLY_TO).
 //
 // The wording is the one agreed in the "Subscriber email copy" doc; change it
@@ -37,8 +37,8 @@ impl Lang {
     /// The From name of the plan emails.
     pub fn sender_name(self) -> &'static str {
         match self {
-            Self::En => "Mohamed from Mayorana",
-            Self::Fr => "Mohamed de Mayorana",
+            Self::En => "Benek from Mayorana",
+            Self::Fr => "Benek de Mayorana",
         }
     }
 }
@@ -117,7 +117,7 @@ pub fn licence_body(
 <p>Don't have an app yet? Each one installs with one line from its page on {apps_link}.</p>
 <p>You have <strong>{monthly_credits} AI credits</strong> this month, and they refill on {renews_on}. Your plan, invoices and card are on {sub_link}, where you can also cancel at any time.</p>
 <p>If anything doesn't work, just reply. This comes straight to me.</p>
-<p>Mohamed<br><span style="color:#64748B">Founder, Mayorana</span></p>
+<p>Benek<br><span style="color:#64748B">Founder, Mayorana</span></p>
 <p {MUTED}>Keep this email: the same licence works on every computer you use. To see your plan, sign in with this email address at {page}.</p>"#,
                 apps_link = link(&apps_page(lang), "mayorana.ch/apps"),
                 sub_link = link(&page, "your subscription page"),
@@ -137,7 +137,7 @@ pub fn licence_body(
 <p>Pas encore d'app ? Chacune s'installe en une ligne depuis sa page sur {apps_link}.</p>
 <p>Vous avez <strong>{monthly_credits} crédits IA</strong> ce mois-ci, renouvelés le {renews_on}. Votre formule, vos factures et votre carte sont sur {sub_link}, où vous pouvez aussi résilier à tout moment.</p>
 <p>Si quelque chose ne fonctionne pas, répondez simplement à cet e-mail. Il arrive directement chez moi.</p>
-<p>Mohamed<br><span style="color:#64748B">Fondateur, Mayorana</span></p>
+<p>Benek<br><span style="color:#64748B">Fondateur, Mayorana</span></p>
 <p {MUTED}>Gardez cet e-mail : la même licence fonctionne sur tous vos ordinateurs. Pour voir votre formule, connectez-vous avec cette adresse e-mail sur {page}.</p>"#,
                 apps_link = link(&apps_page(lang), "mayorana.ch/apps"),
                 sub_link = link(&page, "votre page d'abonnement"),
@@ -149,7 +149,7 @@ pub fn licence_body(
 {code}
 <p>It includes <strong>{monthly_credits} AI credits</strong> every month, and they refill on their own.</p>
 <p>If anything doesn't work, just reply. This comes straight to me.</p>
-<p>Mohamed<br><span style="color:#64748B">Founder, Mayorana</span></p>
+<p>Benek<br><span style="color:#64748B">Founder, Mayorana</span></p>
 <p {MUTED}>Keep this email: the same licence works on every computer you use.</p>"#
         ),
         (None, Lang::Fr) => format!(
@@ -158,7 +158,7 @@ pub fn licence_body(
 {code}
 <p>Elle comprend <strong>{monthly_credits} crédits IA</strong> chaque mois, renouvelés automatiquement.</p>
 <p>Si quelque chose ne fonctionne pas, répondez simplement à cet e-mail. Il arrive directement chez moi.</p>
-<p>Mohamed<br><span style="color:#64748B">Fondateur, Mayorana</span></p>
+<p>Benek<br><span style="color:#64748B">Fondateur, Mayorana</span></p>
 <p {MUTED}>Gardez cet e-mail : la même licence fonctionne sur tous vos ordinateurs.</p>"#
         ),
     };
@@ -195,7 +195,7 @@ pub fn cancelled_body(plan_name: &str, ends_on: &str, credits_left: i64, ended: 
 <p>I read every answer, and it decides what I build next.</p>
 <p>If it's only the price or the amount, you can switch to a smaller plan under <strong>Card, invoices &amp; plan change</strong> on your subscription page. And if you change your mind, the same page has a <strong>Resume plan</strong> button until {ends_on}, and you keep the same licence.</p>
 {button}
-<p>Mohamed</p>"#,
+<p>Benek<br><span style="color:#64748B">Founder, Mayorana</span></p>"#,
             button = button(&page, "Manage my subscription"),
         ),
         (false, Lang::Fr) => format!(
@@ -211,7 +211,7 @@ pub fn cancelled_body(plan_name: &str, ends_on: &str, credits_left: i64, ended: 
 <p>Je lis chaque réponse, et c'est ce qui décide de ce que je construis ensuite.</p>
 <p>Si c'est seulement une question de prix ou de volume, vous pouvez passer à une formule plus petite sous <strong>Carte, factures et changement de formule</strong> sur votre page d'abonnement. Et si vous changez d'avis, la même page propose un bouton <strong>Reprendre la formule</strong> jusqu'au {ends_on}, et vous gardez la même licence.</p>
 {button}
-<p>Mohamed</p>"#,
+<p>Benek<br><span style="color:#64748B">Fondateur, Mayorana</span></p>"#,
             button = button(&page, "Gérer mon abonnement"),
         ),
         (true, Lang::En) => format!(
@@ -220,7 +220,7 @@ pub fn cancelled_body(plan_name: &str, ends_on: &str, credits_left: i64, ended: 
 <p>If you meant to stop, could you tell me why? Just hit reply. One line is plenty, and I read every answer.</p>
 <p>If it wasn't on purpose, for example a card that expired, you can subscribe again in a minute.</p>
 {button}
-<p>Mohamed</p>"#,
+<p>Benek<br><span style="color:#64748B">Founder, Mayorana</span></p>"#,
             button = button(&page, "See the plans"),
         ),
         (true, Lang::Fr) => format!(
@@ -229,7 +229,7 @@ pub fn cancelled_body(plan_name: &str, ends_on: &str, credits_left: i64, ended: 
 <p>Si vous vouliez arrêter, pourriez-vous me dire pourquoi ? Répondez simplement à cet e-mail. Une ligne suffit, et je lis chaque réponse.</p>
 <p>Si ce n'était pas voulu, par exemple une carte expirée, vous pouvez vous réabonner en une minute.</p>
 {button}
-<p>Mohamed</p>"#,
+<p>Benek<br><span style="color:#64748B">Fondateur, Mayorana</span></p>"#,
             button = button(&page, "Voir les formules"),
         ),
     };
@@ -253,7 +253,7 @@ pub fn come_back_body(plan_name: &str, unsubscribe: Option<&str>, lang: Lang) ->
 <p>Your {plan_name} plan ended a little while ago. Everything you set up in the apps is still there.</p>
 <p>Subscribe again whenever you like: it takes a minute, and your AI credits start again straight away.</p>
 {button}
-<p>Mohamed</p>"#,
+<p>Benek<br><span style="color:#64748B">Founder, Mayorana</span></p>"#,
             button = button(&page, "See the plans"),
         ),
         Lang::Fr => format!(
@@ -261,11 +261,103 @@ pub fn come_back_body(plan_name: &str, unsubscribe: Option<&str>, lang: Lang) ->
 <p>Votre formule {plan_name} a pris fin il y a quelque temps. Tout ce que vous avez configuré dans les apps est toujours là.</p>
 <p>Réabonnez-vous quand vous voulez : cela prend une minute, et vos crédits IA repartent aussitôt.</p>
 {button}
-<p>Mohamed</p>"#,
+<p>Benek<br><span style="color:#64748B">Fondateur, Mayorana</span></p>"#,
             button = button(&page, "Voir les formules"),
         ),
     };
     layout(&content, unsubscribe, lang)
+}
+
+// ── The gift ─────────────────────────────────────────────────────────────────
+
+pub fn gift_subject(plan_name: &str, lang: Lang) -> String {
+    match lang {
+        Lang::En => format!("🎁 A gift for you: {plan_name} is yours"),
+        Lang::Fr => format!("🎁 Un cadeau pour vous : {plan_name} vous est offert"),
+    }
+}
+
+/// An administrator moved a paying subscriber up to `plan_name` as a gift:
+/// they keep paying for `paid_plan_name`. `apps` as in `licence_body`.
+pub fn gift_body(plan_name: &str, paid_plan_name: &str, apps: &str, monthly_credits: i64, lang: Lang) -> String {
+    let page = plans_page();
+    let (title, subtitle) = match lang {
+        Lang::En => ("A gift for you", format!("Your plan is now {plan_name}, on me.")),
+        Lang::Fr => ("Un cadeau pour vous", format!("Votre formule passe à {plan_name}, c'est offert.")),
+    };
+    let hero = format!(
+        r#"<div style="background:#4338CA;background-image:linear-gradient(135deg,#0F172A 0%,#4338CA 55%,#DB2777 100%);padding:40px 32px 36px;text-align:center;color:#ffffff">
+  <div style="font-size:15px;letter-spacing:6px;line-height:1">✨ 🎉 ✨</div>
+  <div style="font-size:72px;line-height:1;margin:14px 0 10px">🎁</div>
+  <div style="font-size:28px;font-weight:bold;line-height:1.25">{title}</div>
+  <div style="font-size:16px;color:#E0E7FF;margin-top:8px">{subtitle}</div>
+  <div style="margin-top:22px">
+    <span style="display:inline-block;padding:6px 14px;border-radius:999px;background:rgba(255,255,255,0.14);color:#E0E7FF;font-size:14px;text-decoration:line-through">{paid}</span>
+    <span style="display:inline-block;padding:0 8px;color:#FBCFE8;font-size:18px">→</span>
+    <span style="display:inline-block;padding:6px 16px;border-radius:999px;background:#FBBF24;color:#0F172A;font-size:14px;font-weight:bold">🎁 {plan}</span>
+  </div>
+</div>"#,
+        paid = escape_html(paid_plan_name),
+        plan = escape_html(plan_name),
+    );
+    let row = |icon: &str, text: String| {
+        format!(
+            r#"<tr><td style="width:40px;padding:10px 0 10px 16px;font-size:22px;vertical-align:top">{icon}</td><td style="padding:10px 16px 10px 4px;vertical-align:top">{text}</td></tr>"#
+        )
+    };
+    let content = match lang {
+        Lang::En => {
+            let scope = match apps {
+                "*" => "<br><span style=\"color:#64748B;font-size:14px\">In every Mayorana app.</span>".to_string(),
+                "" => String::new(),
+                list => format!("<br><span style=\"color:#64748B;font-size:14px\">In {list}.</span>"),
+            };
+            let perks = [
+                row("✨", format!("<strong>{monthly_credits} AI credits</strong> every month with {plan_name}.{scope}")),
+                row("💳", format!("<strong>You keep paying for {paid_plan_name}</strong>, nothing more. Your invoices show the difference as a discount.")),
+                row("🔑", "<strong>Same licence.</strong> Nothing to install or paste again: keep using the one you have.".into()),
+            ]
+            .concat();
+            format!(
+                r#"<p>Hi,</p>
+<p>Thank you for using Mayorana. As a thank-you, I've moved you from {paid_plan_name} to <strong>{plan_name}</strong>, as a gift 🎁</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;margin:20px 0;background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px">{perks}</table>
+{button}
+<p>If you have a minute, reply and tell me what you'd like the apps to do next. This comes straight to me.</p>
+<p>Enjoy!<br>Benek<br><span style="color:#64748B">Founder, Mayorana</span></p>"#,
+                button = gift_button(&page, "🎁 See my plan"),
+            )
+        }
+        Lang::Fr => {
+            let scope = match apps {
+                "*" => "<br><span style=\"color:#64748B;font-size:14px\">Dans toutes les apps Mayorana.</span>".to_string(),
+                "" => String::new(),
+                list => format!("<br><span style=\"color:#64748B;font-size:14px\">Dans {list}.</span>"),
+            };
+            let perks = [
+                row("✨", format!("<strong>{monthly_credits} crédits IA</strong> chaque mois avec {plan_name}.{scope}")),
+                row("💳", format!("<strong>Vous continuez à payer {paid_plan_name}</strong>, rien de plus. Vos factures affichent la différence comme une remise.")),
+                row("🔑", "<strong>Même licence.</strong> Rien à réinstaller ni à recoller : gardez celle que vous avez.".into()),
+            ]
+            .concat();
+            format!(
+                r#"<p>Bonjour,</p>
+<p>Merci d'utiliser Mayorana. Pour vous remercier, je vous fais passer de {paid_plan_name} à <strong>{plan_name}</strong>, en cadeau 🎁</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate;margin:20px 0;background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px">{perks}</table>
+{button}
+<p>Si vous avez une minute, répondez-moi et dites-moi ce que vous aimeriez que les apps fassent ensuite. Ce message arrive directement chez moi.</p>
+<p>Profitez-en !<br>Benek<br><span style="color:#64748B">Fondateur, Mayorana</span></p>"#,
+                button = gift_button(&page, "🎁 Voir ma formule"),
+            )
+        }
+    };
+    layout_with_hero(&hero, &content, None, lang)
+}
+
+fn gift_button(url: &str, text: &str) -> String {
+    format!(
+        r#"<p style="text-align:center;margin:28px 0"><a href="{url}" style="display:inline-block;padding:12px 28px;background:#DB2777;color:#ffffff;font-weight:bold;text-decoration:none;border-radius:999px">{text}</a></p>"#
+    )
 }
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -273,6 +365,11 @@ pub fn come_back_body(plan_name: &str, unsubscribe: Option<&str>, lang: Lang) ->
 /// mayorana.ch's plain layout, for subscribers who may never have heard of
 /// api0. The postal address and opt-out link are only on optional emails.
 pub fn layout(content: &str, unsubscribe: Option<&str>, lang: Lang) -> String {
+    layout_with_hero("", content, unsubscribe, lang)
+}
+
+/// The same, with a banner above the text.
+fn layout_with_hero(hero: &str, content: &str, unsubscribe: Option<&str>, lang: Lang) -> String {
     let unsubscribe = unsubscribe
         .map(|url| {
             let (text, rest) = match lang {
@@ -291,7 +388,7 @@ pub fn layout(content: &str, unsubscribe: Option<&str>, lang: Lang) -> String {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#F8FAFC;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:600px;margin:24px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
-  <div style="padding:32px;color:#1E293B;line-height:1.6">{content}</div>
+  {hero}<div style="padding:32px;color:#1E293B;line-height:1.6">{content}</div>
   <div style="padding:16px 32px;background:#F8FAFC;color:#64748B;font-size:12px;text-align:center">
     <a href="https://mayorana.ch" style="color:#475569">mayorana.ch</a>{unsubscribe}
   </div>
@@ -359,6 +456,17 @@ mod tests {
         assert!(en.contains("has ended") && en.contains("a card that expired"));
         assert!(!en.contains("I saw you cancelled") && !en.contains("Resume plan"));
         assert_eq!(cancelled_subject("Pro", true, Lang::Fr), "Votre formule Pro a pris fin");
+    }
+
+    #[test]
+    fn a_gift_says_what_they_get_and_that_they_pay_the_same() {
+        let en = gift_body("Pro", "Basic", "*", 2000, Lang::En);
+        assert!(en.contains("🎁") && en.contains("from Basic to <strong>Pro</strong>"));
+        assert!(en.contains("2000 AI credits") && en.contains("You keep paying for Basic"));
+        assert!(en.contains("every Mayorana app") && en.contains("mayorana.ch/pricing") && !en.contains("Unsubscribe"));
+        let fr = gift_body("Pro", "Basic", "gitagent", 2000, Lang::Fr);
+        assert!(fr.contains("Un cadeau pour vous") && fr.contains("Dans gitagent.") && fr.contains(r#"lang="fr""#));
+        assert_eq!(gift_subject("Pro", Lang::En), "🎁 A gift for you: Pro is yours");
     }
 
     #[test]
