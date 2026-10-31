@@ -3,7 +3,7 @@
 // The models the super admin can put behind a region (llm_regions.rs), with
 // what the dashboard needs to choose between them: the region each belongs to
 // (where its provider is based), the tasks it suits (TASKS), its price per
-// million tokens, its context window and a note. Prices change often, so the list is the super admin's to
+// million tokens (a minute of audio for a speech model), its context window and a note. Prices change often, so the list is the super admin's to
 // edit; until it is saved, DEFAULTS stands.
 //
 //   PUT  /api/admin/llm-models        { models: [...] } — the whole list
@@ -31,10 +31,23 @@ const CONFIG_KEY: &str = "llm.models";
 
 /// What a model can be good at, by who calls it: code (GitAgent's reviews and
 /// commit messages), chat (the messaging assistant on Telegram, WhatsApp and
-/// Teams), text (PublishKit's posts). A model's tasks only say what it is good
+/// Teams), text (PublishKit's posts), transcribe (PolishCast's captions:
+/// SPEECH). A model's tasks only say what it is good
 /// for; a region runs another model for a task when the super admin says so
 /// (llm_regions.rs).
-pub(crate) const TASKS: &[&str] = &["code", "chat", "text"];
+pub(crate) const TASKS: &[&str] = &["code", "chat", "text", SPEECH];
+
+/// Speech to text, the gateway's /v1/audio/transcriptions. Unlike the other
+/// tasks it never falls back to the region's model: only a speech model of a
+/// provider that transcribes (assistant_config::Provider::transcription_path)
+/// runs it, and a region without one does not transcribe.
+pub(crate) const SPEECH: &str = "transcribe";
+
+/// What the gateway charges a minute of audio as, in tokens (gateway
+/// llm_routes::AUDIO_TOKENS_PER_MINUTE): a credit a minute on a ×1 model at the
+/// default 10,000 tokens a credit. A speech model's multiplier comes from its
+/// price a minute against this (CatalogModel::blended_price).
+pub(crate) const AUDIO_TOKENS_PER_MINUTE: f64 = 10_000.0;
 
 /// When DEFAULTS' prices were looked up.
 pub(crate) const DEFAULTS_PRICED_ON: &str = "2026-10-22";
@@ -56,6 +69,9 @@ pub(crate) struct CatalogModel {
     pub cached_input_price: Option<f64>,
     #[serde(default)]
     pub output_price: Option<f64>,
+    /// $ per minute of audio, for a speech model, which has no token prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minute_price: Option<f64>,
     /// Thousands of tokens.
     #[serde(default)]
     pub context_k: Option<i64>,
@@ -84,9 +100,15 @@ fn entry(
         input_price: prices.map(|p| p.0),
         cached_input_price: cached,
         output_price: prices.map(|p| p.1),
+        minute_price: None,
         context_k: None,
         note: note.into(),
     }
+}
+
+/// A speech model of the DEFAULTS table, priced by the minute.
+fn speech(provider: &str, model: &str, label: &str, origin: &str, minute_price: f64, note: &str) -> CatalogModel {
+    CatalogModel { minute_price: Some(minute_price), ..entry(provider, model, label, origin, &[SPEECH], None, None, note) }
 }
 
 const UNCONFIRMED: &str = "Id and price from a third-party listing — test before use.";
@@ -119,6 +141,13 @@ pub(crate) fn defaults() -> Vec<CatalogModel> {
         entry("anthropic", "claude-opus-5-5", "Claude Opus 5.5", "usa", &["code", "text"], Some((4.00, 20.00)), None,
             "Most capable and most expensive, about 2× Sonnet."),
         entry("google", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite", "usa", &["chat", "text"], Some((0.25, 1.50)), None, UNCONFIRMED),
+        // Speech. None for China: DeepSeek does not transcribe, Z.ai's GLM-ASR
+        // takes 30 seconds at most and gives no timestamps, and Qwen's ASR has
+        // no timestamps on its OpenAI-compatible API.
+        speech("mistral", "voxtral-mini-latest", "Voxtral Mini Transcribe", "europe", 0.003,
+            "Segment and word timestamps. Price at its launch, Feb. 2026."),
+        speech("openai", "whisper-1", "Whisper", "usa", 0.006,
+            "Word and segment timestamps; gpt-4o-transcribe gives none."),
     ]
 }
 
@@ -147,14 +176,24 @@ pub(crate) const INPUT_SHARE: f64 = 0.9;
 
 impl CatalogModel {
     /// $ per million tokens at INPUT_SHARE; None while either price is unknown.
+    /// A speech model's, from its price a minute at AUDIO_TOKENS_PER_MINUTE.
     pub(crate) fn blended_price(&self) -> Option<f64> {
+        if let Some(per_minute) = self.minute_price {
+            return Some(per_minute / AUDIO_TOKENS_PER_MINUTE * 1_000_000.0);
+        }
         Some(INPUT_SHARE * self.input_price? + (1.0 - INPUT_SHARE) * self.output_price?)
+    }
+
+    /// Only transcribes.
+    pub(crate) fn is_speech(&self) -> bool {
+        self.minute_price.is_some() || (!self.tasks.is_empty() && self.tasks.iter().all(|t| t == SPEECH))
     }
 }
 
 /// A credit multiplier for every model the live regions run (llm_regions),
 /// from its price: the cheapest is ×1 and the others cost as many times more
-/// as they do at the provider, to one decimal. A model with no price in the
+/// as they do at the provider, to one decimal. A speech model is priced against
+/// the cheapest chat model and never sets the ×1 itself. A model with no price in the
 /// catalog gets none. Multipliers the super admin set win over these
 /// (plans::Pricing::with_derived).
 pub(crate) fn derived_multipliers(
@@ -162,21 +201,22 @@ pub(crate) fn derived_multipliers(
     regions: &std::collections::HashMap<String, llm_regions::Backing>,
     keyed: &[String],
 ) -> std::collections::BTreeMap<String, f64> {
-    let priced: Vec<(&str, f64)> = llm_regions::live(regions, keyed)
+    let priced: Vec<(&str, f64, bool)> = llm_regions::live(regions, keyed)
         .iter()
         .flat_map(|(_, b)| b.picks())
         .filter(|(p, _)| keyed.iter().any(|k| k == p))
         .filter_map(|(p, m)| {
-            let price = catalog.iter().find(|c| c.provider == p && c.model == m)?.blended_price()?;
-            (price > 0.0).then_some((m, price))
+            let model = catalog.iter().find(|c| c.provider == p && c.model == m)?;
+            let price = model.blended_price()?;
+            (price > 0.0).then_some((m, price, model.is_speech()))
         })
         .collect();
-    let Some(cheapest) = priced.iter().map(|(_, p)| *p).reduce(f64::min) else {
+    let Some(cheapest) = priced.iter().filter(|(_, _, speech)| !speech).map(|(_, p, _)| *p).reduce(f64::min) else {
         return Default::default();
     };
     priced
         .into_iter()
-        .map(|(m, p)| (m.to_string(), ((p / cheapest) * 10.0).round().max(10.0) / 10.0))
+        .map(|(m, p, _)| (m.to_string(), ((p / cheapest) * 10.0).round().max(10.0) / 10.0))
         .collect()
 }
 
@@ -224,7 +264,7 @@ fn validate(models: Vec<CatalogModel>) -> Result<Vec<CatalogModel>, String> {
             return Err(format!("Unknown task '{}' for {}", t, m.model));
         }
         m.tasks = TASKS.iter().filter(|t| m.tasks.iter().any(|x| x.trim() == **t)).map(|t| t.to_string()).collect();
-        for price in [m.input_price, m.cached_input_price, m.output_price].into_iter().flatten() {
+        for price in [m.input_price, m.cached_input_price, m.output_price, m.minute_price].into_iter().flatten() {
             if !(price.is_finite() && price >= 0.0) {
                 return Err(format!("{}: a price must be 0 or more", m.model));
             }
@@ -408,6 +448,9 @@ mod tests {
         assert_eq!(d["mistral-medium-latest"], 15.0);
         assert_eq!(d["claude-sonnet-5-5"], 20.0);
         assert!(!d.contains_key("claude-opus-5-5"), "not run by any region");
+        // $0.003 a minute is $0.30 a million tokens at 10,000 tokens a minute.
+        assert_eq!(d["voxtral-mini-latest"], 2.1);
+        assert!(!d.contains_key("whisper-1"), "no OpenAI key");
 
         // A region off offer (no key) neither gets multipliers nor sets the ×1.
         let no_usa: Vec<String> = keyed.iter().filter(|k| *k != "anthropic").cloned().collect();
@@ -415,6 +458,24 @@ mod tests {
         assert_eq!(d["deepseek-flash"], 1.0);
         assert!(!d.contains_key("claude-haiku-5-5"));
         assert!(derived_multipliers(&defaults(), &llm_regions::defaults(), &[]).is_empty());
+
+        // A speech model cheaper than every chat model does not become the ×1.
+        let mut cheap_speech = defaults();
+        cheap_speech.iter_mut().filter(|m| m.model == "voxtral-mini-latest").for_each(|m| m.minute_price = Some(0.0006));
+        let d = derived_multipliers(&cheap_speech, &llm_regions::defaults(), &keyed);
+        assert_eq!(d["claude-haiku-5-5"], 1.0);
+        assert_eq!(d["voxtral-mini-latest"], 1.0, "never below ×1");
+    }
+
+    #[test]
+    fn a_speech_model_is_priced_by_the_minute() {
+        let whisper = defaults().into_iter().find(|m| m.model == "whisper-1").unwrap();
+        assert!(whisper.is_speech());
+        assert!((whisper.blended_price().unwrap() - 0.6).abs() < 1e-9);
+        let mut bad = whisper;
+        bad.minute_price = Some(f64::NAN);
+        assert!(validate(vec![bad]).is_err());
+        assert!(!defaults()[0].is_speech());
     }
 
     #[test]
