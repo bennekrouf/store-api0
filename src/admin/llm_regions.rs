@@ -18,6 +18,9 @@
 // GitAgent, text for PublishKit. A call's task is the one it names in
 // `X-Task`, else the one its app does (APP_TASKS), and a task with nothing of
 // its own runs on the region's model. The app still sees only the region.
+// Speech (llm_models::SPEECH, PolishCast's transcripts) is the exception: it
+// runs only on a speech model of its own, and a region without one does not
+// transcribe.
 //
 // Stored in system_config as `llm.regions`:
 // { "<region>": { provider, model, tasks: { "<task>": { provider, model } } } };
@@ -72,12 +75,25 @@ pub(crate) struct Backing {
 }
 
 impl Backing {
-    /// What runs `task`: its own model when its provider has a key, else the region's.
+    /// What runs `task`: its own model when its provider has a key, else the
+    /// region's. Never the speech model, which only transcribes (speech()).
     pub(crate) fn for_task<'a>(&'a self, task: Option<&str>, keyed: &[String]) -> (&'a str, &'a str) {
-        match task.and_then(|t| self.tasks.get(t)).filter(|p| keyed.contains(&p.provider)) {
+        match task
+            .filter(|t| *t != llm_models::SPEECH)
+            .and_then(|t| self.tasks.get(t))
+            .filter(|p| keyed.contains(&p.provider))
+        {
             Some(p) => (&p.provider, &p.model),
             None => (&self.provider, &self.model),
         }
+    }
+
+    /// The speech model, when the region has one and its provider a key.
+    pub(crate) fn speech<'a>(&'a self, keyed: &[String]) -> Option<(&'a str, &'a str)> {
+        self.tasks
+            .get(llm_models::SPEECH)
+            .filter(|p| keyed.contains(&p.provider))
+            .map(|p| (p.provider.as_str(), p.model.as_str()))
     }
 
     /// Every provider and model it runs on.
@@ -121,11 +137,14 @@ fn backing(provider: &str, model: &str, tasks: &[(&str, &str, &str)]) -> Backing
 /// model, for code reviews and writing, where answers have to hold up. Only
 /// the messaging assistant's chat runs on a lighter model, where the region
 /// has one with a confirmed id and price. A task on the region's own model is
-/// left out.
+/// left out. Speech where a provider transcribes with timestamps: none in China
+/// (llm_models::defaults says why).
 pub(crate) fn defaults() -> HashMap<String, Backing> {
     HashMap::from([
         // Medium does all three; Codestral and Small cut reviews short.
-        ("europe".to_string(), backing("mistral", "mistral-medium-latest", &[])),
+        ("europe".to_string(), backing("mistral", "mistral-medium-latest", &[
+            ("transcribe", "mistral", "voxtral-mini-latest"),
+        ])),
         // V4 Pro for code and text: Flash ran out of room on GitAgent's
         // reviews. Qwen3 Coder Next looped on them; GLM's id is unconfirmed.
         ("china".to_string(), backing("deepseek", "deepseek-v4-pro", &[
@@ -134,6 +153,7 @@ pub(crate) fn defaults() -> HashMap<String, Backing> {
         // Sonnet for code and text; Haiku answers the bots.
         ("usa".to_string(), backing("anthropic", "claude-sonnet-5-5", &[
             ("chat", "anthropic", "claude-haiku-5-5"),
+            ("transcribe", "openai", "whisper-1"),
         ])),
     ])
 }
@@ -253,14 +273,28 @@ pub struct PickChoice {
     pub model: String,
 }
 
-/// A provider and model as chosen: known, in the list, and with a key.
-fn checked_pick(provider: &str, model: &str, what: &str, keyed: &[String], catalog: &[CatalogModel]) -> Result<Pick, String> {
+/// A provider and model as chosen: known, in the list, and with a key; a
+/// speech model of a provider that transcribes for `speech`, never otherwise.
+fn checked_pick(
+    provider: &str,
+    model: &str,
+    what: &str,
+    speech: bool,
+    keyed: &[String],
+    catalog: &[CatalogModel],
+) -> Result<Pick, String> {
     let Some(p) = assistant_config::provider(provider.trim()) else {
         return Err(format!("Unknown provider '{}' for {}", provider, what));
     };
     let model = model.trim();
-    if !catalog.iter().any(|m| m.provider == p.id && m.model == model) {
+    let Some(listed) = catalog.iter().find(|m| m.provider == p.id && m.model == model) else {
         return Err(format!("'{}' is not in the model list for {}", model, p.label));
+    };
+    if speech && (p.transcription_path.is_none() || !listed.is_speech()) {
+        return Err(format!("{} is not a speech model {} can transcribe with", model, p.label));
+    }
+    if !speech && listed.is_speech() {
+        return Err(format!("{} only transcribes: choose another model for {}", model, what));
     }
     if !keyed.iter().any(|k| k == p.id) {
         return Err(format!("Add a {} API key before putting it behind {}", p.label, what));
@@ -287,13 +321,14 @@ fn validate(choices: &[RegionChoice], keyed: &[String], catalog: &[CatalogModel]
             }
             continue;
         }
-        let main = checked_pick(&c.provider, &c.model, r.label, keyed, catalog)?;
+        let main = checked_pick(&c.provider, &c.model, r.label, false, keyed, catalog)?;
         let mut tasks = BTreeMap::new();
         for (task, t) in chosen {
             let Some(task) = llm_models::TASKS.iter().find(|x| **x == task.trim()) else {
                 return Err(format!("Unknown task '{}' for {}", task, r.label));
             };
-            let pick = checked_pick(&t.provider, &t.model, &format!("{} {}", r.label, task), keyed, catalog)?;
+            let what = format!("{} {}", r.label, task);
+            let pick = checked_pick(&t.provider, &t.model, &what, *task == llm_models::SPEECH, keyed, catalog)?;
             // The region's own model already runs it.
             if pick != main {
                 tasks.insert(task.to_string(), pick);
@@ -417,6 +452,31 @@ mod tests {
             validate(&[with_task(choice("europe", "", ""), "code", "mistral", "codestral-latest")], &keyed, &catalog).is_err(),
             "a task needs the region's own model first"
         );
+    }
+
+    #[test]
+    fn only_a_speech_model_transcribes_and_it_does_nothing_else() {
+        let keyed = vec!["mistral".to_string(), "openai".to_string()];
+        let catalog = llm_models::defaults();
+        let europe = || choice("europe", "mistral", "mistral-small-latest");
+        let ok = validate(&[with_task(europe(), "transcribe", "mistral", "voxtral-mini-latest")], &keyed, &catalog).unwrap();
+        assert_eq!(ok["europe"].tasks["transcribe"], pick("mistral", "voxtral-mini-latest"));
+        assert!(
+            validate(&[with_task(europe(), "transcribe", "mistral", "mistral-small-latest")], &keyed, &catalog).is_err(),
+            "a chat model cannot transcribe"
+        );
+        assert!(validate(&[choice("europe", "mistral", "voxtral-mini-latest")], &keyed, &catalog).is_err(), "nor chat");
+        assert!(validate(&[with_task(europe(), "code", "openai", "whisper-1")], &keyed, &catalog).is_err());
+    }
+
+    #[test]
+    fn speech_never_falls_back_to_the_regions_model() {
+        let d = defaults();
+        let keyed: Vec<String> = ["mistral", "deepseek", "anthropic"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(d["europe"].speech(&keyed), Some(("mistral", "voxtral-mini-latest")));
+        assert_eq!(d["europe"].for_task(Some("transcribe"), &keyed), ("mistral", "mistral-medium-latest"), "a chat call naming it");
+        assert_eq!(d["usa"].speech(&keyed), None, "no OpenAI key");
+        assert_eq!(d["china"].speech(&keyed), None);
     }
 
     #[test]

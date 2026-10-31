@@ -26,7 +26,9 @@
 // Google, Qwen, Z.ai) only back the regions the desktop apps offer, with the
 // models listed in llm_models.rs; the bridge never runs on them. DeepSeek is the default; Mistral and Anthropic (Claude,
 // through its OpenAI-compatible endpoint) the alternatives. The same keys back
-// the regions the desktop apps offer (llm_regions.rs).
+// the regions the desktop apps offer (llm_regions.rs). Mistral and OpenAI also
+// take OpenAI-style audio transcriptions, which a region's speech model runs on
+// (`transcription_path`).
 
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
@@ -50,15 +52,23 @@ pub(crate) struct Provider {
     /// The models the messaging assistant may choose; none for a provider
     /// that only backs regions.
     pub models: &'static [&'static str],
+    /// Where OpenAI-style audio transcriptions are, after `base_url`, for a
+    /// provider a region's speech model can run on (llm_regions).
+    pub transcription_path: Option<&'static str>,
 }
 
 impl Provider {
     pub fn chat_url(&self) -> String {
         format!("{}{}", self.base_url, self.chat_path)
     }
+
+    pub fn transcription_url(&self) -> Option<String> {
+        self.transcription_path.map(|p| format!("{}{}", self.base_url, p))
+    }
 }
 
 const CHAT_PATH: &str = "/v1/chat/completions";
+const TRANSCRIPTION_PATH: &str = "/v1/audio/transcriptions";
 
 pub(crate) const PROVIDERS: &[Provider] = &[
     Provider {
@@ -67,6 +77,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://api.deepseek.com",
         chat_path: CHAT_PATH,
         models: &["deepseek-chat", "deepseek-reasoner"],
+        transcription_path: None,
     },
     Provider {
         id: "mistral",
@@ -74,6 +85,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://api.mistral.ai",
         chat_path: CHAT_PATH,
         models: &["mistral-medium-latest", "mistral-small-latest", "codestral-latest"],
+        transcription_path: Some(TRANSCRIPTION_PATH),
     },
     // Not "claude": schema.sql moves a deployment still on the old Claude
     // provider, dropped before, back to DeepSeek.
@@ -83,6 +95,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://api.anthropic.com",
         chat_path: CHAT_PATH,
         models: &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
+        transcription_path: None,
     },
     Provider {
         id: "openai",
@@ -90,6 +103,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://api.openai.com",
         chat_path: CHAT_PATH,
         models: &[],
+        transcription_path: Some(TRANSCRIPTION_PATH),
     },
     Provider {
         id: "google",
@@ -97,6 +111,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://generativelanguage.googleapis.com",
         chat_path: "/v1beta/openai/chat/completions",
         models: &[],
+        transcription_path: None,
     },
     Provider {
         id: "qwen",
@@ -104,6 +119,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://dashscope-intl.aliyuncs.com",
         chat_path: "/compatible-mode/v1/chat/completions",
         models: &[],
+        transcription_path: None,
     },
     Provider {
         id: "zai",
@@ -111,6 +127,7 @@ pub(crate) const PROVIDERS: &[Provider] = &[
         base_url: "https://api.z.ai",
         chat_path: "/api/paas/v4/chat/completions",
         models: &[],
+        transcription_path: None,
     },
 ];
 

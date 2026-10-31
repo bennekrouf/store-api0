@@ -9,7 +9,10 @@
 //   POST /api/internal/llm/authorize  { licence, model?, app?, task? }
 //        → whose licence it is, the credits left, the regions on offer (with
 //          what a credit buys on each) and, when one matches, the upstream
-//          provider to forward to (with its key) and the name the app may see
+//          provider to forward to (with its key) and the name the app may see.
+//          For the task "transcribe" (llm_models::SPEECH, the gateway's
+//          /v1/audio/transcriptions) only the region's speech model is an
+//          upstream, with its `transcription_url`; a region without one has none
 //
 // An app names a region ("europe", admin/llm_regions.rs) and is only ever told
 // the region back, whichever model its task runs on (llm_regions::task_of).
@@ -30,7 +33,7 @@
 // super admin sets in Admin → Platform (assistant_config).
 
 use crate::admin::assistant_config::{self, PROVIDERS};
-use crate::admin::llm_models;
+use crate::admin::llm_models::{self, SPEECH};
 use crate::admin::llm_regions::{self, Backing, Region};
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
@@ -184,8 +187,12 @@ pub async fn authorize_handler(
         Some(_) => None,
         None => assistant_config::read_choice(&store).await.ok().flatten(),
     };
+    let speech = task == Some(SPEECH);
     let picked: Option<(&str, &str)> = match region {
+        Some((_, b)) if speech => b.speech(&keyed),
         Some((_, b)) => Some(b.for_task(task, &keyed)),
+        // Only a region's speech model transcribes.
+        None if speech => None,
         None => {
             let default = choice.as_ref().map(|(p, m)| (p.as_str(), m.as_str()));
             pick_model(requested, &tenant_name, default, &offered)
@@ -196,6 +203,7 @@ pub async fn authorize_handler(
         Some((prov, model)) => match assistant_config::api_key(&store, prov.id).await {
             Ok(Some(key)) => serde_json::json!({
                 "provider": prov.id, "base_url": prov.base_url, "chat_url": prov.chat_url(),
+                "transcription_url": prov.transcription_url(),
                 "model": model, "api_key": key,
                 "region": region.map(|(r, _)| r.id),
                 "task": task,
@@ -230,7 +238,9 @@ pub async fn authorize_handler(
                 "label": r.label,
                 "flag": r.flag,
                 // What a credit buys for this call's task, so the app shows its real price.
-                "multiplier": pricing.model_multipliers.get(b.for_task(task, &keyed).1).copied().unwrap_or(1.0),
+                "multiplier": (if speech { b.speech(&keyed) } else { Some(b.for_task(task, &keyed)) })
+                    .and_then(|(_, m)| pricing.model_multipliers.get(m).copied())
+                    .unwrap_or(1.0),
             }))
             .collect::<Vec<_>>(),
         "tokens_per_credit": pricing.tokens_per_credit,
