@@ -245,6 +245,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 interval.tick().await;
                 run_engagement_schedulers(&sched_store).await;
                 crate::payment::subscription::send_come_back_reminders(&sched_store).await;
+                crate::payment::subscription::ensure_free_plans(&sched_store).await;
                 run_retention_cleanup(&sched_store).await;
             }
         });
