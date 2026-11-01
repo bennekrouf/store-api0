@@ -602,11 +602,11 @@ pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Resu
     let sql = format!(
         "INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, period_start, period_end, \
                                     credits_granted, credits_used, licence, is_free) \
-         SELECT $1, $2, p.id, '', 'active', NOW(), NOW() + INTERVAL '1 month', p.monthly_credits, 0, $3, TRUE \
+         SELECT $1::varchar, $2::varchar, p.id, '', 'active', NOW(), NOW() + INTERVAL '1 month', p.monthly_credits, 0, $3::varchar, TRUE \
            FROM plans p \
           WHERE p.active AND p.price_cents = 0 \
             AND NOT EXISTS (SELECT 1 FROM subscriptions s \
-                             WHERE s.email = $2 AND s.licence IS NOT NULL \
+                             WHERE s.email = $2::varchar AND s.licence IS NOT NULL \
                                AND (s.is_free OR (s.status IN {live} AND s.period_end > NOW()))) \
           ORDER BY p.sort_order, p.id LIMIT 1 \
          ON CONFLICT DO NOTHING",
