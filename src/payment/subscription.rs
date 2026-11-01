@@ -33,6 +33,9 @@
 // behind it: its subscription is made here, one per email, and the store
 // starts each new month itself when the licence is next checked. When the same email first pays for a plan, the
 // free licence moves to that subscription, so the number in the apps stays.
+// Everyone holds at least the free allowance: a new account gets it quietly,
+// a plan that ends falls back to it, and a daily sweep catches the rest
+// (ensure_free_plan, ensure_free_plans). Its licence is emailed when asked for.
 //
 // The webhook (payment::webhook) calls sync_subscription on
 // checkout.session.completed, invoice.paid, invoice.payment_failed and
@@ -53,6 +56,7 @@ use crate::payment::plans::{self, PURPOSE_PLAN};
 use crate::payment::service::PaymentService;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -435,6 +439,11 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
         send_async(Arc::clone(store), email.clone(), licence_email(&plan, licence, Some(row.get(1)), lang));
     }
 
+    // A plan that ended (or never got paid) falls back to the free allowance.
+    if !["active", "trialing"].contains(&sub.status.as_str()) {
+        ensure_free_plan(&client, &email).await?;
+    }
+
     // Resumed: a later cancel is confirmed again.
     client
         .execute(
@@ -578,6 +587,78 @@ async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &
         None => app_log!(info, email = %email, "Free licence asked for again within the hour; not resent"),
     }
     Ok(())
+}
+
+/// Nobody is left without a plan: `email` gets the free allowance unless it
+/// already has a live plan or a free licence. Made quietly, not emailed; the
+/// licence goes out the first time an app asks (POST /api/plans/free).
+/// Returns whether one was made.
+pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Result<bool, String> {
+    let email = email.trim().to_lowercase();
+    if !plausible_email(&email) {
+        return Ok(false);
+    }
+    let id = format!("free_{}", uuid::Uuid::new_v4().simple());
+    let sql = format!(
+        "INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, period_start, period_end, \
+                                    credits_granted, credits_used, licence, is_free) \
+         SELECT $1, $2, p.id, '', 'active', NOW(), NOW() + INTERVAL '1 month', p.monthly_credits, 0, $3, TRUE \
+           FROM plans p \
+          WHERE p.active AND p.price_cents = 0 \
+            AND NOT EXISTS (SELECT 1 FROM subscriptions s \
+                             WHERE s.email = $2 AND s.licence IS NOT NULL \
+                               AND (s.is_free OR (s.status IN {live} AND s.period_end > NOW()))) \
+          ORDER BY p.sort_order, p.id LIMIT 1 \
+         ON CONFLICT DO NOTHING",
+        live = LIVE_STATUSES
+    );
+    let made = client
+        .execute(sql.as_str(), &[&id, &email, &new_licence()])
+        .await
+        .map_err(|e| e.to_string())?;
+    if made > 0 {
+        app_log!(info, email = %email, "Free plan given");
+    }
+    Ok(made > 0)
+}
+
+/// Daily, and soon after start-up: ensure_free_plan for every account and
+/// every licence holder, so a paid plan that ended without a webhook, or an
+/// account from before this rule, falls back to the free allowance.
+pub async fn ensure_free_plans(store: &EndpointStore) {
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => {
+            app_log!(error, error = %e, "Could not give free plans");
+            return;
+        }
+    };
+    let sql = format!(
+        "SELECT e.email FROM (SELECT lower(email) AS email FROM user_preferences \
+                              UNION SELECT email FROM subscriptions WHERE licence IS NOT NULL) e \
+          WHERE NOT EXISTS (SELECT 1 FROM subscriptions s \
+                             WHERE s.email = e.email AND s.licence IS NOT NULL \
+                               AND (s.is_free OR (s.status IN {live} AND s.period_end > NOW())))",
+        live = LIVE_STATUSES
+    );
+    let emails: Vec<String> = match client.query(sql.as_str(), &[]).await {
+        Ok(rows) => rows.iter().map(|r| r.get(0)).collect(),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not list people without a plan");
+            return;
+        }
+    };
+    let mut given = 0;
+    for email in &emails {
+        match ensure_free_plan(&client, email).await {
+            Ok(true) => given += 1,
+            Ok(false) => {}
+            Err(e) => app_log!(error, error = %e, email = %email, "Could not give a free plan"),
+        }
+    }
+    if given > 0 {
+        app_log!(info, count = given, "Free plans given to people without a plan");
+    }
 }
 
 /// Fetches the subscription from Stripe and syncs it.

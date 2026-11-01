@@ -166,6 +166,9 @@ async fn get_or_create_personal_tenant_locked(
         )
         .await
         .to_store_error()?;
+        crate::payment::subscription::ensure_free_plan(client, &email)
+            .await
+            .map_err(StoreError::Database)?;
     }
 
     // No default, but somewhere to be: a workspace they were invited into, else
