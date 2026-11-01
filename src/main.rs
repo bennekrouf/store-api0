@@ -268,6 +268,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     app_log!(info, "Database connection validated successfully");
 
+    // Everyone holds at least the free plan, from the first minute.
+    {
+        let store = Arc::clone(&store_arc);
+        tokio::spawn(async move { crate::payment::subscription::ensure_free_plans(&store).await });
+    }
+
     // Initialise Stripe payment service
     let stripe_key = config.stripe_secret_key();
     let payment_service = Arc::new(crate::payment::service::PaymentService::new(stripe_key));

@@ -590,7 +590,9 @@ async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &
 }
 
 /// Nobody is left without a plan: `email` gets the free allowance unless it
-/// already has a live plan or a free licence. Made quietly, not emailed; the
+/// already has a live plan or a free licence. The plan priced 0, the active one
+/// first: switching it off the shelf must not leave anyone without one. Made
+/// quietly, not emailed; the
 /// licence goes out the first time an app asks (POST /api/plans/free).
 /// Returns whether one was made.
 pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Result<bool, String> {
@@ -604,11 +606,11 @@ pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Resu
                                     credits_granted, credits_used, licence, is_free) \
          SELECT $1::varchar, $2::varchar, p.id, '', 'active', NOW(), NOW() + INTERVAL '1 month', p.monthly_credits, 0, $3::varchar, TRUE \
            FROM plans p \
-          WHERE p.active AND p.price_cents = 0 \
+          WHERE p.price_cents = 0 \
             AND NOT EXISTS (SELECT 1 FROM subscriptions s \
                              WHERE s.email = $2::varchar AND s.licence IS NOT NULL \
                                AND (s.is_free OR (s.status IN {live} AND s.period_end > NOW()))) \
-          ORDER BY p.sort_order, p.id LIMIT 1 \
+          ORDER BY p.active DESC, p.sort_order, p.id LIMIT 1 \
          ON CONFLICT DO NOTHING",
         live = LIVE_STATUSES
     );
@@ -622,7 +624,7 @@ pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Resu
     Ok(made > 0)
 }
 
-/// Daily, and soon after start-up: ensure_free_plan for every account and
+/// At start-up and daily: ensure_free_plan for every account and
 /// every licence holder, so a paid plan that ended without a webhook, or an
 /// account from before this rule, falls back to the free allowance.
 pub async fn ensure_free_plans(store: &EndpointStore) {
@@ -648,6 +650,20 @@ pub async fn ensure_free_plans(store: &EndpointStore) {
             return;
         }
     };
+    if emails.is_empty() {
+        return;
+    }
+    match client.query_opt("SELECT 1 FROM plans WHERE price_cents = 0 LIMIT 1", &[]).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            app_log!(error, count = emails.len(), "People without a plan, and no plan priced 0 to give them");
+            return;
+        }
+        Err(e) => {
+            app_log!(error, error = %e, "Could not read the free plan");
+            return;
+        }
+    }
     let mut given = 0;
     for email in &emails {
         match ensure_free_plan(&client, email).await {
