@@ -361,10 +361,14 @@ async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {
         Err(e) => { app_log!(error, "[scheduler] DB connect failed: {}", e); return; }
     };
 
-    // ── Nudge: signed up > 7 days ago, zero API calls, not yet nudged ────────
-    let nudge_cutoff = Utc::now() - chrono::Duration::days(7);
+    // ── Nudge: signed up > 1 day ago, zero tool calls, not yet nudged ────────
+    // A day, not a week: by day 7 someone who signed up and stalled has
+    // forgotten what they came for. Whether the workspace has tools decides
+    // what the email asks them to do next.
+    let nudge_cutoff = Utc::now() - chrono::Duration::days(1);
     let nudge_rows = client.query(
-        r#"SELECT up.email, t.name, t.credit_balance
+        r#"SELECT up.email, t.credit_balance,
+                  EXISTS (SELECT 1 FROM mcp_tools m WHERE m.tenant_id = t.id) AS has_tools
            FROM user_preferences up
            JOIN tenants t ON up.default_tenant_id = t.id
            WHERE t.created_at < $1
@@ -376,16 +380,40 @@ async fn run_engagement_schedulers(store: &Arc<EndpointStore>) {
 
     app_log!(info, "[scheduler] Nudge candidates: {}", nudge_rows.len());
     for row in &nudge_rows {
-        let email: &str   = row.get(0);
-        let name: &str    = row.get(1);
-        let credits: i64  = row.get(2);
-        app_log!(info, "[scheduler] Nudge {} credits={}", email, credits);
-        send_async(Arc::clone(store), email.to_string(), EmailKind::Nudge {
-            name: name.to_string(),
-            credits,
-        });
+        let email: &str    = row.get(0);
+        let credits: i64   = row.get(1);
+        let has_tools: bool = row.get(2);
+        app_log!(info, "[scheduler] Nudge {} credits={} has_tools={}", email, credits, has_tools);
+        send_async(Arc::clone(store), email.to_string(), EmailKind::Nudge { has_tools, credits });
         let _ = client.execute(
             "UPDATE tenants SET nudge_sent_at = NOW() FROM user_preferences up WHERE up.default_tenant_id = tenants.id AND up.email = $1",
+            &[&email],
+        ).await;
+    }
+
+    // ── Follow-up: nudged > 4 days ago, still no tool call ───────────────────
+    // Once, from the founder: a reply is a conversation about what they wanted.
+    let followup_cutoff = Utc::now() - chrono::Duration::days(4);
+    let followup_rows = client.query(
+        r#"SELECT up.email
+           FROM user_preferences up
+           JOIN tenants t ON up.default_tenant_id = t.id
+           WHERE t.nudge_sent_at < $1
+             -- Only recent nudges: accounts nudged long before this email
+             -- existed are not followed up out of the blue.
+             AND t.nudge_sent_at > NOW() - INTERVAL '14 days'
+             AND t.first_call_at IS NULL
+             AND t.nudge_followup_sent_at IS NULL
+             AND up.email IS NOT NULL"#,
+        &[&followup_cutoff],
+    ).await.unwrap_or_default();
+
+    app_log!(info, "[scheduler] Nudge follow-up candidates: {}", followup_rows.len());
+    for row in &followup_rows {
+        let email: &str = row.get(0);
+        send_async(Arc::clone(store), email.to_string(), EmailKind::NudgeFollowUp);
+        let _ = client.execute(
+            "UPDATE tenants SET nudge_followup_sent_at = NOW() FROM user_preferences up WHERE up.default_tenant_id = tenants.id AND up.email = $1",
             &[&email],
         ).await;
     }

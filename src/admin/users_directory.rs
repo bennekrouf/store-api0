@@ -117,9 +117,9 @@ pub async fn list_users(
     // lower case; accounts may not, hence lower(up.email) on that side.
     let sql = format!(
         "WITH people AS (
-             SELECT email, default_tenant_id, created_at, TRUE AS has_account FROM user_preferences
+             SELECT email, default_tenant_id, created_at, TRUE AS has_account, signup_source FROM user_preferences
              UNION ALL
-             SELECT s.email, NULL, min(s.created_at), FALSE
+             SELECT s.email, NULL, min(s.created_at), FALSE, NULL::jsonb
                FROM subscriptions s
               WHERE s.licence IS NOT NULL
                 AND NOT EXISTS (SELECT 1 FROM user_preferences a WHERE lower(a.email) = s.email)
@@ -162,7 +162,9 @@ pub async fn list_users(
                         'gift_paid_plan', (SELECT g.name FROM plans g WHERE g.id = s.gift_paid_plan_id))
                         ORDER BY ({LIVE}) DESC, s.is_free, s.created_at DESC), '[]'::json)
                 FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-               WHERE s.email = lower(up.email) AND s.licence IS NOT NULL) AS licences
+               WHERE s.email = lower(up.email) AND s.licence IS NOT NULL) AS licences,
+             -- Where the account came from (api/signup_source.rs).
+             up.signup_source
          FROM people up
          WHERE ($1 = '' OR up.email ILIKE '%' || $1 || '%'
                 OR EXISTS (SELECT 1 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
@@ -206,6 +208,7 @@ pub async fn list_users(
                 "linked_channels": r.get::<_, i64>(7),
                 "has_account": r.get::<_, bool>(8),
                 "licences": r.get::<_, serde_json::Value>(9),
+                "signup_source": r.get::<_, Option<serde_json::Value>>(10),
             })
         })
         .collect();

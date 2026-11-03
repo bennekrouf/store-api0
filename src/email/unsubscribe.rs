@@ -307,7 +307,8 @@ mod tests {
         use crate::email::EmailKind;
         let digest = EmailKind::MonthlyDigest { month: "May".into(), total_calls: 1, credits_spent: 1, top_endpoints: vec![] };
         assert!(digest.is_optional());
-        assert!(EmailKind::Nudge { name: "x".into(), credits: 0 }.is_optional());
+        assert!(EmailKind::Nudge { has_tools: false, credits: 0 }.is_optional());
+        assert!(EmailKind::NudgeFollowUp.is_optional());
         assert!(EmailKind::WinBack { name: "x".into() }.is_optional());
         assert!(EmailKind::WhatsNew { feature_title: "x".into(), description: "y".into() }.is_optional());
         assert!(!EmailKind::Welcome { name: "x".into(), key_prefix: "k".into(), credits: 0 }.is_optional());
@@ -318,7 +319,7 @@ mod tests {
     #[test]
     fn the_footer_link_appears_only_when_given() {
         use crate::email::EmailKind;
-        let nudge = EmailKind::Nudge { name: "Jane".into(), credits: 5 };
+        let nudge = EmailKind::Nudge { has_tools: true, credits: 5 };
         let html = nudge.html_body_with(Some("https://gw.example/api/email/unsubscribe?e=a%40b&t=1"));
         assert!(html.contains(r#"href="https://gw.example/api/email/unsubscribe?e=a%40b&amp;t=1""#), "{html}");
         assert!(!nudge.html_body().contains("Unsubscribe"));
