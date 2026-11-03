@@ -23,3 +23,4 @@ pub mod providers;
 pub mod key_consumer_self_service;
 pub mod tenant_management;
 pub mod tenant_members;
+pub mod signup_source;

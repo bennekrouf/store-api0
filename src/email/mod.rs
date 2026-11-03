@@ -72,7 +72,12 @@ pub enum EmailKind {
     /// `link_ref` names the workspace's Get started page (/link/<link_ref>).
     WorkspaceInvite { workspace: String, role: String, invited_by: String, has_account: bool, link_ref: String },
     // ── Tier 3 — engagement ──────────────────────────────────────────────────
-    Nudge { name: String, credits: i64 },
+    /// A day after signing up, no tool call yet. `has_tools`: they added an
+    /// API, so what is left is connecting Claude; otherwise, adding one.
+    Nudge { has_tools: bool, credits: i64 },
+    /// Some days after the nudge, still no tool call: a short note offering
+    /// help, which a reply answers (it goes to the founder).
+    NudgeFollowUp,
     WinBack { name: String },
     WhatsNew { feature_title: String, description: String },
     // ── Plan subscriptions (the desktop apps' licence) ───────────────────────
@@ -130,6 +135,7 @@ impl EmailKind {
             Self::ProviderConnected { .. } => "provider_connected",
             Self::WorkspaceInvite { .. }   => "workspace_invite",
             Self::Nudge { .. }             => "nudge",
+            Self::NudgeFollowUp            => "nudge_follow_up",
             Self::WinBack { .. }           => "win_back",
             Self::WhatsNew { .. }          => "whats_new",
             Self::LicenceIssued { .. }     => "licence_issued",
@@ -159,7 +165,9 @@ impl EmailKind {
                 if *has_account { format!("You've been added to {}", workspace) }
                 else            { format!("You're invited to join {}", workspace) }
             }
-            Self::Nudge { credits, .. }                      => if *credits > 0 { format!("You have {credits} credits waiting — try api0 today") } else { "Your api0 API key is ready to use".into() },
+            Self::Nudge { has_tools: true, .. }              => "One step left: connect Claude to your tools".into(),
+            Self::Nudge { has_tools: false, .. }             => "Turn your first API into a Claude tool".into(),
+            Self::NudgeFollowUp                              => "Stuck setting up api0? Reply and I'll help".into(),
             Self::WinBack { .. }                             => "We miss you — here's what's new on api0".into(),
             Self::WhatsNew { feature_title, .. }             => format!("New on api0: {}", feature_title),
             Self::LicenceIssued { plan_name, lang, .. }      => mayorana::licence_subject(plan_name, *lang),
@@ -177,6 +185,7 @@ impl EmailKind {
             self,
             Self::MonthlyDigest { .. }
                 | Self::Nudge { .. }
+                | Self::NudgeFollowUp
                 | Self::WinBack { .. }
                 | Self::WhatsNew { .. }
                 | Self::PlanComeBack { .. }
@@ -193,6 +202,7 @@ impl EmailKind {
             | Self::PlanComeBack { lang, .. }
             | Self::PlanGifted { lang, .. } => lang.sender_name(),
             Self::AppDigest { .. } => "mayorana",
+            Self::NudgeFollowUp => "Benek from api0",
             _ => "api0",
         }
     }
@@ -202,6 +212,7 @@ impl EmailKind {
         matches!(
             self,
             Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. } | Self::PlanGifted { .. }
+                | Self::NudgeFollowUp
         )
     }
 
@@ -393,25 +404,45 @@ impl EmailKind {
             }
 
             // ── Tier 3 ───────────────────────────────────────────────────────
-            Self::Nudge { name, credits } => {
+            // Greets nobody by name: all we have is the workspace name, and
+            // "Personal — bob" is not a name.
+            Self::Nudge { has_tools, credits } => {
                 let credits_line = if *credits > 0 {
-                    format!("<p>You have <strong>{credits} credits</strong> ready — enough for thousands of tool calls.</p>")
+                    format!("<p>You have <strong>{credits} credits</strong> ready, enough for thousands of tool calls.</p>")
                 } else {
-                    "<p>Connect your MCP client and your AI assistant will start using your tools immediately.</p>".to_string()
+                    String::new()
                 };
-                format!(
-                    r#"<h1>Your MCP tools are ready, {name}</h1>
-<p>You signed up for api0 but haven't connected an MCP client yet.</p>
+                if *has_tools {
+                    format!(
+                        r#"<h1>Your tools are ready. Connect Claude to them</h1>
+<p>You added an API to api0, but Claude hasn't called it yet. One step is left.</p>
 {credits_line}
-<h2>Connect in 2 steps:</h2>
 <ol style="padding-left:20px">
-  <li>Copy your API key from the dashboard</li>
-  <li>Add it to your MCP client (Claude Desktop or any MCP-compatible client) pointing to <code style="background:#1E293B;padding:2px 6px;border-radius:3px">https://gateway.api0.ai/mcp</code></li>
+  <li>In Claude, open <strong>Settings → Connectors → Add custom connector</strong></li>
+  <li>Paste <code style="background:#1E293B;padding:2px 6px;border-radius:3px">https://gateway.api0.ai/mcp</code> and sign in with the same Google account</li>
 </ol>
-<p>Your AI assistant will then discover and call your imported APIs automatically.</p>
-<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open Dashboard</a></p>"#
-                )
+<p>Then ask Claude something your API can answer.</p>
+<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open the dashboard</a></p>"#
+                    )
+                } else {
+                    format!(
+                        r#"<h1>Turn your first API into a Claude tool</h1>
+<p>Your api0 workspace is set up, but it has no tools yet. Adding one takes about two minutes:</p>
+<ol style="padding-left:20px">
+  <li>Paste the URL of your API's OpenAPI description, or pick a ready-made one</li>
+  <li>Choose who may use it and how they sign in</li>
+  <li>Connect Claude, and ask it something your API can answer</li>
+</ol>
+{credits_line}
+<p><a href="https://app.api0.ai/?view=setup" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Add my first API</a></p>"#
+                    )
+                }
             },
+
+            Self::NudgeFollowUp => r#"<p>Hi,</p>
+<p>You signed up for api0 a few days ago, and Claude hasn't called one of your tools yet. That usually means something got in the way.</p>
+<p>What API were you hoping to use from Claude? Reply to this email with a line about it and I'll help you set it up, or tell you honestly if api0 isn't the right fit.</p>
+<p>Benek, api0</p>"#.to_string(),
 
             Self::WinBack { name } => format!(
                 r#"<h1>We miss you, {name}</h1>

@@ -483,7 +483,8 @@ CREATE TABLE IF NOT EXISTS app_user_prefs (
 
 -- ── Email engagement tracking ────────────────────────────────────────────────
 -- first_call_at: set on first successful API call (FirstCallMilestone + Tier-3 nudge guard)
--- nudge_sent_at: set when 7-day nudge is sent (prevents resending)
+-- nudge_sent_at: set when the day-1 nudge is sent (prevents resending)
+-- nudge_followup_sent_at: set when the follow-up a few days later is sent
 -- winback_sent_at: set when 30-day win-back is sent (prevents resending)
 -- welcome_sent on user_preferences: prevents duplicate welcome emails
 
@@ -494,6 +495,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'nudge_sent_at') THEN
         ALTER TABLE tenants ADD COLUMN nudge_sent_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'nudge_followup_sent_at') THEN
+        ALTER TABLE tenants ADD COLUMN nudge_followup_sent_at TIMESTAMP WITH TIME ZONE;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'winback_sent_at') THEN
         ALTER TABLE tenants ADD COLUMN winback_sent_at TIMESTAMP WITH TIME ZONE;
@@ -1118,3 +1122,8 @@ END $$;
 -- from — one of the regions the desktop apps offer (admin/llm_regions.rs).
 -- NULL: the platform's assistant provider (admin/assistant_config.rs).
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS llm_region VARCHAR;
+
+-- Where an account came from: the referrer and utm_* tags the dashboard saw on
+-- the visitor's first landing, sent once after their first sign-in. NULL for
+-- accounts from before this column, or when nothing was recorded.
+ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS signup_source JSONB;

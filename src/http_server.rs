@@ -340,6 +340,7 @@ pub async fn start_http_server(
                             .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
                             .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
                             .route("/user/tenant/name", web::put().to(update_tenant_name_handler))
+                            .route("/user/signup-source", web::put().to(crate::api::signup_source::set_signup_source_handler))
                             .route("/user/tenant/active", web::put().to(set_active_tenant))
                             // Workspace membership (caller's active workspace)
                             .route("/user/tenant/members", web::get().to(tenant_members::list_members))
