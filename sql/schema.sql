@@ -1182,7 +1182,7 @@ CREATE TABLE IF NOT EXISTS workspace_plans (
     id                    VARCHAR     PRIMARY KEY,
     name                  VARCHAR     NOT NULL,
     description           TEXT        NOT NULL DEFAULT '',
-    currency              VARCHAR     NOT NULL DEFAULT 'usd',
+    currency              VARCHAR     NOT NULL DEFAULT 'chf',
     price_cents           BIGINT      NOT NULL DEFAULT 0,
     included_seats        INTEGER     NOT NULL DEFAULT 1,
     seat_price_cents      BIGINT      NOT NULL DEFAULT 0,

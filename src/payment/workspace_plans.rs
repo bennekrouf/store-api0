@@ -65,7 +65,7 @@ use stripe::Subscription;
 /// products and prices.
 pub const PURPOSE_WORKSPACE_PLAN: &str = "workspace_plan";
 
-const CURRENCIES: &[&str] = &["usd", "chf", "eur"];
+const CURRENCIES: &[&str] = &["chf", "eur", "usd"];
 const LIVE_STATUSES: &[&str] = &["active", "trialing"];
 const PORTAL_CONFIG_KEY: &str = "workspace_plans.portal_configuration";
 
