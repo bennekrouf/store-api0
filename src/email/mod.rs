@@ -92,7 +92,7 @@ pub enum EmailKind {
     PlanComeBack { plan_name: String, lang: Lang },
     /// An administrator moved a paying subscriber up to `plan_name` as a gift;
     /// they go on paying for `paid_plan_name`. `apps` as in `LicenceIssued`.
-    PlanGifted { plan_name: String, paid_plan_name: String, apps: String, monthly_credits: i64, lang: Lang },
+    PlanGifted { plan_name: String, paid_plan_name: String, pays_nothing: bool, apps: String, monthly_credits: i64, lang: Lang },
     /// What a desktop app found for the licence holder, sent to them only, at
     /// their asking (POST /v1/licence/email). Every field is the app's text and
     /// is escaped when rendered.
@@ -259,8 +259,8 @@ impl EmailKind {
         if let Self::PlanComeBack { plan_name, lang } = self {
             return mayorana::come_back_body(plan_name, unsubscribe, *lang);
         }
-        if let Self::PlanGifted { plan_name, paid_plan_name, apps, monthly_credits, lang } = self {
-            return mayorana::gift_body(plan_name, paid_plan_name, apps, *monthly_credits, *lang);
+        if let Self::PlanGifted { plan_name, paid_plan_name, pays_nothing, apps, monthly_credits, lang } = self {
+            return mayorana::gift_body(plan_name, paid_plan_name, *pays_nothing, apps, *monthly_credits, *lang);
         }
         let content = match self {
             // ── Tier 1 ───────────────────────────────────────────────────────
@@ -972,6 +972,7 @@ mod licence_tests {
         let gift = EmailKind::PlanGifted {
             plan_name: "Pro".into(),
             paid_plan_name: "Basic".into(),
+            pays_nothing: false,
             apps: "*".into(),
             monthly_credits: 2000,
             lang: Lang::En,

@@ -14,6 +14,9 @@
 //        Any later move without gift ends it (the coupon comes off, nothing
 //        prorated, since the month was paid at the gifted price). A gift is
 //        announced to the customer by email (EmailKind::PlanGifted).
+//        gift: true on a free licence moving to a paid plan marks it a gift
+//        (gift_paid_plan_id keeps the free plan) and sends the same email;
+//        nothing is billed. Moving it again without gift ends the mark.
 //   POST /api/admin/users/delete    { email, confirm_email }
 //        Deletes a person: their account, memberships, keys, the workspaces
 //        only they belong to, and their licences. Refused while they pay
@@ -108,8 +111,8 @@ pub async fn change_licence_plan(
     if from == body.plan_id {
         return bad_request("The licence is already on that plan");
     }
-    if body.gift && !on_stripe {
-        return bad_request("Only a paid subscription can be a gift: moving this licence costs them nothing already");
+    if body.gift && !on_stripe && !is_free {
+        return bad_request("Only a paid subscription or a free licence can be a gift: a granted one is set by hand");
     }
     let plan = match plans::get_plan(&store, &body.plan_id).await {
         Ok(Some(p)) => p,
@@ -188,6 +191,7 @@ pub async fn change_licence_plan(
                 EmailKind::PlanGifted {
                     plan_name: plan.name.clone(),
                     paid_plan_name,
+                    pays_nothing: false,
                     apps: if plans::includes(&plan.products, "*") { "*".into() } else { plan.products.join(", ") },
                     monthly_credits: plan.monthly_credits,
                     lang,
@@ -195,6 +199,12 @@ pub async fn change_licence_plan(
             );
         }
     } else {
+        if body.gift && plan.is_free() {
+            return bad_request("A gift is an upgrade: pick a paid plan");
+        }
+        // A gifted free licence remembers the plan it came from; any move
+        // without gift ends that.
+        let gift_from: Option<String> = if body.gift { Some(gifted_from.clone().unwrap_or_else(|| from.clone())) } else { None };
         // A free licence starts every month with its plan's credits, so it
         // takes the new plan's now. A granted one's credits are a total set by
         // hand for its whole period (scripts/grant-licence.sh): they stay.
@@ -202,14 +212,33 @@ pub async fn change_licence_plan(
             .execute(
                 "UPDATE subscriptions SET plan_id = $2, \
                         credits_granted = CASE WHEN is_free THEN $3 ELSE credits_granted END, \
+                        gift_paid_plan_id = $4, \
                         updated_at = NOW() \
                   WHERE id = $1",
-                &[&body.subscription_id, &plan.id, &plan.monthly_credits],
+                &[&body.subscription_id, &plan.id, &plan.monthly_credits, &gift_from],
             )
             .await
         {
             app_log!(error, error = %e, "Licence plan update failed");
             return server_error("Update failed");
+        }
+        if body.gift {
+            let from_name = match plans::get_plan(&store, &from).await {
+                Ok(Some(p)) => p.name,
+                _ => from.clone(),
+            };
+            send_async(
+                Arc::clone(store.get_ref()),
+                email.clone(),
+                EmailKind::PlanGifted {
+                    plan_name: plan.name.clone(),
+                    paid_plan_name: from_name,
+                    pays_nothing: true,
+                    apps: if plans::includes(&plan.products, "*") { "*".into() } else { plan.products.join(", ") },
+                    monthly_credits: plan.monthly_credits,
+                    lang,
+                },
+            );
         }
     }
 
