@@ -278,8 +278,9 @@ pub fn gift_subject(plan_name: &str, lang: Lang) -> String {
 }
 
 /// An administrator moved a paying subscriber up to `plan_name` as a gift:
-/// they keep paying for `paid_plan_name`. `apps` as in `licence_body`.
-pub fn gift_body(plan_name: &str, paid_plan_name: &str, apps: &str, monthly_credits: i64, lang: Lang) -> String {
+/// they keep paying for `paid_plan_name`, or, with `pays_nothing`, a free
+/// licence moved up from `paid_plan_name` at no cost. `apps` as in `licence_body`.
+pub fn gift_body(plan_name: &str, paid_plan_name: &str, pays_nothing: bool, apps: &str, monthly_credits: i64, lang: Lang) -> String {
     let page = plans_page();
     let (title, subtitle) = match lang {
         Lang::En => ("A gift for you", format!("Your plan is now {plan_name}, on me.")),
@@ -314,7 +315,11 @@ pub fn gift_body(plan_name: &str, paid_plan_name: &str, apps: &str, monthly_cred
             };
             let perks = [
                 row("✨", format!("<strong>{monthly_credits} AI credits</strong> every month with {plan_name}.{scope}")),
-                row("💳", format!("<strong>You keep paying for {paid_plan_name}</strong>, nothing more. Your invoices show the difference as a discount.")),
+                row("💳", if pays_nothing {
+                    "<strong>It costs you nothing.</strong> No card, no invoice: it's on me.".to_string()
+                } else {
+                    format!("<strong>You keep paying for {paid_plan_name}</strong>, nothing more. Your invoices show the difference as a discount.")
+                }),
                 row("🔑", "<strong>Same licence.</strong> Nothing to install or paste again: keep using the one you have.".into()),
             ]
             .concat();
@@ -336,7 +341,11 @@ pub fn gift_body(plan_name: &str, paid_plan_name: &str, apps: &str, monthly_cred
             };
             let perks = [
                 row("✨", format!("<strong>{monthly_credits} crédits IA</strong> chaque mois avec {plan_name}.{scope}")),
-                row("💳", format!("<strong>Vous continuez à payer {paid_plan_name}</strong>, rien de plus. Vos factures affichent la différence comme une remise.")),
+                row("💳", if pays_nothing {
+                    "<strong>Cela ne vous coûte rien.</strong> Ni carte, ni facture : c'est offert.".to_string()
+                } else {
+                    format!("<strong>Vous continuez à payer {paid_plan_name}</strong>, rien de plus. Vos factures affichent la différence comme une remise.")
+                }),
                 row("🔑", "<strong>Même licence.</strong> Rien à réinstaller ni à recoller : gardez celle que vous avez.".into()),
             ]
             .concat();
@@ -460,11 +469,13 @@ mod tests {
 
     #[test]
     fn a_gift_says_what_they_get_and_that_they_pay_the_same() {
-        let en = gift_body("Pro", "Basic", "*", 2000, Lang::En);
+        let en = gift_body("Pro", "Basic", false, "*", 2000, Lang::En);
         assert!(en.contains("🎁") && en.contains("from Basic to <strong>Pro</strong>"));
         assert!(en.contains("2000 AI credits") && en.contains("You keep paying for Basic"));
         assert!(en.contains("every Mayorana app") && en.contains("mayorana.ch/pricing") && !en.contains("Unsubscribe"));
-        let fr = gift_body("Pro", "Basic", "gitagent", 2000, Lang::Fr);
+        let free = gift_body("Pro", "Free", true, "*", 2000, Lang::En);
+        assert!(free.contains("costs you nothing") && !free.contains("keep paying"));
+        let fr = gift_body("Pro", "Basic", false, "gitagent", 2000, Lang::Fr);
         assert!(fr.contains("Un cadeau pour vous") && fr.contains("Dans gitagent.") && fr.contains(r#"lang="fr""#));
         assert_eq!(gift_subject("Pro", Lang::En), "🎁 A gift for you: Pro is yours");
     }
