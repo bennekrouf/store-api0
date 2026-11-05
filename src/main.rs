@@ -288,6 +288,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         });
     }
+    // Workspace plans: seats billed follow the member count; granted plans
+    // start their next month.
+    {
+        let store = Arc::clone(&store_arc);
+        let stripe = Arc::clone(&payment_service);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                crate::payment::workspace_plans::reconcile(&store, &stripe).await;
+            }
+        });
+    }
     let http_payment_service = payment_service;
 
     // Start the HTTP server as a separate task

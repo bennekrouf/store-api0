@@ -1169,3 +1169,56 @@ ALTER TABLE downstream_oauth_requests
 -- 'oauth_access@arm'. The default connection keeps the bare kinds, so every
 -- stored credential stays where it is. The kind is also the sealing purpose,
 -- so a secret sealed for one connection does not open as another's.
+
+-- ── Workspace plans (payment::workspace_plans) ──────────────────────────────
+-- What api0 sells to companies: a monthly price for a workspace, with seats and
+-- credits included, extra seats at a per-seat price, and credits past the
+-- allowance billed as overage on the next invoice. Kept apart from `plans` and
+-- `subscriptions`, which are the mayorana app plans sold per email: nothing a
+-- workspace plan does reads or writes those tables.
+--   custom                Enterprise: never on sale, granted by the super admin
+--   overage_cents_per_1k  0 = no overage: past the allowance the balance pays
+CREATE TABLE IF NOT EXISTS workspace_plans (
+    id                    VARCHAR     PRIMARY KEY,
+    name                  VARCHAR     NOT NULL,
+    description           TEXT        NOT NULL DEFAULT '',
+    currency              VARCHAR     NOT NULL DEFAULT 'chf',
+    price_cents           BIGINT      NOT NULL DEFAULT 0,
+    included_seats        INTEGER     NOT NULL DEFAULT 1,
+    seat_price_cents      BIGINT      NOT NULL DEFAULT 0,
+    monthly_credits       BIGINT      NOT NULL DEFAULT 0,
+    overage_cents_per_1k  BIGINT      NOT NULL DEFAULT 0,
+    custom                BOOLEAN     NOT NULL DEFAULT FALSE,
+    stripe_product_id     VARCHAR,
+    stripe_price_id       VARCHAR,
+    stripe_seat_price_id  VARCHAR,
+    active                BOOLEAN     NOT NULL DEFAULT TRUE,
+    sort_order            INTEGER     NOT NULL DEFAULT 0,
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One row per workspace subscription: a Stripe one (id sub_…) or one granted
+-- by hand (id grant_…, stripe_customer_id '').
+--   credits_granted/used  this period's allowance
+--   overage_credits       credits used past the allowance this period
+--   overage_pending       overage of ended periods not yet on an invoice
+--   seats_billed          extra seats Stripe bills now (members − included)
+CREATE TABLE IF NOT EXISTS workspace_subscriptions (
+    id                   VARCHAR     PRIMARY KEY,
+    tenant_id            VARCHAR     NOT NULL REFERENCES tenants(id),
+    plan_id              VARCHAR     NOT NULL REFERENCES workspace_plans(id),
+    stripe_customer_id   VARCHAR     NOT NULL DEFAULT '',
+    status               VARCHAR     NOT NULL,
+    cancel_at_period_end BOOLEAN     NOT NULL DEFAULT FALSE,
+    period_start         TIMESTAMPTZ NOT NULL,
+    period_end           TIMESTAMPTZ NOT NULL,
+    credits_granted      BIGINT      NOT NULL DEFAULT 0,
+    credits_used         BIGINT      NOT NULL DEFAULT 0,
+    overage_credits      BIGINT      NOT NULL DEFAULT 0,
+    overage_pending      BIGINT      NOT NULL DEFAULT 0,
+    seats_billed         INTEGER     NOT NULL DEFAULT 0,
+    bought_by            VARCHAR     NOT NULL DEFAULT '',
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_subscriptions_tenant ON workspace_subscriptions(tenant_id);
