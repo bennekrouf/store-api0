@@ -1,7 +1,8 @@
 use crate::api::tenant_usage::get_tenant_stats;
 use crate::api::group_add::add_api_group;
 use crate::mcp::downstream_auth::{
-    get_downstream_auth_handler, get_downstream_auth_by_id_handler, save_downstream_auth_handler,
+    delete_downstream_connection_handler, get_downstream_auth_handler,
+    get_downstream_auth_by_id_handler, save_downstream_auth_handler,
 };
 use crate::mcp::client_id::{get_by_client_id_handler, set_client_id_handler};
 use crate::admin::model_config::{get_ai_config_public, get_model_config, update_model_config};
@@ -293,6 +294,7 @@ pub async fn start_http_server(
                             // Tenant-facing registry (email-keyed; proxied by the gateway)
                             .route("/user/mcp-tools", web::get().to(list_my_mcp_tools_handler))
                             .route("/user/mcp-tools", web::put().to(upsert_my_mcp_tool_handler))
+                            .route("/user/mcp-tools/connection", web::put().to(crate::mcp::tools::set_my_tools_connection_handler))
                             .route("/user/mcp-tools/{tool_name}", web::delete().to(delete_my_mcp_tool_handler))
                             // MCP initialize instructions: tool summary + the tenant's own text
                             .route("/mcp-instructions/{tenant_id}", web::get().to(get_mcp_instructions_handler))
@@ -339,6 +341,7 @@ pub async fn start_http_server(
                             // Downstream auth (tenant-level)
                             .route("/user/downstream-auth", web::get().to(get_downstream_auth_handler))
                             .route("/user/downstream-auth", web::put().to(save_downstream_auth_handler))
+                            .route("/user/downstream-auth", web::delete().to(delete_downstream_connection_handler))
                             .route("/user/tenant/name", web::put().to(update_tenant_name_handler))
                             .route("/user/signup-source", web::put().to(crate::api::signup_source::set_signup_source_handler))
                             .route("/user/tenant/active", web::put().to(set_active_tenant))

@@ -45,9 +45,12 @@ pub async fn encrypt_legacy_secrets(store: &EndpointStore) -> Result<BackfillRep
         .query(
             "SELECT tenant_id, bearer_token, custom_headers, service_account_json
              FROM tenant_downstream_auth
-             WHERE (bearer_token         IS NOT NULL AND bearer_token_enc         IS NULL)
-                OR (custom_headers       IS NOT NULL AND custom_headers_enc       IS NULL)
-                OR (service_account_json IS NOT NULL AND service_account_json_enc IS NULL)",
+             -- Plaintext predates named connections, so only a default row can
+             -- hold any; the bare sealing purposes below are the default's.
+             WHERE connection_name = 'default'
+               AND ((bearer_token         IS NOT NULL AND bearer_token_enc         IS NULL)
+                 OR (custom_headers       IS NOT NULL AND custom_headers_enc       IS NULL)
+                 OR (service_account_json IS NOT NULL AND service_account_json_enc IS NULL))",
             &[],
         )
         .await
@@ -78,7 +81,7 @@ pub async fn encrypt_legacy_secrets(store: &EndpointStore) -> Result<BackfillRep
                     bearer_token             = NULL,
                     custom_headers           = NULL,
                     service_account_json     = NULL
-                 WHERE tenant_id = $1",
+                 WHERE tenant_id = $1 AND connection_name = 'default'",
                 &[&tenant_id, &sealed_bearer, &sealed_headers, &sealed_sa],
             )
             .await;

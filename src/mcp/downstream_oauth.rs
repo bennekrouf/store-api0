@@ -4,10 +4,10 @@
 // only the gateway drives this flow, and it does so on behalf of a person it
 // has already authenticated.
 //
-//   POST /internal/downstream-oauth/start   {tenant_id, email}
+//   POST /internal/downstream-oauth/start   {tenant_id, email, connection?}
 //                                           → {state, code_verifier}
 //   POST /internal/downstream-oauth/redeem  {state}
-//                                           → {tenant_id, user_email, code_verifier}
+//                                           → {tenant_id, connection, user_email, code_verifier}
 //   PUT  /internal/downstream-credential/{tenant_id}/{kind}?email=…
 //                                           {secret, expires_at?, label?}
 //
@@ -18,6 +18,7 @@
 // would store the token against the wrong one.
 
 use crate::app_log;
+use crate::endpoint_store::downstream_auth_management::normalize_connection;
 use crate::endpoint_store::downstream_oauth::{redeem_authorization, start_authorization};
 use crate::endpoint_store::user_credentials::{save_credential, SaveCredentialRequest};
 use crate::endpoint_store::{EndpointStore, StoreError};
@@ -43,6 +44,9 @@ fn fail(e: StoreError) -> HttpResponse {
 pub struct StartBody {
     pub tenant_id: String,
     pub email: String,
+    /// Omitted → the tenant's default connection.
+    #[serde(default)]
+    pub connection: Option<String>,
 }
 
 pub async fn start_handler(
@@ -53,7 +57,11 @@ pub async fn start_handler(
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    match start_authorization(&store, &body.tenant_id, &body.email).await {
+    let connection = match normalize_connection(body.connection.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return fail(e),
+    };
+    match start_authorization(&store, &body.tenant_id, &connection, &body.email).await {
         Ok((state, code_verifier)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true, "state": state, "code_verifier": code_verifier
         })),
@@ -78,6 +86,7 @@ pub async fn redeem_handler(
         Ok(Some(p)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "tenant_id": p.tenant_id,
+            "connection": p.connection,
             "user_email": p.user_email,
             "code_verifier": p.code_verifier,
         })),
