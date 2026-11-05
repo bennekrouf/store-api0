@@ -239,6 +239,7 @@ pub async fn start_http_server(
                             .route("/admin/workspace-plans", web::get().to(crate::payment::workspace_plans::admin_handler))
                             .route("/admin/workspace-plans/grant", web::post().to(crate::payment::workspace_plans::grant_handler))
                             .route("/admin/workspace-plans/revoke", web::post().to(crate::payment::workspace_plans::revoke_handler))
+                            .route("/admin/workspace-plans-rates", web::put().to(crate::payment::workspace_plans::save_rates_handler))
                             .route("/admin/workspace-plans/{id}", web::put().to(crate::payment::workspace_plans::save_handler))
                             .route("/internal/stripe/webhook", web::post().to(crate::payment::webhook::stripe_webhook_handler))
                             // Admin endpoints (Firebase JWT, admin email only)

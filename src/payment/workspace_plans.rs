@@ -41,6 +41,8 @@
 //   POST /api/workspace-plans/change            { email, plan_id } → switch, prorated
 //   POST /api/workspace-plans/portal            { email } → { url }
 //   GET  /api/admin/workspace-plans             every plan, and every workspace subscription
+//   PUT  /api/admin/workspace-plans-rates       { eur, usd } per 1 CHF: the approximate
+//                                               prices a pricing page shows; never charged
 //   PUT  /api/admin/workspace-plans/{id}        create or change a plan
 //   POST /api/admin/workspace-plans/grant       { tenant_id, plan_id } → a custom plan, by hand
 //   POST /api/admin/workspace-plans/revoke      { subscription_id } → ends a grant now
@@ -826,9 +828,94 @@ pub async fn public_plans_handler(req: HttpRequest, store: web::Data<Arc<Endpoin
     match list_plans(&store).await {
         Ok(plans) => {
             let plans: Vec<_> = plans.iter().filter(|p| p.on_sale()).map(WorkspacePlan::public).collect();
-            HttpResponse::Ok().json(serde_json::json!({ "success": true, "plans": plans }))
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "plans": plans,
+                "display_rates": read_display_rates(&store).await,
+            }))
         }
         Err(e) => internal("read the plans", e),
+    }
+}
+
+// ── Display currencies ───────────────────────────────────────────────────────
+//
+// Stripe bills the plans in their own currency (CHF). A pricing page shows an
+// approximate price in the visitor's currency too: so many units of each
+// currency per 1 unit of CHF, set by the super admin
+// (system_config workspace_plans.display_rates). Shown as "≈", never charged.
+
+const RATES_KEY: &str = "workspace_plans.display_rates";
+const DISPLAY_CURRENCIES: &[&str] = &["chf", "eur", "usd"];
+
+/// Until the super admin sets them: close to the rates of late 2026, rounded.
+fn default_rates() -> std::collections::BTreeMap<String, f64> {
+    std::collections::BTreeMap::from([("chf".into(), 1.0), ("eur".into(), 1.07), ("usd".into(), 1.25)])
+}
+
+pub async fn read_display_rates(store: &EndpointStore) -> std::collections::BTreeMap<String, f64> {
+    let saved = async {
+        let client = store.get_admin_conn().await.ok()?;
+        let row = client.query_opt("SELECT value FROM system_config WHERE key = $1", &[&RATES_KEY]).await.ok()??;
+        serde_json::from_str::<std::collections::BTreeMap<String, f64>>(&row.get::<_, String>(0)).ok()
+    }
+    .await;
+    let mut rates = default_rates();
+    if let Some(saved) = saved {
+        for (k, v) in saved {
+            if DISPLAY_CURRENCIES.contains(&k.as_str()) && v.is_finite() && v > 0.0 {
+                rates.insert(k, v);
+            }
+        }
+    }
+    rates.insert("chf".into(), 1.0);
+    rates
+}
+
+fn check_rates(rates: &std::collections::BTreeMap<String, f64>) -> Result<(), String> {
+    for (k, v) in rates {
+        if !DISPLAY_CURRENCIES.contains(&k.as_str()) {
+            return Err(format!("{} is not a display currency ({})", k, DISPLAY_CURRENCIES.join(", ")));
+        }
+        if !(v.is_finite() && *v > 0.0) {
+            return Err(format!("The rate for {} must be above 0", k));
+        }
+    }
+    Ok(())
+}
+
+/// PUT /api/admin/workspace-plans-rates — { "eur": 1.07, "usd": 1.25 }, per 1 CHF.
+pub async fn save_rates_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<std::collections::BTreeMap<String, f64>>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let rates = body.into_inner();
+    if let Err(why) = check_rates(&rates) {
+        return fail(StatusCode::BAD_REQUEST, &why);
+    }
+    let value = serde_json::to_string(&rates).unwrap_or_else(|_| "{}".into());
+    let saved = async {
+        let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+        client
+            .execute(
+                "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW()) \
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                &[&RATES_KEY, &value],
+            )
+            .await
+            .map_err(|e| e.to_string())
+    }
+    .await;
+    match saved {
+        Ok(_) => {
+            app_log!(info, rates = %value, "Workspace plan display rates changed");
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "display_rates": read_display_rates(&store).await }))
+        }
+        Err(e) => internal("save the display rates", e),
     }
 }
 
@@ -1108,6 +1195,7 @@ pub async fn admin_handler(req: HttpRequest, store: web::Data<Arc<EndpointStore>
         "plans": plans,
         "subscriptions": subs,
         "currencies": CURRENCIES,
+        "display_rates": read_display_rates(&store).await,
     }))
 }
 
@@ -1230,6 +1318,14 @@ pub async fn revoke_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_rates_are_checked() {
+        let ok = std::collections::BTreeMap::from([("eur".to_string(), 1.07), ("usd".to_string(), 1.25)]);
+        assert!(check_rates(&ok).is_ok());
+        assert!(check_rates(&std::collections::BTreeMap::from([("gbp".to_string(), 0.9)])).is_err());
+        assert!(check_rates(&std::collections::BTreeMap::from([("eur".to_string(), 0.0)])).is_err());
+    }
 
     #[test]
     fn seats_past_those_included_are_billed() {
