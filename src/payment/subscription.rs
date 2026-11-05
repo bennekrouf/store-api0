@@ -11,7 +11,8 @@
 //   POST /api/plans/free                    { email } → { emailed: true }: the free allowance's
 //                                           licence, sent to that email only, which proves it
 //   GET  /api/plans/session/{id}            the licence a finished Checkout session bought
-//   GET  /api/plans/subscription/{email}    the current subscription and its credits, or null
+//   GET  /api/plans/subscription/{email}    the current subscription and its credits, or null;
+//                                           gives the free allowance first if the email has no plan
 //   POST /api/plans/portal                  { email } → { url } of Stripe's customer portal
 //   POST /api/plans/cancel                  { email, cancel } → cancels the email's paid plan at
 //                                           the end of its month (cancel: true), or resumes it
@@ -34,6 +35,7 @@
 // starts each new month itself when the licence is next checked. When the same email first pays for a plan, the
 // free licence moves to that subscription, so the number in the apps stays.
 // Everyone holds at least the free allowance: a new account gets it quietly,
+// so does someone signed in only on mayorana.ch when their plan is first read,
 // a plan that ends falls back to it, and a daily sweep catches the rest
 // (ensure_free_plan, ensure_free_plans). Its licence is emailed when asked for.
 //
@@ -1122,6 +1124,19 @@ pub async fn subscription_handler(
 ) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
+    }
+    // The gateway asks with the email of a verified sign-in (a mayorana.ch
+    // visitor, the dashboard's plan panel). Someone who signed in only on the
+    // site has no api0 account, so neither account creation nor the daily
+    // sweep would ever give them the free allowance: give it here, quietly,
+    // as account creation does. A failure only costs this read the grant.
+    match store.get_admin_conn().await {
+        Ok(client) => {
+            if let Err(e) = ensure_free_plan(&client, &email).await {
+                app_log!(error, error = %e, email = %email, "Could not give a free plan on a subscription read");
+            }
+        }
+        Err(e) => app_log!(error, error = %e, "Could not give a free plan on a subscription read"),
     }
     match current_subscription(&store, &email).await {
         Ok(sub) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription": sub })),

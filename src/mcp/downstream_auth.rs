@@ -1,12 +1,18 @@
 // src/downstream_auth_handler.rs
-// HTTP handlers for GET/PUT /api/user/downstream-auth
+// HTTP handlers for GET/PUT/DELETE /api/user/downstream-auth
 // and GET /api/tenant/downstream-auth/{tenant_id} (internal, used by gateway)
+//
+// Every route takes an optional `connection` (query string, or body field on
+// PUT) naming one of the tenant's connections. Omitted → the default, so every
+// caller written before connections existed reads and writes what it always did.
 
 use crate::app_log;
 use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::downstream_auth_management::{
-    get_downstream_auth, save_downstream_auth, SaveDownstreamAuthRequest,
+    delete_downstream_connection, get_downstream_auth, list_downstream_connections,
+    normalize_connection, save_downstream_auth, SaveDownstreamAuthRequest, TenantDownstreamAuth,
 };
+use crate::endpoint_store::StoreError;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
@@ -17,11 +23,39 @@ use std::sync::Arc;
 #[derive(Debug, Deserialize)]
 pub struct EmailQuery {
     pub email: String,
+    #[serde(default)]
+    pub connection: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConnectionQuery {
+    #[serde(default)]
+    pub connection: Option<String>,
+}
+
+fn bad_connection(e: StoreError) -> HttpResponse {
+    HttpResponse::BadRequest().json(serde_json::json!({"success": false, "error": e.to_string()}))
+}
+
+/// What the dashboard may see of every connection: its name and mode, never a
+/// credential. The full record of one connection is `auth`, which the gateway
+/// redacts before it reaches a browser; a list of full records would need the
+/// same treatment for each, and nothing needs more than this.
+fn connection_summaries(all: &[TenantDownstreamAuth]) -> Vec<serde_json::Value> {
+    all.iter()
+        .map(|c| serde_json::json!({
+            "connection": c.connection,
+            "auth_mode": c.auth_mode,
+            "updated_at": c.updated_at,
+        }))
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SaveAuthBody {
     pub email: String,
+    #[serde(default)]
+    pub connection: Option<String>,
     pub auth_mode: String,
     pub service_account_json: Option<String>,
     pub target_audience: Option<String>,
@@ -50,6 +84,11 @@ pub async fn get_downstream_auth_handler(
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
+
+    let connection = match normalize_connection(query.connection.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return bad_connection(e),
+    };
 
     let tenant = match get_default_tenant(&store, &query.email).await {
         Ok(t) => t,
@@ -86,10 +125,16 @@ pub async fn get_downstream_auth_handler(
         Err(_) => (None, None, false, None, None),
     };
 
-    match get_downstream_auth(&store, &tenant.id).await {
+    let connections = list_downstream_connections(&store, &tenant.id)
+        .await
+        .map(|all| connection_summaries(&all))
+        .unwrap_or_default();
+
+    match get_downstream_auth(&store, &tenant.id, &connection).await {
         Ok(Some(auth)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "auth": auth,
+            "connections": connections,
             "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
             "google_client_id": google_client_id,
@@ -101,6 +146,7 @@ pub async fn get_downstream_auth_handler(
             "success": true,
             "auth": {
                 "tenant_id": tenant.id,
+                "connection": connection,
                 "auth_mode": "none",
                 "service_account_json": null,
                 "target_audience": null,
@@ -118,6 +164,7 @@ pub async fn get_downstream_auth_handler(
                 "authorize_url": null,
                 "updated_at": null
             },
+            "connections": connections,
             "tenant_name": tenant.name,
             "mcp_client_id": mcp_client_id,
             "google_client_id": google_client_id,
@@ -154,6 +201,7 @@ pub async fn save_downstream_auth_handler(
     };
 
     let req = SaveDownstreamAuthRequest {
+        connection:           body.connection.clone(),
         auth_mode:            body.auth_mode.clone(),
         service_account_json: body.service_account_json.clone(),
         target_audience:      body.target_audience.clone(),
@@ -183,6 +231,7 @@ pub async fn save_downstream_auth_handler(
             });
             HttpResponse::Ok().json(serde_json::json!({ "success": true, "auth": auth }))
         },
+        Err(e @ StoreError::InvalidInput(_)) => bad_connection(e),
         Err(e) => {
             app_log!(error, error = %e, "save_downstream_auth: DB error");
             HttpResponse::InternalServerError()
@@ -197,6 +246,7 @@ pub async fn get_downstream_auth_by_id_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     path: web::Path<String>,
+    query: web::Query<ConnectionQuery>,
 ) -> impl Responder {
     // Credentials keyed by tenant id alone — the most sensitive read in the
     // store, and the one with the least to go on.
@@ -205,19 +255,65 @@ pub async fn get_downstream_auth_by_id_handler(
     }
 
     let tenant_id = path.into_inner();
-    match get_downstream_auth(&store, &tenant_id).await {
+    let connection = match normalize_connection(query.connection.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return bad_connection(e),
+    };
+    match get_downstream_auth(&store, &tenant_id, &connection).await {
         Ok(Some(auth)) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
             "auth": auth
         })),
+        // `found: false` lets the gateway tell a default with nothing saved —
+        // a valid "no auth" — from a named connection that does not exist,
+        // which must fail the call rather than send it unauthenticated.
         Ok(None) => HttpResponse::Ok().json(serde_json::json!({
             "success": true,
-            "auth": { "auth_mode": "none" }
+            "found": false,
+            "auth": { "auth_mode": "none", "connection": connection }
         })),
         Err(e) => {
             app_log!(error, error = %e, "get_downstream_auth_by_id: DB error");
             HttpResponse::InternalServerError()
                 .json(serde_json::json!({"success": false}))
+        }
+    }
+}
+
+/// DELETE /api/user/downstream-auth?email=…&connection=… — remove a named
+/// connection of the caller's own tenant, and everyone's secrets for it.
+pub async fn delete_downstream_connection_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    query: web::Query<EmailQuery>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
+    let connection = match normalize_connection(query.connection.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return bad_connection(e),
+    };
+
+    let tenant = match get_default_tenant(&store, &query.email).await {
+        Ok(t) => t,
+        Err(e) => {
+            app_log!(error, error = %e, "delete_downstream_connection: tenant lookup failed");
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "Tenant not found"}));
+        }
+    };
+
+    match delete_downstream_connection(&store, &tenant.id, &connection).await {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({"success": true})),
+        Ok(false) => HttpResponse::NotFound()
+            .json(serde_json::json!({"success": false, "error": "No such connection"})),
+        Err(e @ StoreError::InvalidInput(_)) => bad_connection(e),
+        Err(e) => {
+            app_log!(error, error = %e, "delete_downstream_connection: DB error");
+            HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success": false, "error": "DB error"}))
         }
     }
 }

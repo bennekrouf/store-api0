@@ -10,6 +10,7 @@
 
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
+use crate::endpoint_store::downstream_auth_management::{for_connection, DEFAULT_CONNECTION};
 use crate::endpoint_store::{EndpointStore, StoreError};
 use crate::infra::secret_box::{self, SecretContext};
 use chrono::{DateTime, Utc};
@@ -109,7 +110,26 @@ pub async fn save_credential(
     Ok(row_to_summary(row))
 }
 
+/// One personal-credential connection of a tenant, and where this user stands
+/// with it. Only connections that take a personal credential are listed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectionCredentialSlot {
+    pub connection: String,
+    /// The person pastes a token for this connection.
+    pub per_user: bool,
+    /// The person connects their account through OAuth.
+    pub oauth: bool,
+    /// For `oauth`: whether they have connected yet.
+    pub connected: bool,
+    /// For `per_user`: the token they pasted, without the token.
+    pub credential: Option<CredentialSummary>,
+}
+
 /// A tenant this user may hold a credential in, and whether they hold one.
+///
+/// The top-level fields describe the default connection, as they did before
+/// connections existed; `connections` lists every connection — default
+/// included — that takes a personal credential.
 #[derive(Debug, Clone, Serialize)]
 pub struct TenantCredentialSlot {
     pub tenant_id: String,
@@ -123,6 +143,7 @@ pub struct TenantCredentialSlot {
     /// For `oauth`: whether this person has connected their account yet.
     pub connected: bool,
     pub credential: Option<CredentialSummary>,
+    pub connections: Vec<ConnectionCredentialSlot>,
 }
 
 /// The tenants whose tools this user can call, and therefore the tenants they
@@ -196,58 +217,86 @@ pub async fn credential_slots(
     let mut slots = Vec::with_capacity(tenants.len());
 
     for (tenant_id, tenant_name) in tenants {
-        let auth_mode = client
-            .query_opt(
-                "SELECT auth_mode FROM tenant_downstream_auth WHERE tenant_id = $1",
-                &[&tenant_id],
+        let modes = client
+            .query(
+                "SELECT connection_name, auth_mode FROM tenant_downstream_auth
+                 WHERE tenant_id = $1 AND auth_mode IN ('per_user', 'per_user_oauth')
+                 ORDER BY connection_name <> $2, connection_name",
+                &[&tenant_id, &DEFAULT_CONNECTION],
             )
             .await
-            .to_store_error()?
-            .map(|r| r.get::<_, String>(0))
-            .unwrap_or_default();
-        let per_user = auth_mode == "per_user";
-        let oauth = auth_mode == "per_user_oauth";
+            .to_store_error()?;
 
-        // Scoped to the pasted token on purpose. OAuth stores two rows for the
-        // same (tenant, user) — the refresh token and the current access token —
-        // and an unscoped query_opt errors outright on more than one row, which
-        // would break this panel for everyone in an OAuth workspace.
-        let credential = client
-            .query_opt(
-                "SELECT tenant_id, user_email, kind, label, expires_at,
-                        verified_identity, created_at, updated_at
-                 FROM user_downstream_credentials
-                 WHERE tenant_id = $1 AND user_email = $2 AND kind = 'pat'",
-                &[&tenant_id, &email],
-            )
-            .await
-            .to_store_error()?
-            .map(row_to_summary);
+        let mut connections = Vec::with_capacity(modes.len());
+        for row in modes {
+            let connection: String = row.get(0);
+            let auth_mode: String = row.get(1);
+            connections.push(
+                connection_slot(&client, &tenant_id, &email, connection, &auth_mode).await?,
+            );
+        }
 
-        // The refresh token is what makes a connection durable, so its presence
-        // is what "connected" means. An access token alone expires within the
-        // hour and cannot be renewed.
-        let connected = client
-            .query_opt(
-                "SELECT 1 FROM user_downstream_credentials
-                 WHERE tenant_id = $1 AND user_email = $2 AND kind = 'oauth_refresh'",
-                &[&tenant_id, &email],
-            )
-            .await
-            .to_store_error()?
-            .is_some();
-
+        let default = connections.iter().find(|c| c.connection == DEFAULT_CONNECTION);
         slots.push(TenantCredentialSlot {
+            per_user: default.is_some_and(|c| c.per_user),
+            oauth: default.is_some_and(|c| c.oauth),
+            connected: default.is_some_and(|c| c.connected),
+            credential: default.and_then(|c| c.credential.clone()),
             tenant_id,
             tenant_name,
-            per_user,
-            oauth,
-            connected,
-            credential,
+            connections,
         });
     }
 
     Ok(slots)
+}
+
+/// Where one person stands with one connection.
+async fn connection_slot(
+    client: &tokio_postgres::Client,
+    tenant_id: &str,
+    email: &str,
+    connection: String,
+    auth_mode: &str,
+) -> Result<ConnectionCredentialSlot, StoreError> {
+    let pat = for_connection("pat", &connection);
+    let refresh = for_connection("oauth_refresh", &connection);
+
+    // Scoped to the pasted token on purpose. OAuth stores two rows for the
+    // same person and connection — the refresh token and the current access
+    // token — and an unscoped query_opt errors outright on more than one row.
+    let credential = client
+        .query_opt(
+            "SELECT tenant_id, user_email, kind, label, expires_at,
+                    verified_identity, created_at, updated_at
+             FROM user_downstream_credentials
+             WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
+            &[&tenant_id, &email, &pat],
+        )
+        .await
+        .to_store_error()?
+        .map(row_to_summary);
+
+    // The refresh token is what makes a connection durable, so its presence
+    // is what "connected" means. An access token alone expires within the
+    // hour and cannot be renewed.
+    let connected = client
+        .query_opt(
+            "SELECT 1 FROM user_downstream_credentials
+             WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
+            &[&tenant_id, &email, &refresh],
+        )
+        .await
+        .to_store_error()?
+        .is_some();
+
+    Ok(ConnectionCredentialSlot {
+        connection,
+        per_user: auth_mode == "per_user",
+        oauth: auth_mode == "per_user_oauth",
+        connected,
+        credential,
+    })
 }
 
 /// How many people in this tenant have added a credential.

@@ -28,6 +28,8 @@ const REQUEST_TTL_MINUTES: i64 = 10;
 
 pub struct PendingAuthorization {
     pub tenant_id: String,
+    /// Which of the tenant's connections the tokens are for.
+    pub connection: String,
     pub user_email: String,
     pub code_verifier: String,
 }
@@ -47,6 +49,7 @@ fn random_token() -> String {
 pub async fn start_authorization(
     store: &EndpointStore,
     tenant_id: &str,
+    connection: &str,
     user_email: &str,
 ) -> Result<(String, String), StoreError> {
     let client = store.get_admin_conn().await?;
@@ -67,20 +70,21 @@ pub async fn start_authorization(
     client
         .execute(
             "INSERT INTO downstream_oauth_requests
-                (state, tenant_id, user_email, code_verifier, expires_at)
-             VALUES ($1, $2, $3, $4, $5)",
+                (state, tenant_id, user_email, code_verifier, expires_at, connection_name)
+             VALUES ($1, $2, $3, $4, $5, $6)",
             &[
                 &state,
                 &tenant_id,
                 &user_email.to_lowercase(),
                 &code_verifier,
                 &expires_at,
+                &connection,
             ],
         )
         .await
         .to_store_error()?;
 
-    app_log!(info, tenant_id = %tenant_id, "Started a downstream OAuth authorization");
+    app_log!(info, tenant_id = %tenant_id, connection = %connection, "Started a downstream OAuth authorization");
     Ok((state, code_verifier))
 }
 
@@ -99,7 +103,7 @@ pub async fn redeem_authorization(
         .query_opt(
             "DELETE FROM downstream_oauth_requests
              WHERE state = $1 AND expires_at > NOW()
-             RETURNING tenant_id, user_email, code_verifier",
+             RETURNING tenant_id, user_email, code_verifier, connection_name",
             &[&state],
         )
         .await
@@ -109,5 +113,6 @@ pub async fn redeem_authorization(
         tenant_id: r.get(0),
         user_email: r.get(1),
         code_verifier: r.get(2),
+        connection: r.get(3),
     }))
 }

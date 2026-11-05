@@ -1127,3 +1127,45 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS llm_region VARCHAR;
 -- the visitor's first landing, sent once after their first sign-in. NULL for
 -- accounts from before this column, or when nothing was recorded.
 ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS signup_source JSONB;
+
+-- ── Named downstream connections ────────────────────────────────────────────
+-- A tenant used to have exactly one downstream auth profile, so one customer
+-- whose tools reach two backends with different credentials — Azure Resource
+-- Manager and Log Analytics, say, or an Azure DevOps PAT next to an Entra
+-- sign-in — had to be split across two tenants, with two MCP URLs.
+--
+-- Now a tenant has any number of named connections. The row named 'default'
+-- is the tenant default and is the row every tenant already had, so nothing
+-- existing changes. A tool may name another connection; a tool that names
+-- none uses the default.
+--
+-- Names are short slugs ([a-z0-9][a-z0-9_-]*, at most 40), checked in code.
+ALTER TABLE tenant_downstream_auth
+    ADD COLUMN IF NOT EXISTS connection_name VARCHAR NOT NULL DEFAULT 'default';
+
+DO $$
+BEGIN
+    -- The primary key was tenant_id alone. Widen it once.
+    IF (SELECT count(*) FROM information_schema.key_column_usage k
+          JOIN information_schema.table_constraints c
+            ON c.constraint_name = k.constraint_name AND c.table_name = k.table_name
+         WHERE c.table_name = 'tenant_downstream_auth'
+           AND c.constraint_type = 'PRIMARY KEY') = 1 THEN
+        ALTER TABLE tenant_downstream_auth DROP CONSTRAINT tenant_downstream_auth_pkey;
+        ALTER TABLE tenant_downstream_auth ADD PRIMARY KEY (tenant_id, connection_name);
+    END IF;
+END $$;
+
+-- Which connection a tool authenticates through. NULL → the tenant default.
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS connection_name VARCHAR DEFAULT NULL;
+
+-- Which connection an OAuth authorization in flight is for, so the callback
+-- stores the tokens against it.
+ALTER TABLE downstream_oauth_requests
+    ADD COLUMN IF NOT EXISTS connection_name VARCHAR NOT NULL DEFAULT 'default';
+
+-- Per-person secrets for a named connection live in user_downstream_credentials
+-- with the connection appended to the kind: 'pat@arm', 'oauth_refresh@arm',
+-- 'oauth_access@arm'. The default connection keeps the bare kinds, so every
+-- stored credential stays where it is. The kind is also the sealing purpose,
+-- so a secret sealed for one connection does not open as another's.

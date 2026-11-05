@@ -234,6 +234,51 @@ pub async fn upsert_my_mcp_tool_handler(
     }
 }
 
+#[derive(Deserialize)]
+pub struct SetConnectionForCallerRequest {
+    pub email: String,
+    pub tool_names: Vec<String>,
+    /// "" or "default" → the tenant default.
+    #[serde(default)]
+    pub connection: String,
+}
+
+/// PUT /api/user/mcp-tools/connection — point the caller's tools at one of
+/// their tenant's connections.
+pub async fn set_my_tools_connection_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<SetConnectionForCallerRequest>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+
+    let tenant = match caller_tenant(&store, &body.email).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+
+    match crate::endpoint_store::mcp_tools_management::set_tools_connection(
+        &store,
+        &tenant.id,
+        &body.tool_names,
+        &body.connection,
+    )
+    .await
+    {
+        Ok(updated) => HttpResponse::Ok().json(serde_json::json!({"success": true, "updated": updated})),
+        Err(crate::endpoint_store::StoreError::InvalidInput(msg)) => {
+            HttpResponse::BadRequest().json(serde_json::json!({"success":false,"error":msg}))
+        }
+        Err(e) => {
+            app_log!(error, error = %e, "Failed to assign tools to a connection");
+            HttpResponse::InternalServerError()
+                .json(serde_json::json!({"success":false,"error":e.to_string()}))
+        }
+    }
+}
+
 pub async fn delete_my_mcp_tool_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,

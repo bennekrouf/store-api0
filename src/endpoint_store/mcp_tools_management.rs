@@ -5,6 +5,7 @@
 
 use crate::app_log;
 use crate::endpoint_store::db_helpers::ResultExt;
+use crate::endpoint_store::downstream_auth_management::{normalize_connection, DEFAULT_CONNECTION};
 use crate::endpoint_store::{ApiGroupWithEndpoints, EndpointStore, StoreError};
 use crate::infra::secret_box::{self, SecretContext};
 use chrono::Utc;
@@ -42,6 +43,9 @@ pub struct McpTool {
     /// Whether api0's identity headers travel with the call. False for tools
     /// pointed at a third-party API.
     pub forward_identity: bool,
+    /// The tenant connection whose credential this tool's calls carry.
+    /// None → the tenant's default connection.
+    pub connection: Option<String>,
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -65,6 +69,18 @@ pub struct UpsertMcpToolRequest {
     pub static_headers: Option<serde_json::Value>,
     /// Omitted → true, which keeps every existing first-party tool unchanged.
     pub forward_identity: Option<bool>,
+    /// Which tenant connection the tool authenticates through.
+    /// Omitted → unchanged (the default for a new tool); "" or "default" → the
+    /// tenant default. Omitted means unchanged so that re-importing endpoints
+    /// keeps the connection an owner assigned to an imported tool.
+    #[serde(default)]
+    pub connection: Option<String>,
+}
+
+/// The stored value for a requested connection: NULL for the default.
+fn connection_column(requested: &str) -> Result<Option<String>, StoreError> {
+    let name = normalize_connection(Some(requested))?;
+    Ok(if name == DEFAULT_CONNECTION { None } else { Some(name) })
 }
 
 pub async fn upsert_mcp_tool(
@@ -99,6 +115,12 @@ pub async fn upsert_mcp_tool(
     };
     let no_headers: Option<serde_json::Value> = None;
 
+    let connection_given = req.connection.is_some();
+    let connection = match req.connection.as_deref() {
+        Some(c) => connection_column(c)?,
+        None => None,
+    };
+
     // A body template that is not valid JSON would only fail later, inside the
     // gateway, on a call the caller can no longer connect to this write.
     if let Some(raw) = req.body_template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -116,9 +138,10 @@ pub async fn upsert_mcp_tool(
                 (id, tenant_id, tool_name, backend_url, description,
                  input_schema, cost_credits, timeout_ms, http_verb,
                  content_type, body_template, static_headers, forward_identity,
-                 is_active, created_at, updated_at, static_headers_enc)
+                 is_active, created_at, updated_at, static_headers_enc,
+                 connection_name)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                     true, $14, $14, $15)
+                     true, $14, $14, $15, $16)
              ON CONFLICT (tenant_id, tool_name) DO UPDATE SET
                 backend_url      = EXCLUDED.backend_url,
                 description      = EXCLUDED.description,
@@ -131,6 +154,8 @@ pub async fn upsert_mcp_tool(
                 static_headers     = EXCLUDED.static_headers,
                 static_headers_enc = EXCLUDED.static_headers_enc,
                 forward_identity = EXCLUDED.forward_identity,
+                connection_name  = CASE WHEN $17 THEN EXCLUDED.connection_name
+                                        ELSE mcp_tools.connection_name END,
                 is_active        = true,
                 -- A write here is a hand registration unless the import sync
                 -- marks it right after (see sync_endpoints_as_mcp_tools).
@@ -139,7 +164,8 @@ pub async fn upsert_mcp_tool(
              RETURNING id, tenant_id, tool_name, backend_url, description,
                        input_schema, cost_credits, timeout_ms, http_verb,
                        content_type, body_template, static_headers,
-                       forward_identity, is_active, created_at, updated_at",
+                       forward_identity, is_active, created_at, updated_at,
+                       NULL::bytea, connection_name",
             &[
                 &id as &(dyn tokio_postgres::types::ToSql + Sync),
                 &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
@@ -156,6 +182,8 @@ pub async fn upsert_mcp_tool(
                 &forward_identity as &(dyn tokio_postgres::types::ToSql + Sync),
                 &now as &(dyn tokio_postgres::types::ToSql + Sync),
                 &static_headers_enc as &(dyn tokio_postgres::types::ToSql + Sync),
+                &connection as &(dyn tokio_postgres::types::ToSql + Sync),
+                &connection_given as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -188,7 +216,7 @@ pub async fn list_mcp_tools(
                     input_schema, cost_credits, timeout_ms, http_verb,
                     content_type, body_template, static_headers,
                     forward_identity, is_active, created_at, updated_at,
-                    static_headers_enc
+                    static_headers_enc, connection_name
              FROM mcp_tools
              WHERE tenant_id = $1 AND is_active = true
              ORDER BY tool_name",
@@ -297,6 +325,7 @@ pub async fn list_mcp_tools(
             body_template,
             static_headers: None,
             forward_identity: forward_identity.unwrap_or(true),
+            connection: None,
             is_active: true,
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
@@ -324,7 +353,7 @@ pub async fn get_mcp_tool(
                     input_schema, cost_credits, timeout_ms, http_verb,
                     content_type, body_template, static_headers,
                     forward_identity, is_active, created_at, updated_at,
-                    static_headers_enc
+                    static_headers_enc, connection_name
              FROM mcp_tools
              WHERE tenant_id = $1 AND tool_name = $2 AND is_active = true",
             &[&tenant_id, &tool_name],
@@ -419,6 +448,7 @@ pub async fn get_mcp_tool(
                 body_template,
                 static_headers: None,
                 forward_identity: forward_identity.unwrap_or(true),
+                connection: None,
                 is_active: true,
                 created_at: Utc::now().to_rfc3339(),
                 updated_at: Utc::now().to_rfc3339(),
@@ -446,6 +476,36 @@ pub async fn delete_mcp_tool(
         .to_store_error()?;
 
     Ok(n > 0)
+}
+
+/// Point some of a tenant's tools at a connection, changing nothing else.
+///
+/// Separate from the upsert because an imported tool re-registered through the
+/// upsert becomes a hand-registered one, which the next import no longer
+/// manages. Assigning a connection must not have that side effect.
+///
+/// `connection` "" or "default" → the tenant default. Returns how many tools
+/// were changed; names that match no active tool are ignored.
+pub async fn set_tools_connection(
+    store: &EndpointStore,
+    tenant_id: &str,
+    tool_names: &[String],
+    connection: &str,
+) -> Result<u64, StoreError> {
+    let connection = connection_column(connection)?;
+    let client = store.get_conn(Some(tenant_id)).await?;
+
+    let n = client
+        .execute(
+            "UPDATE mcp_tools SET connection_name = $3, updated_at = NOW()
+             WHERE tenant_id = $1 AND tool_name = ANY($2) AND is_active",
+            &[&tenant_id, &tool_names, &connection],
+        )
+        .await
+        .to_store_error()?;
+
+    app_log!(info, tenant_id = %tenant_id, connection = ?connection, tools = n, "Assigned tools to a connection");
+    Ok(n)
 }
 
 // ── Sync: imported endpoints → mcp_tools ─────────────────────────────────────
@@ -520,6 +580,9 @@ pub async fn sync_endpoints_as_mcp_tools(
                 static_headers: None,
                 // NULL means true — the historical behaviour for first-party backends.
                 forward_identity: Some(endpoint.forward_identity.unwrap_or(true)),
+                // Left as it is: an owner may have pointed this imported tool at
+                // a connection, and re-importing must not undo that.
+                connection: None,
             };
 
             match upsert_mcp_tool(store, tenant_id, &req).await {
@@ -751,6 +814,7 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .or_else(|| row.get::<_, Option<serde_json::Value>>(11)),
         forward_identity: row.get(12),
+        connection:       row.try_get::<_, Option<String>>(17).ok().flatten(),
         is_active:        row.get(13),
         created_at:       row.get::<_, chrono::DateTime<Utc>>(14).to_rfc3339(),
         updated_at:       row.get::<_, chrono::DateTime<Utc>>(15).to_rfc3339(),

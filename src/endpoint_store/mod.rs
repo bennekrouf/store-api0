@@ -550,7 +550,12 @@ impl EndpointStore {
         &self,
         tenant_id: &str,
     ) -> Result<Option<downstream_auth_management::TenantDownstreamAuth>, StoreError> {
-        downstream_auth_management::get_downstream_auth(self, tenant_id).await
+        downstream_auth_management::get_downstream_auth(
+            self,
+            tenant_id,
+            downstream_auth_management::DEFAULT_CONNECTION,
+        )
+        .await
     }
 
     #[allow(dead_code)]

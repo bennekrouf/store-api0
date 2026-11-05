@@ -263,7 +263,10 @@ pub async fn tenants_overview(
                  -- Who pays for its paid tools (payment::tenant_billing).
                  t.billing_mode
              FROM tenants t
-             LEFT JOIN tenant_downstream_auth d ON d.tenant_id = t.id
+             -- The default connection only: a tenant with named connections
+             -- would otherwise appear once per connection.
+             LEFT JOIN tenant_downstream_auth d
+                    ON d.tenant_id = t.id AND d.connection_name = 'default'
              ORDER BY lower(t.name), t.id",
             &[],
         )
