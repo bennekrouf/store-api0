@@ -313,6 +313,159 @@ impl PaymentService {
     }
 }
 
+// ── Workspace plans (payment::workspace_plans) ───────────────────────────────
+// Kept apart from the app plans' calls above so those stay exactly as they are.
+
+impl PaymentService {
+    /// A Checkout page for a workspace plan: the plan's price once, and its
+    /// seat price for each seat past those included (left out at 0: Stripe
+    /// refuses a line of quantity 0; the seat item is added when it is needed).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_workspace_checkout(
+        &self,
+        lines: &[(String, u64)],
+        customer: Option<&str>,
+        email: &str,
+        success_url: &str,
+        cancel_url: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<CheckoutSession> {
+        let mut params = CreateCheckoutSession::new();
+        params.mode = Some(CheckoutSessionMode::Subscription);
+        params.success_url = Some(success_url);
+        params.cancel_url = Some(cancel_url);
+        let customer_id = customer.map(|c| c.parse::<CustomerId>()).transpose()?;
+        match customer_id {
+            Some(id) => params.customer = Some(id),
+            None => params.customer_email = Some(email),
+        }
+        params.line_items = Some(
+            lines
+                .iter()
+                .filter(|(_, qty)| *qty > 0)
+                .map(|(price, qty)| CreateCheckoutSessionLineItems {
+                    price: Some(price.clone()),
+                    quantity: Some(*qty),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        params.locale = match metadata.get("locale").map(String::as_str) {
+            Some("fr") => Some(CheckoutSessionLocale::Fr),
+            Some("en") => Some(CheckoutSessionLocale::En),
+            _ => Some(CheckoutSessionLocale::Auto),
+        };
+        params.metadata = Some(metadata.clone());
+        params.subscription_data = Some(CreateCheckoutSessionSubscriptionData {
+            metadata: Some(metadata),
+            ..Default::default()
+        });
+        params.allow_promotion_codes = Some(true);
+        // Companies need their VAT number on the invoice. With an earlier
+        // customer, Stripe then needs leave to save the name and address typed.
+        params.tax_id_collection = Some(stripe::CreateCheckoutSessionTaxIdCollection { enabled: true });
+        params.customer_update = customer.map(|_| stripe::CreateCheckoutSessionCustomerUpdate {
+            address: Some(stripe::CreateCheckoutSessionCustomerUpdateAddress::Auto),
+            name: Some(stripe::CreateCheckoutSessionCustomerUpdateName::Auto),
+            ..Default::default()
+        });
+        if std::env::var("STRIPE_AUTOMATIC_TAX").as_deref() == Ok("true") {
+            params.automatic_tax = Some(CreateCheckoutSessionAutomaticTax {
+                enabled: true,
+                ..Default::default()
+            });
+        }
+        Ok(CheckoutSession::create(&self.client, params).await?)
+    }
+
+    /// Changes a subscription's items, prorated: each price in `wanted` gets
+    /// its quantity (added when missing, removed at 0), and each item on a
+    /// price in `drop` is removed. A plan switch drops the old plan's prices
+    /// and wants the new one's.
+    pub async fn set_subscription_items(
+        &self,
+        subscription_id: &str,
+        wanted: &[(String, u64)],
+        drop: &[String],
+    ) -> Result<Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        let current = Subscription::retrieve(&self.client, &id, &[]).await?;
+        let mut items: Vec<UpdateSubscriptionItems> = Vec::new();
+        for item in &current.items.data {
+            let price = item.price.as_ref().map(|p| p.id.to_string()).unwrap_or_default();
+            if let Some((_, qty)) = wanted.iter().find(|(p, _)| *p == price) {
+                items.push(if *qty == 0 {
+                    UpdateSubscriptionItems { id: Some(item.id.to_string()), deleted: Some(true), ..Default::default() }
+                } else {
+                    UpdateSubscriptionItems { id: Some(item.id.to_string()), quantity: Some(*qty), ..Default::default() }
+                });
+            } else if drop.contains(&price) {
+                items.push(UpdateSubscriptionItems { id: Some(item.id.to_string()), deleted: Some(true), ..Default::default() });
+            }
+        }
+        for (price, qty) in wanted {
+            let present = current.items.data.iter().any(|i| i.price.as_ref().map(|p| p.id.as_str()) == Some(price.as_str()));
+            if !present && *qty > 0 {
+                items.push(UpdateSubscriptionItems { price: Some(price.clone()), quantity: Some(*qty), ..Default::default() });
+            }
+        }
+        if items.is_empty() {
+            return Ok(current);
+        }
+        let params = UpdateSubscription {
+            items: Some(items),
+            proration_behavior: Some(stripe::generated::billing::subscription::SubscriptionProrationBehavior::CreateProrations),
+            ..Default::default()
+        };
+        Ok(Subscription::update(&self.client, &id, params).await?)
+    }
+
+    /// Adds a line to a draft invoice: a workspace's overage for the month
+    /// that just ended. VAT-inclusive, as the plan prices are.
+    pub async fn add_invoice_item(
+        &self,
+        customer_id: &str,
+        invoice_id: &str,
+        amount_cents: i64,
+        currency: &str,
+        description: &str,
+    ) -> Result<()> {
+        let form = serde_json::json!({
+            "customer": customer_id,
+            "invoice": invoice_id,
+            "amount": amount_cents,
+            "currency": currency,
+            "description": description,
+            "tax_behavior": "inclusive",
+            "metadata": { "purpose": "workspace_overage" },
+        });
+        let _: serde_json::Value = self.client.post_form("/invoiceitems", form).await?;
+        Ok(())
+    }
+
+    /// The customer portal for workspace plans: card, invoices, VAT number and
+    /// cancelling. No plan switching there: a switch must move the seat price
+    /// too, which the dashboard does (workspace_plans::change).
+    pub async fn save_workspace_portal_configuration(&self, existing: Option<&str>) -> Result<String> {
+        let form = serde_json::json!({
+            "business_profile": { "headline": "Manage your api0 workspace plan" },
+            "features": {
+                "invoice_history": { "enabled": true },
+                "payment_method_update": { "enabled": true },
+                "customer_update": { "enabled": true, "allowed_updates": ["address", "name", "tax_id", "email"] },
+                "subscription_cancel": { "enabled": true, "mode": "at_period_end" },
+                "subscription_update": { "enabled": false },
+            },
+        });
+        let path = match existing {
+            Some(id) => format!("/billing_portal/configurations/{}", id),
+            None => "/billing_portal/configurations".to_string(),
+        };
+        let saved: BillingPortalConfiguration = self.client.post_form(&path, form).await?;
+        Ok(saved.id.to_string())
+    }
+}
+
 /// The customer portal's settings, as Stripe's form body takes them.
 fn portal_form(plans: &[(String, String)]) -> serde_json::Value {
     let products: Vec<_> = plans

@@ -26,6 +26,7 @@ use crate::middleware::internal_secret::require_internal_secret;
 use crate::payment::service::PaymentService;
 use crate::payment::subscription;
 use crate::payment::topup::{self, TopUp, TopUpError};
+use crate::payment::workspace_plans;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
@@ -111,6 +112,8 @@ pub async fn stripe_webhook_handler(
         "customer.subscription.created" | "customer.subscription.updated" | "customer.subscription.deleted" => {
             on_subscription_changed(&store, &payment_service, object_id).await
         }
+        // A workspace plan's renewal, still a draft: its overage goes on it.
+        "invoice.created" => workspace_plans::on_invoice_created(&store, &payment_service, object).await,
         _ => false,
     };
 
@@ -174,7 +177,24 @@ async fn on_checkout_completed(store: &Arc<EndpointStore>, stripe: &PaymentServi
 /// Returns whether Stripe should retry. A subscription that is not a plan
 /// subscription is skipped inside sync, and counts as handled.
 async fn on_subscription_changed(store: &Arc<EndpointStore>, stripe: &PaymentService, subscription_id: &str) -> bool {
-    match subscription::sync_by_id(store, stripe, subscription_id).await {
+    let sub = match stripe.retrieve_subscription(subscription_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: could not fetch the subscription");
+            return true;
+        }
+    };
+    // Each skips the other's: app plans are purpose "plan", workspace plans "workspace_plan".
+    if workspace_plans::is_workspace_subscription(&sub) {
+        return match workspace_plans::sync_subscription(store, &sub).await {
+            Ok(()) => false,
+            Err(e) => {
+                app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: workspace subscription could not be synced");
+                true
+            }
+        };
+    }
+    match subscription::sync_subscription(store, &sub).await {
         Ok(()) => false,
         Err(e) => {
             app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: plan subscription could not be synced");

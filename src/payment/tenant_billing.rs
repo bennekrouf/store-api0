@@ -3,8 +3,10 @@
 // Who pays for a tenant's paid tools (mcp_tools.cost_credits). Each tenant picks
 // one way, tenants.billing_mode, and only that one is ever read or charged:
 //
-//   tenant  the tenant's balance (tenants.credit_balance, filled by top-ups)
-//           pays for every call made with its keys, whoever makes it.
+//   tenant  the tenant pays for every call made with its keys, whoever makes
+//           it: its workspace plan's allowance first, then overage when the
+//           plan prices it (payment::workspace_plans), else its balance
+//           (tenants.credit_balance, filled by top-ups).
 //   user    the person calling pays from their own plan's monthly credits
 //           (payment::subscription). The tenant's balance is never touched, and
 //           someone without a live plan cannot run paid tools.
@@ -32,6 +34,7 @@ use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::middleware::service_key::Caller;
 use crate::payment::spend::{self, SpendRequest};
+use crate::payment::workspace_plans;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -81,7 +84,10 @@ pub async fn billing_mode(store: &EndpointStore, tenant_id: &str) -> Result<Bill
 pub async fn available(store: &EndpointStore, tenant_id: &str, email: &str) -> Result<(BillingMode, i64), String> {
     let mode = billing_mode(store, tenant_id).await?;
     let credits = match mode {
-        BillingMode::Tenant => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?,
+        BillingMode::Tenant => match workspace_plans::available(store, tenant_id).await? {
+            Some(with_plan) => with_plan,
+            None => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?,
+        },
         BillingMode::User => spend::plan_credits_left_for(store, email).await?,
     };
     Ok((mode, credits))
@@ -100,11 +106,25 @@ pub async fn charge(
     let mode = billing_mode(store, tenant_id).await?;
     match mode {
         BillingMode::Tenant => {
-            let after = store
-                .update_credit_balance(tenant_id, email, -amount, action_type, description)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok((mode, amount, after))
+            // A workspace plan pays first: its allowance, then overage when priced.
+            let rest = match workspace_plans::take(store, tenant_id, amount).await? {
+                Some(taken) => {
+                    app_log!(info, tenant_id = %tenant_id, email = %email, action = %action_type,
+                        from_plan = taken.from_plan, overage = taken.overage, rest = taken.rest, "Workspace plan charged");
+                    taken.rest
+                }
+                None => amount,
+            };
+            let after = if rest > 0 {
+                store
+                    .update_credit_balance(tenant_id, email, -rest, action_type, description)
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?
+            };
+            let left = workspace_plans::available(store, tenant_id).await?.unwrap_or(after);
+            Ok((mode, amount, left))
         }
         BillingMode::User => {
             let email = email.trim().to_lowercase();
@@ -168,6 +188,18 @@ pub async fn spend_strict(
 ) -> Result<StrictSpend, String> {
     match mode {
         BillingMode::Tenant => {
+            // A workspace plan pays first; what it leaves (no priced overage,
+            // allowance spent) comes from the balance below, or nothing is taken.
+            let plan_taken = workspace_plans::take(store, tenant_id, amount).await?;
+            let amount = match &plan_taken {
+                Some(t) if t.rest == 0 => {
+                    let available = workspace_plans::available(store, tenant_id).await?.unwrap_or(0);
+                    return Ok(StrictSpend::Paid { from_plan: t.from_plan + t.overage, from_balance: 0, available });
+                }
+                Some(t) => t.rest,
+                None => amount,
+            };
+            let from_plan = plan_taken.as_ref().map(|t| t.from_plan + t.overage).unwrap_or(0);
             let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
             // Checked and taken in one statement, so two charges at once cannot
             // both spend the same credits.
@@ -180,8 +212,16 @@ pub async fn spend_strict(
                 .await
                 .map_err(|e| e.to_string())?;
             let Some(row) = row else {
-                let balance = store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?;
-                return Ok(StrictSpend::Short { available: balance.max(0) });
+                if let Some(taken) = &plan_taken {
+                    if let Err(e) = workspace_plans::give_back(store, taken).await {
+                        app_log!(error, error = %e, tenant_id = %tenant_id, "Could not give credits back to a workspace plan");
+                    }
+                }
+                let available = match workspace_plans::available(store, tenant_id).await? {
+                    Some(a) => a,
+                    None => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?.max(0),
+                };
+                return Ok(StrictSpend::Short { available });
             };
             let after: i64 = row.get(0);
             let description = description.map(str::to_string);
@@ -195,7 +235,8 @@ pub async fn spend_strict(
             {
                 app_log!(error, error = %e, tenant_id = %tenant_id, email = %email, "Failed to record a workspace charge");
             }
-            Ok(StrictSpend::Paid { from_plan: 0, from_balance: amount, available: after })
+            let available = workspace_plans::available(store, tenant_id).await?.unwrap_or(after);
+            Ok(StrictSpend::Paid { from_plan, from_balance: amount, available })
         }
         BillingMode::User => {
             let email = email.trim().to_lowercase();
