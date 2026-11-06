@@ -348,7 +348,16 @@ pub async fn save_downstream_auth(
                 custom_headers_enc       = EXCLUDED.custom_headers_enc,
                 oauth_token_url          = EXCLUDED.oauth_token_url,
                 oauth_client_id          = EXCLUDED.oauth_client_id,
-                oauth_client_secret_enc  = EXCLUDED.oauth_client_secret_enc,
+                -- An empty secret on an OAuth-to-OAuth save means keep the one
+                -- already stored: the dashboard cannot show it back, so an edit that
+                -- only fixes the client ID must not erase it.
+                oauth_client_secret_enc  = CASE
+                    WHEN EXCLUDED.oauth_client_secret_enc IS NULL
+                     AND EXCLUDED.auth_mode IN ('per_user_oauth', 'client_credentials')
+                     AND tenant_downstream_auth.auth_mode IN ('per_user_oauth', 'client_credentials')
+                    THEN tenant_downstream_auth.oauth_client_secret_enc
+                    ELSE EXCLUDED.oauth_client_secret_enc
+                END,
                 oauth_scope              = EXCLUDED.oauth_scope,
                 oauth_client_auth_style  = EXCLUDED.oauth_client_auth_style,
                 oauth_authorize_url      = EXCLUDED.oauth_authorize_url
