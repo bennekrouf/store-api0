@@ -334,11 +334,9 @@ impl EndpointStore {
             tenant_id = user_tenant_row.map(|r| r.get(0));
         }
         
-        // Convert metadata to JSON string for storage
-        let metadata_json = request
-            .metadata
-            .as_ref()
-            .and_then(|m| serde_json::to_string(m).ok());
+        // metadata is a JSONB column: bind it as a JSON value. A String bound to
+        // $18::jsonb fails to serialize, which made every insert here fail.
+        let metadata_json: Option<serde_json::Value> = request.metadata.clone();
 
         client
         .execute(
@@ -407,9 +405,7 @@ impl EndpointStore {
 
         let mut logs = Vec::new();
         for row in rows {
-            // Get metadata as string first, then parse to JSON
-            let metadata_str: Option<String> = row.get(17);
-            let metadata: Option<serde_json::Value> = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+            let metadata: Option<serde_json::Value> = row.get(17);
 
             logs.push(ApiUsageLog {
                 id: row.get(0),
