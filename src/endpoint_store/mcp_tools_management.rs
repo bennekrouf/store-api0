@@ -46,6 +46,9 @@ pub struct McpTool {
     /// The tenant connection whose credential this tool's calls carry.
     /// None → the tenant's default connection.
     pub connection: Option<String>,
+    /// The fields of a JSON answer the gateway hands back, by key name at any
+    /// depth. None → the whole answer (gateway: api/tool_result.rs).
+    pub response_fields: Option<Vec<String>>,
     pub is_active: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -75,6 +78,9 @@ pub struct UpsertMcpToolRequest {
     /// keeps the connection an owner assigned to an imported tool.
     #[serde(default)]
     pub connection: Option<String>,
+    /// Fields of the answer to keep. Omitted or empty → the whole answer.
+    #[serde(default)]
+    pub response_fields: Option<Vec<String>>,
 }
 
 /// The stored value for a requested connection: NULL for the default.
@@ -116,6 +122,7 @@ pub async fn upsert_mcp_tool(
     let no_headers: Option<serde_json::Value> = None;
 
     let connection_given = req.connection.is_some();
+    let response_fields = clean_response_fields(req.response_fields.as_deref());
     let connection = match req.connection.as_deref() {
         Some(c) => connection_column(c)?,
         None => None,
@@ -139,9 +146,9 @@ pub async fn upsert_mcp_tool(
                  input_schema, cost_credits, timeout_ms, http_verb,
                  content_type, body_template, static_headers, forward_identity,
                  is_active, created_at, updated_at, static_headers_enc,
-                 connection_name)
+                 connection_name, response_fields)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                     true, $14, $14, $15, $16)
+                     true, $14, $14, $15, $16, $18)
              ON CONFLICT (tenant_id, tool_name) DO UPDATE SET
                 backend_url      = EXCLUDED.backend_url,
                 description      = EXCLUDED.description,
@@ -154,6 +161,7 @@ pub async fn upsert_mcp_tool(
                 static_headers     = EXCLUDED.static_headers,
                 static_headers_enc = EXCLUDED.static_headers_enc,
                 forward_identity = EXCLUDED.forward_identity,
+                response_fields  = EXCLUDED.response_fields,
                 connection_name  = CASE WHEN $17 THEN EXCLUDED.connection_name
                                         ELSE mcp_tools.connection_name END,
                 is_active        = true,
@@ -165,7 +173,7 @@ pub async fn upsert_mcp_tool(
                        input_schema, cost_credits, timeout_ms, http_verb,
                        content_type, body_template, static_headers,
                        forward_identity, is_active, created_at, updated_at,
-                       NULL::bytea, connection_name",
+                       NULL::bytea, connection_name, response_fields",
             &[
                 &id as &(dyn tokio_postgres::types::ToSql + Sync),
                 &tenant_id as &(dyn tokio_postgres::types::ToSql + Sync),
@@ -184,6 +192,7 @@ pub async fn upsert_mcp_tool(
                 &static_headers_enc as &(dyn tokio_postgres::types::ToSql + Sync),
                 &connection as &(dyn tokio_postgres::types::ToSql + Sync),
                 &connection_given as &(dyn tokio_postgres::types::ToSql + Sync),
+                &response_fields as &(dyn tokio_postgres::types::ToSql + Sync),
             ],
         )
         .await
@@ -216,7 +225,7 @@ pub async fn list_mcp_tools(
                     input_schema, cost_credits, timeout_ms, http_verb,
                     content_type, body_template, static_headers,
                     forward_identity, is_active, created_at, updated_at,
-                    static_headers_enc, connection_name
+                    static_headers_enc, connection_name, response_fields
              FROM mcp_tools
              WHERE tenant_id = $1 AND is_active = true
              ORDER BY tool_name",
@@ -242,7 +251,7 @@ pub async fn list_mcp_tools(
     let endpoint_rows = client
         .query(
             "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id,
-                    e.content_type, e.body_template, e.forward_identity
+                    e.content_type, e.body_template, e.forward_identity, e.response_fields
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
@@ -266,6 +275,7 @@ pub async fn list_mcp_tools(
         let content_type: Option<String> = row.get(9);
         let body_template: Option<String> = row.get(10);
         let forward_identity: Option<bool> = row.get(11);
+        let response_fields: Option<Vec<String>> = row.get(12);
 
         let raw_name = format!("{} {}", group_name, endpoint_text);
         let tool_name = slugify(&raw_name);
@@ -326,6 +336,7 @@ pub async fn list_mcp_tools(
             static_headers: None,
             forward_identity: forward_identity.unwrap_or(true),
             connection: None,
+            response_fields: clean_response_fields(response_fields.as_deref()),
             is_active: true,
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
@@ -353,7 +364,7 @@ pub async fn get_mcp_tool(
                     input_schema, cost_credits, timeout_ms, http_verb,
                     content_type, body_template, static_headers,
                     forward_identity, is_active, created_at, updated_at,
-                    static_headers_enc, connection_name
+                    static_headers_enc, connection_name, response_fields
              FROM mcp_tools
              WHERE tenant_id = $1 AND tool_name = $2 AND is_active = true",
             &[&tenant_id, &tool_name],
@@ -380,7 +391,7 @@ pub async fn get_mcp_tool(
     let endpoint_rows = client
         .query(
             "SELECT g.name, e.text, e.description, e.suggested_sentence, e.verb, e.base, g.base, e.path, e.id,
-                    e.content_type, e.body_template, e.forward_identity
+                    e.content_type, e.body_template, e.forward_identity, e.response_fields
              FROM api_groups g
              JOIN endpoints e ON g.id = e.group_id
              WHERE g.tenant_id = $1",
@@ -405,6 +416,7 @@ pub async fn get_mcp_tool(
             let content_type: Option<String> = row.get(9);
             let body_template: Option<String> = row.get(10);
             let forward_identity: Option<bool> = row.get(11);
+            let response_fields: Option<Vec<String>> = row.get(12);
 
             let base = if e_base.is_empty() { &g_base } else { &e_base };
             let backend_url = format!("{}{}", base.trim_end_matches('/'), path);
@@ -449,6 +461,7 @@ pub async fn get_mcp_tool(
                 static_headers: None,
                 forward_identity: forward_identity.unwrap_or(true),
                 connection: None,
+                response_fields: clean_response_fields(response_fields.as_deref()),
                 is_active: true,
                 created_at: Utc::now().to_rfc3339(),
                 updated_at: Utc::now().to_rfc3339(),
@@ -583,6 +596,7 @@ pub async fn sync_endpoints_as_mcp_tools(
                 // Left as it is: an owner may have pointed this imported tool at
                 // a connection, and re-importing must not undo that.
                 connection: None,
+                response_fields: endpoint.response_fields.clone(),
             };
 
             match upsert_mcp_tool(store, tenant_id, &req).await {
@@ -783,6 +797,18 @@ fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> St
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+/// Response fields as stored: trimmed, without blanks or repeats, and None
+/// rather than an empty list, which would keep nothing at all.
+pub(crate) fn clean_response_fields(fields: Option<&[String]>) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for f in fields.unwrap_or_default().iter().map(|f| f.trim()).filter(|f| !f.is_empty()) {
+        if !out.iter().any(|o| o == f) {
+            out.push(f.to_string());
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
     // cost_credits is INTEGER NOT NULL in the DB (explicit tools always have a value).
     // Wrap in Some so the gateway can distinguish "has api0 billing" (Some) from
@@ -813,6 +839,7 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
             .or_else(|| row.get::<_, Option<serde_json::Value>>(11)),
         forward_identity: row.get(12),
         connection:       row.try_get::<_, Option<String>>(17).ok().flatten(),
+        response_fields:  row.try_get::<_, Option<Vec<String>>>(18).ok().flatten(),
         is_active:        row.get(13),
         created_at:       row.get::<_, chrono::DateTime<Utc>>(14).to_rfc3339(),
         updated_at:       row.get::<_, chrono::DateTime<Utc>>(15).to_rfc3339(),
@@ -823,6 +850,14 @@ fn row_to_tool(row: tokio_postgres::Row) -> McpTool {
 mod tests {
     use super::*;
     use crate::endpoint_store::models::Parameter;
+
+    #[test]
+    fn response_fields_are_cleaned_and_an_empty_list_keeps_everything() {
+        let given = vec![" name ".to_string(), "".into(), "name".into(), "id".into()];
+        assert_eq!(clean_response_fields(Some(&given)), Some(vec!["name".to_string(), "id".to_string()]));
+        assert_eq!(clean_response_fields(Some(&[" ".to_string()])), None);
+        assert_eq!(clean_response_fields(None), None);
+    }
 
     fn param(name: &str, required: bool) -> Parameter {
         Parameter {

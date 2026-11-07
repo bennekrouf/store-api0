@@ -305,6 +305,11 @@ ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS body_template TEXT    DEFAULT NUL
 -- NULL means true: api0's identity headers travel with the call, as they always
 -- have. Set false on anything pointed at a third-party API.
 ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS forward_identity BOOLEAN DEFAULT NULL;
+-- The fields of a JSON answer handed to the AI, by key name at any depth
+-- (api0_types::Endpoint::response_fields). NULL: the whole answer. Copied to
+-- the endpoint's tool, where the gateway applies it.
+ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS response_fields TEXT[] DEFAULT NULL;
+ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS response_fields TEXT[] DEFAULT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_mcp_tools_lookup
     ON mcp_tools(tenant_id, tool_name, is_active);
