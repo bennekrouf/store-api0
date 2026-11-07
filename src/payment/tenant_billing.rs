@@ -83,11 +83,13 @@ pub async fn billing_mode(store: &EndpointStore, tenant_id: &str) -> Result<Bill
 /// A member of a workspace that bills each person pays from their own plan.
 /// Someone who has none gets the free allowance here, the first time it is
 /// needed, rather than at sign-up: an api0 account is not a mayorana customer
-/// until its workspace makes it one. A failure is logged; the read that
-/// follows then finds no credits, and the call is refused as it would be.
-async fn give_member_wallet(store: &EndpointStore, email: &str) {
+/// until its workspace makes it one. `origin` says which: Api0 for a tool call
+/// through the gateway, App for a partner app's charge (cvenom), whose users
+/// are mayorana customers. A failure is logged; the read that follows then
+/// finds no credits, and the call is refused as it would be.
+async fn give_member_wallet(store: &EndpointStore, email: &str, origin: Origin) {
     let given = match store.get_admin_conn().await {
-        Ok(client) => subscription::ensure_free_plan(&client, email, Origin::Api0).await,
+        Ok(client) => subscription::ensure_free_plan(&client, email, origin).await,
         Err(e) => Err(e.to_string()),
     };
     if let Err(e) = given {
@@ -105,7 +107,7 @@ pub async fn available(store: &EndpointStore, tenant_id: &str, email: &str) -> R
             None => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?,
         },
         BillingMode::User => {
-            give_member_wallet(store, email).await;
+            give_member_wallet(store, email, Origin::Api0).await;
             spend::plan_credits_left_for(store, email).await?
         }
     };
@@ -147,7 +149,7 @@ pub async fn charge(
         }
         BillingMode::User => {
             let email = email.trim().to_lowercase();
-            give_member_wallet(store, &email).await;
+            give_member_wallet(store, &email, Origin::Api0).await;
             // Someone can hold a paid plan and the free allowance at once; each
             // take spends one of them, so keep going until the call is paid or
             // nothing is left.
@@ -260,7 +262,10 @@ pub async fn spend_strict(
         }
         BillingMode::User => {
             let email = email.trim().to_lowercase();
-            give_member_wallet(store, &email).await;
+            // Only a partner app's backend spends this way (payment::spend):
+            // its users are app customers, and they belong to its workspace.
+            give_member_wallet(store, &email, Origin::App).await;
+            link_app_user(store, tenant_id, &email).await;
             let left = spend::plan_credits_left_for(store, &email).await?;
             if left < amount {
                 return Ok(StrictSpend::Short { available: left });
@@ -301,6 +306,16 @@ pub async fn spend_strict(
             let left = spend::plan_credits_left_for(store, &email).await?;
             Ok(StrictSpend::Paid { from_plan: amount, from_balance: 0, available: left })
         }
+    }
+}
+
+/// Records someone who uses a partner app as a consumer of the app's workspace,
+/// so its owners see who their users are. Only for an email with an api0
+/// account: tenant_users needs one, and an app customer is not given one just
+/// for this (it would put them on api0's own emails). Best effort, logged.
+async fn link_app_user(store: &EndpointStore, tenant_id: &str, email: &str) {
+    if let Err(e) = crate::endpoint_store::tenant_management::link_consumer_to_tenant(store, email, tenant_id).await {
+        app_log!(warn, error = %e, tenant_id = %tenant_id, email = %email, "Could not record an app user in its workspace");
     }
 }
 
@@ -483,5 +498,72 @@ mod tests {
     fn there_is_no_mode_that_mixes_the_two() {
         assert_eq!(BillingMode::parse("both"), None);
         assert_eq!(BillingMode::parse(""), None);
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+
+    async fn origins(store: &EndpointStore, email: &str) -> Vec<String> {
+        let client = store.get_admin_conn().await.unwrap();
+        client
+            .query("SELECT origin FROM subscriptions WHERE email = $1 ORDER BY created_at", &[&email])
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<_, Option<String>>(0).unwrap_or_default())
+            .collect()
+    }
+
+    async fn role_in(store: &EndpointStore, tenant_id: &str, email: &str) -> Option<String> {
+        let client = store.get_admin_conn().await.unwrap();
+        client
+            .query_opt("SELECT role FROM tenant_users WHERE tenant_id = $1 AND email = $2", &[&tenant_id, &email])
+            .await
+            .unwrap()
+            .map(|r| r.get(0))
+    }
+
+    /// A partner app (cvenom) charging per person: its user gets the free
+    /// allowance as an app licence and shows up in the app's workspace; a tool
+    /// call through the gateway gives the same person nothing more.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn an_app_charge_makes_an_app_customer_and_a_consumer() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let owner = format!("owner_{id}@example.com");
+        let app = get_default_tenant(&store, &owner).await.expect("app workspace");
+        let client = store.get_admin_conn().await.unwrap();
+        client.execute("UPDATE tenants SET billing_mode = 'user' WHERE id = $1", &[&app.id]).await.unwrap();
+
+        // Someone with an api0 account elsewhere, and no plan yet.
+        let user = format!("user_{id}@example.com");
+        let own = get_default_tenant(&store, &user).await.expect("own workspace");
+        assert_ne!(own.id, app.id);
+        assert!(origins(&store, &user).await.is_empty(), "an account alone holds no licence");
+
+        let spent = spend_strict(&store, &app.id, BillingMode::User, &user, 1, "cv", None, "cvenom").await.unwrap();
+        assert!(matches!(spent, StrictSpend::Paid { from_plan: 1, .. }), "{spent:?}");
+        assert_eq!(origins(&store, &user).await, vec!["app".to_string()]);
+        assert_eq!(role_in(&store, &app.id, &user).await.as_deref(), Some("consumer"));
+
+        // A gateway tool call on a per-person workspace finds the licence there.
+        available(&store, &own.id, &user).await.unwrap();
+        assert_eq!(origins(&store, &user).await, vec!["app".to_string()], "no second licence");
+
+        // An app customer with no api0 account still pays; no account is made.
+        let customer = format!("customer_{id}@example.com");
+        let spent = spend_strict(&store, &app.id, BillingMode::User, &customer, 1, "cv", None, "cvenom").await.unwrap();
+        assert!(matches!(spent, StrictSpend::Paid { .. }), "{spent:?}");
+        assert_eq!(origins(&store, &customer).await, vec!["app".to_string()]);
+        assert_eq!(role_in(&store, &app.id, &customer).await, None);
+        let account = client
+            .query_opt("SELECT 1 FROM user_preferences WHERE lower(email) = $1", &[&customer])
+            .await
+            .unwrap();
+        assert!(account.is_none(), "paying in an app makes no api0 account");
     }
 }
