@@ -4,21 +4,27 @@
 // digest, the nudge, the win-back and the "what's new" broadcast. Account
 // emails — welcome, receipts, keys, invites, licences — are not affected.
 //
+// Choices are kept per brand (Brand): api0's emails and mayorana's are two
+// senders to the reader, and saying no to one is not saying no to the other.
+//
 // Each optional email carries a link, and a List-Unsubscribe header, to
-//   <gateway>/api/email/unsubscribe?e=<email>&t=<token>
-// The token is HMAC-SHA256 over the address with a key derived for this one
-// purpose (secret_box::derive_key), so only this store can mint one, and a link
-// works only for the address it was sent to. Visiting the link shows a
+//   <gateway>/api/email/unsubscribe?e=<email>&b=<brand>&t=<token>
+// The token is HMAC-SHA256 over "<address>|<brand>" with a key derived for this
+// one purpose (secret_box::derive_key), so only this store can mint one, and a
+// link works only for the address and brand it was sent for. Links sent before
+// brands, with no `b` and a token over the address alone, still work and
+// change both brands: that is what they promised. Visiting the link shows a
 // confirmation page, because mail scanners follow links on their own; the POST,
 // from that page or from the mail client's one-click button, records the
 // opt-out. The gateway serves those pages and forwards the address and token:
 //
-//   POST /api/internal/email/unsubscribe   { email, token }
-//   POST /api/internal/email/resubscribe   { email, token }
+//   POST /api/internal/email/unsubscribe   { email, token, brand? }
+//   POST /api/internal/email/resubscribe   { email, token, brand? }
 //
 // This is also the one record of who wants mayorana.ch's product emails (tips
 // for the apps, credit reminders, the monthly digest), set from the box on the
-// pricing page. The gateway passes the email of the person signed in:
+// pricing page, so the consent routes are about the mayorana brand. The
+// gateway passes the email of the person signed in:
 //
 //   GET  /api/internal/email/consent/{email}  → { opt_in: true|false|null, receives }
 //   PUT  /api/internal/email/consent          { email, opt_in, source, locale? }
@@ -48,46 +54,85 @@ fn normalise(email: &str) -> String {
     email.trim().to_lowercase()
 }
 
-fn mac_for(email: &str) -> Option<Hmac<Sha256>> {
+/// Who an email comes from, as its reader sees it. A choice is per brand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Brand {
+    /// api0's own emails: digest, nudges, win-back, "what's new".
+    Api0,
+    /// mayorana.ch's: the plan emails and the apps' product news.
+    Mayorana,
+}
+
+impl Brand {
+    pub const ALL: [Brand; 2] = [Brand::Api0, Brand::Mayorana];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Api0 => "api0",
+            Self::Mayorana => "mayorana",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "api0" => Some(Self::Api0),
+            "mayorana" => Some(Self::Mayorana),
+            _ => None,
+        }
+    }
+}
+
+/// The MAC over what a link names: the address and its brand, or the address
+/// alone for links sent before brands.
+fn mac_for(email: &str, brand: Option<Brand>) -> Option<Hmac<Sha256>> {
     let key = secret_box::derive_key(PURPOSE).ok()?;
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).ok()?;
     mac.update(normalise(email).as_bytes());
+    if let Some(brand) = brand {
+        mac.update(b"|");
+        mac.update(brand.as_str().as_bytes());
+    }
     Some(mac)
 }
 
-/// The token for `email`, or None when no encryption key is configured.
-pub fn token(email: &str) -> Option<String> {
-    Some(hex::encode(mac_for(email)?.finalize().into_bytes()))
+/// The token for `email` and `brand`, or None when no encryption key is configured.
+pub fn token(email: &str, brand: Brand) -> Option<String> {
+    Some(hex::encode(mac_for(email, Some(brand))?.finalize().into_bytes()))
 }
 
-/// Whether `token` was minted for `email`. Compared in constant time.
-pub fn verify(email: &str, token: &str) -> bool {
-    let (Some(mac), Ok(given)) = (mac_for(email), hex::decode(token.trim())) else {
+/// Whether `token` was minted for `email` and `brand` (None: an older link,
+/// minted for the address alone). Compared in constant time.
+pub fn verify(email: &str, brand: Option<Brand>, token: &str) -> bool {
+    let (Some(mac), Ok(given)) = (mac_for(email, brand), hex::decode(token.trim())) else {
         return false;
     };
     mac.verify_slice(&given).is_ok()
 }
 
-/// The public unsubscribe URL for `email`, served by the gateway.
-pub fn link(email: &str) -> Option<String> {
+/// The public unsubscribe URL for `email`'s `brand` emails, served by the gateway.
+pub fn link(email: &str, brand: Brand) -> Option<String> {
     let base = std::env::var("API0_PUBLIC_GATEWAY_URL")
         .ok()
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| "https://gateway.api0.ai".to_string());
     Some(format!(
-        "{}/api/email/unsubscribe?e={}&t={}",
+        "{}/api/email/unsubscribe?e={}&b={}&t={}",
         base.trim_end_matches('/'),
         path_segment(&normalise(email)),
-        token(email)?
+        brand.as_str(),
+        token(email, brand)?
     ))
 }
 
-/// Whether `email` opted out of the optional emails. A lookup that fails
+/// Whether `email` opted out of `brand`'s optional emails. A lookup that fails
 /// counts as opted out: skipping an optional email is the safe mistake.
-pub async fn is_opted_out(store: &EndpointStore, email: &str) -> bool {
+pub async fn is_opted_out(store: &EndpointStore, email: &str, brand: Brand) -> bool {
     let Ok(client) = store.get_admin_conn().await else { return true };
     match client
-        .query_opt("SELECT 1 FROM email_opt_outs WHERE email = $1", &[&normalise(email)])
+        .query_opt(
+            "SELECT 1 FROM email_opt_outs WHERE email = $1 AND brand = $2",
+            &[&normalise(email), &brand.as_str()],
+        )
         .await
     {
         Ok(row) => row.is_some(),
@@ -98,15 +143,15 @@ pub async fn is_opted_out(store: &EndpointStore, email: &str) -> bool {
     }
 }
 
-/// The address's own choice: Some(true) opted in, Some(false) opted out, None
-/// not chosen yet.
-pub async fn choice(store: &EndpointStore, email: &str) -> anyhow::Result<Option<bool>> {
+/// The address's own choice for `brand`: Some(true) opted in, Some(false)
+/// opted out, None not chosen yet.
+pub async fn choice(store: &EndpointStore, email: &str, brand: Brand) -> anyhow::Result<Option<bool>> {
     let client = store.get_admin_conn().await?;
     let row = client
         .query_one(
-            "SELECT EXISTS (SELECT 1 FROM email_opt_ins WHERE email = $1), \
-                    EXISTS (SELECT 1 FROM email_opt_outs WHERE email = $1)",
-            &[&normalise(email)],
+            "SELECT EXISTS (SELECT 1 FROM email_opt_ins WHERE email = $1 AND brand = $2), \
+                    EXISTS (SELECT 1 FROM email_opt_outs WHERE email = $1 AND brand = $2)",
+            &[&normalise(email), &brand.as_str()],
         )
         .await?;
     Ok(match (row.get::<_, bool>(0), row.get::<_, bool>(1)) {
@@ -121,10 +166,12 @@ pub fn receives(choice: Option<bool>, bought_plan: bool) -> bool {
     choice.unwrap_or(bought_plan)
 }
 
-/// Records a choice, replacing any earlier one. `source` says where it was made.
+/// Records a choice for each of `brands`, replacing any earlier one. `source`
+/// says where it was made.
 async fn set_choice(
     store: &EndpointStore,
     email: &str,
+    brands: &[Brand],
     opt_in: bool,
     source: &str,
     locale: Option<&str>,
@@ -132,34 +179,35 @@ async fn set_choice(
     let mut client = store.get_admin_conn().await?;
     let email = normalise(email);
     let tx = client.transaction().await?;
-    if opt_in {
-        tx.execute("DELETE FROM email_opt_outs WHERE email = $1", &[&email]).await?;
-        tx.execute(
-            "INSERT INTO email_opt_ins (email, source, locale) VALUES ($1, $2, $3) \
-             ON CONFLICT (email) DO UPDATE SET source = EXCLUDED.source, locale = EXCLUDED.locale, created_at = NOW()",
-            &[&email, &source, &locale],
-        )
-        .await?;
-    } else {
-        tx.execute("DELETE FROM email_opt_ins WHERE email = $1", &[&email]).await?;
-        tx.execute(
-            "INSERT INTO email_opt_outs (email) VALUES ($1) ON CONFLICT (email) DO NOTHING",
-            &[&email],
-        )
-        .await?;
+    for brand in brands.iter().map(|b| b.as_str()) {
+        if opt_in {
+            tx.execute("DELETE FROM email_opt_outs WHERE email = $1 AND brand = $2", &[&email, &brand]).await?;
+            tx.execute(
+                "INSERT INTO email_opt_ins (email, brand, source, locale) VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (email, brand) DO UPDATE SET source = EXCLUDED.source, locale = EXCLUDED.locale, created_at = NOW()",
+                &[&email, &brand, &source, &locale],
+            )
+            .await?;
+        } else {
+            tx.execute("DELETE FROM email_opt_ins WHERE email = $1 AND brand = $2", &[&email, &brand]).await?;
+            tx.execute(
+                "INSERT INTO email_opt_outs (email, brand) VALUES ($1, $2) ON CONFLICT (email, brand) DO NOTHING",
+                &[&email, &brand],
+            )
+            .await?;
+        }
     }
     tx.commit().await?;
     Ok(())
-}
-
-async fn set_opted_out(store: &EndpointStore, email: &str, opted_out: bool) -> anyhow::Result<()> {
-    set_choice(store, email, !opted_out, "email-link", None).await
 }
 
 #[derive(Deserialize)]
 pub struct OptOutRequest {
     pub email: String,
     pub token: String,
+    /// The link's `b`. Absent on links sent before brands: those change both.
+    #[serde(default)]
+    pub brand: Option<String>,
 }
 
 async fn change(
@@ -171,13 +219,26 @@ async fn change(
     if !check_internal_secret(&req) {
         return HttpResponse::Unauthorized().json(serde_json::json!({"success": false, "error": "Unauthorized"}));
     }
-    if !verify(&body.email, &body.token) {
-        return HttpResponse::BadRequest()
-            .json(serde_json::json!({"success": false, "error": "This link is not valid"}));
+    let invalid = || {
+        HttpResponse::BadRequest().json(serde_json::json!({"success": false, "error": "This link is not valid"}))
+    };
+    let brand = match body.brand.as_deref().filter(|b| !b.trim().is_empty()) {
+        Some(b) => match Brand::parse(b) {
+            Some(brand) => Some(brand),
+            None => return invalid(),
+        },
+        None => None,
+    };
+    if !verify(&body.email, brand, &body.token) {
+        return invalid();
     }
-    match set_opted_out(&store, &body.email, opted_out).await {
+    let brands: &[Brand] = match &brand {
+        Some(b) => std::slice::from_ref(b),
+        None => &Brand::ALL,
+    };
+    match set_choice(&store, &body.email, brands, !opted_out, "email-link", None).await {
         Ok(()) => {
-            app_log!(info, opted_out = %opted_out, "Email preference changed");
+            app_log!(info, opted_out = %opted_out, brand = ?brand, "Email preference changed");
             HttpResponse::Ok().json(serde_json::json!({"success": true, "opted_out": opted_out}))
         }
         Err(e) => {
@@ -217,7 +278,7 @@ pub async fn consent_handler(
     }
     let email = normalise(&path.into_inner());
     let (choice, bought) = match (
-        choice(&store, &email).await,
+        choice(&store, &email, Brand::Mayorana).await,
         crate::payment::subscription::has_bought_plan(&store, &email).await,
     ) {
         (Ok(c), Ok(b)) => (c, b),
@@ -256,7 +317,7 @@ pub async fn set_consent_handler(
             .json(serde_json::json!({"success": false, "error": "Unknown source"}));
     }
     let locale = body.locale.as_deref().map(|l| super::Lang::from_tag(Some(l)).tag());
-    if let Err(e) = set_choice(&store, &body.email, body.opt_in, source, locale).await {
+    if let Err(e) = set_choice(&store, &body.email, &[Brand::Mayorana], body.opt_in, source, locale).await {
         return consent_failed(&e.to_string());
     }
     app_log!(info, opt_in = %body.opt_in, source = %source, "Email consent changed");
@@ -276,21 +337,34 @@ mod tests {
     #[test]
     fn a_token_verifies_for_its_own_address_only() {
         secret_box::with_test_key(|| {
-            let t = token("Jane@Example.com").expect("key is set");
-            assert!(verify("jane@example.com", &t), "case and spacing do not matter");
-            assert!(verify(" jane@example.com ", &t));
-            assert!(!verify("john@example.com", &t));
-            assert!(!verify("jane@example.com", "not-hex"));
-            assert!(!verify("jane@example.com", ""));
+            let t = token("Jane@Example.com", Brand::Api0).expect("key is set");
+            assert!(verify("jane@example.com", Some(Brand::Api0), &t), "case and spacing do not matter");
+            assert!(verify(" jane@example.com ", Some(Brand::Api0), &t));
+            assert!(!verify("john@example.com", Some(Brand::Api0), &t));
+            assert!(!verify("jane@example.com", Some(Brand::Api0), "not-hex"));
+            assert!(!verify("jane@example.com", Some(Brand::Api0), ""));
         });
     }
 
     #[test]
-    fn the_link_carries_the_encoded_address_and_its_token() {
+    fn a_token_is_for_one_brand_and_older_links_still_verify() {
         secret_box::with_test_key(|| {
-            let url = link("jane+test@example.com").expect("key is set");
-            let t = token("jane+test@example.com").unwrap();
-            assert!(url.ends_with(&format!("?e=jane%2Btest%40example.com&t={t}")), "{url}");
+            let api0 = token("jane@example.com", Brand::Api0).unwrap();
+            assert!(!verify("jane@example.com", Some(Brand::Mayorana), &api0), "an api0 link cannot opt out of mayorana");
+            assert!(!verify("jane@example.com", None, &api0));
+            // What links looked like before brands: the address alone.
+            let legacy = hex::encode(mac_for("jane@example.com", None).unwrap().finalize().into_bytes());
+            assert!(verify("jane@example.com", None, &legacy));
+            assert!(!verify("jane@example.com", Some(Brand::Api0), &legacy));
+        });
+    }
+
+    #[test]
+    fn the_link_carries_the_encoded_address_its_brand_and_its_token() {
+        secret_box::with_test_key(|| {
+            let url = link("jane+test@example.com", Brand::Mayorana).expect("key is set");
+            let t = token("jane+test@example.com", Brand::Mayorana).unwrap();
+            assert!(url.ends_with(&format!("?e=jane%2Btest%40example.com&b=mayorana&t={t}")), "{url}");
         });
     }
 

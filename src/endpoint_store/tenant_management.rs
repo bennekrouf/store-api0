@@ -166,9 +166,9 @@ async fn get_or_create_personal_tenant_locked(
         )
         .await
         .to_store_error()?;
-        crate::payment::subscription::ensure_free_plan(client, &email)
-            .await
-            .map_err(StoreError::Database)?;
+        // No mayorana licence here: an api0 account is not an app customer.
+        // A workspace that bills each person gives its member the free
+        // allowance the first time a call needs it (payment::tenant_billing).
     }
 
     // No default, but somewhere to be: a workspace they were invited into, else

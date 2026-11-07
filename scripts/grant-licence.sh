@@ -148,10 +148,10 @@ WHERE :'plan' = 'owner'
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, cancel_at_period_end,
                            period_start, period_end, credits_granted, credits_used,
-                           licence, licence_emailed_at, is_free)
+                           licence, licence_emailed_at, is_free, origin)
 VALUES ('grant_' || md5(:'lic'), :'email', :'plan', '', 'active', FALSE,
         NOW(), (:'until')::date + 1, (:'credits')::bigint, 0,
-        :'lic', NOW(), FALSE);
+        :'lic', NOW(), FALSE, 'granted');
 COMMIT;
 SQL
 

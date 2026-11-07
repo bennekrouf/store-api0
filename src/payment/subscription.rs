@@ -90,6 +90,10 @@ pub struct SubscriptionView {
     /// Paid through Stripe, so changed and cancelled on its portal; a plan
     /// granted by hand (scripts/grant-licence.sh) and the free allowance are not.
     pub on_stripe: bool,
+    /// Where the licence came from (Origin): 'api0' when it is only the wallet
+    /// of a member of a workspace that bills each person. NULL never: the
+    /// schema backfills every older row.
+    pub origin: Option<String>,
 }
 
 /// The subscription that counts for `email`: a live one if any, a Stripe plan
@@ -101,7 +105,7 @@ pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<
         "SELECT s.id, s.plan_id, p.name, s.status, \
                 (s.status IN {live} AND s.period_end > NOW()) AS live, \
                 s.cancel_at_period_end, s.period_start, s.period_end, s.credits_granted, s.credits_used, \
-                s.licence, p.products, s.is_free, s.stripe_customer_id <> '' AS on_stripe \
+                s.licence, p.products, s.is_free, s.stripe_customer_id <> '' AS on_stripe, s.origin \
          FROM subscriptions s JOIN plans p ON p.id = s.plan_id \
          WHERE s.email = $1 AND s.status <> 'upgraded' \
          ORDER BY live DESC, s.is_free ASC, on_stripe DESC, s.period_end DESC LIMIT 1",
@@ -126,6 +130,7 @@ pub async fn current_subscription(store: &EndpointStore, email: &str) -> Result<
             products: r.get(11),
             is_free: r.get(12),
             on_stripe: r.get(13),
+            origin: r.get(14),
         }
     }))
 }
@@ -354,8 +359,8 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
     client
         .execute(
             "INSERT INTO subscriptions (id, tenant_id, email, plan_id, stripe_customer_id, status, \
-                                        cancel_at_period_end, period_start, period_end, credits_granted, credits_used, licence, locale) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12) \
+                                        cancel_at_period_end, period_start, period_end, credits_granted, credits_used, licence, locale, origin) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13) \
              ON CONFLICT (id) DO UPDATE SET \
                 licence = COALESCE(subscriptions.licence, EXCLUDED.licence), \
                 locale = COALESCE(EXCLUDED.locale, subscriptions.locale), \
@@ -383,6 +388,7 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
                 &plan.monthly_credits,
                 &new_licence(),
                 &locale,
+                &Origin::Stripe.as_str(),
             ],
         )
         .await
@@ -443,7 +449,7 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
 
     // A plan that ended (or never got paid) falls back to the free allowance.
     if !["active", "trialing"].contains(&sub.status.as_str()) {
-        ensure_free_plan(&client, &email).await?;
+        ensure_free_plan(&client, &email, Origin::Fallback).await?;
     }
 
     // Resumed: a later cancel is confirmed again.
@@ -558,7 +564,10 @@ const FREE_RESEND_AFTER: &str = "1 hour";
 async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &str) -> Result<(), String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let resend_sql = format!(
-        "UPDATE subscriptions SET licence_emailed_at = NOW() \
+        // An api0 member's wallet that an app now asks for is an app licence
+        // too: they use both products.
+        "UPDATE subscriptions SET licence_emailed_at = NOW(), \
+                origin = CASE WHEN origin = 'api0' THEN 'app' ELSE origin END \
          WHERE email = $1 AND is_free AND licence IS NOT NULL \
            AND (licence_emailed_at IS NULL OR licence_emailed_at < NOW() - INTERVAL '{FREE_RESEND_AFTER}') \
          RETURNING licence"
@@ -572,11 +581,11 @@ async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &
     let inserted = client
         .query_opt(
             "INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, period_start, period_end, \
-                                        credits_granted, credits_used, licence, licence_emailed_at, is_free) \
-             VALUES ($1, $2, $3, '', 'active', NOW(), NOW() + INTERVAL '1 month', $4, 0, $5, NOW(), TRUE) \
+                                        credits_granted, credits_used, licence, licence_emailed_at, is_free, origin) \
+             VALUES ($1, $2, $3, '', 'active', NOW(), NOW() + INTERVAL '1 month', $4, 0, $5, NOW(), TRUE, $6) \
              ON CONFLICT DO NOTHING \
              RETURNING licence",
-            &[&id, &email, &plan.id, &plan.monthly_credits, &new_licence()],
+            &[&id, &email, &plan.id, &plan.monthly_credits, &new_licence(), &Origin::App.as_str()],
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -591,13 +600,44 @@ async fn give_free_plan(store: &Arc<EndpointStore>, plan: &plans::Plan, email: &
     Ok(())
 }
 
+/// Where a licence came from, recorded on `subscriptions.origin`. One more
+/// value is written outside this code: 'granted', by scripts/grant-licence.sh. It is what
+/// tells a mayorana customer from an api0 user whose workspace bills each
+/// person: the free allowance is both an app licence and that person's wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// Bought through Stripe Checkout (or moved onto a paid subscription).
+    Stripe,
+    /// An app asked for the free licence (POST /api/plans/free).
+    App,
+    /// Read by someone signed in on mayorana.ch, who got the free allowance then.
+    Mayorana,
+    /// The wallet of a member of an api0 workspace that bills each person
+    /// (payment::tenant_billing), given the first time it was needed.
+    Api0,
+    /// A paid plan ended and fell back to the free allowance.
+    Fallback,
+}
+
+impl Origin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stripe => "stripe",
+            Self::App => "app",
+            Self::Mayorana => "mayorana",
+            Self::Api0 => "api0",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
 /// Nobody is left without a plan: `email` gets the free allowance unless it
 /// already has a live plan or a free licence. The plan priced 0, the active one
 /// first: switching it off the shelf must not leave anyone without one. Made
 /// quietly, not emailed; the
 /// licence goes out the first time an app asks (POST /api/plans/free).
-/// Returns whether one was made.
-pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Result<bool, String> {
+/// Returns whether one was made. `origin` is recorded on it (see Origin).
+pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str, origin: Origin) -> Result<bool, String> {
     let email = email.trim().to_lowercase();
     if !plausible_email(&email) {
         return Ok(false);
@@ -605,8 +645,8 @@ pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Resu
     let id = format!("free_{}", uuid::Uuid::new_v4().simple());
     let sql = format!(
         "INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, period_start, period_end, \
-                                    credits_granted, credits_used, licence, is_free) \
-         SELECT $1::varchar, $2::varchar, p.id, '', 'active', NOW(), NOW() + INTERVAL '1 month', p.monthly_credits, 0, $3::varchar, TRUE \
+                                    credits_granted, credits_used, licence, is_free, origin) \
+         SELECT $1::varchar, $2::varchar, p.id, '', 'active', NOW(), NOW() + INTERVAL '1 month', p.monthly_credits, 0, $3::varchar, TRUE, $4::varchar \
            FROM plans p \
           WHERE p.price_cents = 0 \
             AND NOT EXISTS (SELECT 1 FROM subscriptions s \
@@ -617,7 +657,7 @@ pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Resu
         live = LIVE_STATUSES
     );
     let made = client
-        .execute(sql.as_str(), &[&id, &email, &new_licence()])
+        .execute(sql.as_str(), &[&id, &email, &new_licence(), &origin.as_str()])
         .await
         .map_err(|e| e.to_string())?;
     if made > 0 {
@@ -626,9 +666,12 @@ pub async fn ensure_free_plan<C: GenericClient>(client: &C, email: &str) -> Resu
     Ok(made > 0)
 }
 
-/// At start-up and daily: ensure_free_plan for every account and
-/// every licence holder, so a paid plan that ended without a webhook, or an
-/// account from before this rule, falls back to the free allowance.
+/// At start-up and daily: ensure_free_plan for every licence holder, so a paid
+/// plan that ended without a webhook falls back to the free allowance.
+///
+/// Not for every api0 account any more: an api0 user is not a mayorana
+/// customer. One whose workspace bills each person gets the allowance the
+/// first time a tool call needs it (payment::tenant_billing).
 pub async fn ensure_free_plans(store: &EndpointStore) {
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
@@ -638,8 +681,7 @@ pub async fn ensure_free_plans(store: &EndpointStore) {
         }
     };
     let sql = format!(
-        "SELECT e.email FROM (SELECT lower(email) AS email FROM user_preferences \
-                              UNION SELECT email FROM subscriptions WHERE licence IS NOT NULL) e \
+        "SELECT e.email FROM (SELECT DISTINCT email FROM subscriptions WHERE licence IS NOT NULL) e \
           WHERE NOT EXISTS (SELECT 1 FROM subscriptions s \
                              WHERE s.email = e.email AND s.licence IS NOT NULL \
                                AND (s.is_free OR (s.status IN {live} AND s.period_end > NOW())))",
@@ -668,7 +710,7 @@ pub async fn ensure_free_plans(store: &EndpointStore) {
     }
     let mut given = 0;
     for email in &emails {
-        match ensure_free_plan(&client, email).await {
+        match ensure_free_plan(&client, email, Origin::Fallback).await {
             Ok(true) => given += 1,
             Ok(false) => {}
             Err(e) => app_log!(error, error = %e, email = %email, "Could not give a free plan"),
@@ -1116,27 +1158,36 @@ async fn earlier_customer(store: &EndpointStore, email: &str) -> Option<String> 
         .map(|r| r.get(0))
 }
 
-/// GET /api/plans/subscription/{email}
+#[derive(Deserialize)]
+pub struct SubscriptionQuery {
+    /// Give the free allowance to an email with no plan. Default true.
+    pub grant_free: Option<bool>,
+}
+
+/// GET /api/plans/subscription/{email}?grant_free=
 pub async fn subscription_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
     email: web::Path<String>,
+    query: web::Query<SubscriptionQuery>,
 ) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    // The gateway asks with the email of a verified sign-in (a mayorana.ch
-    // visitor, the dashboard's plan panel). Someone who signed in only on the
-    // site has no api0 account, so neither account creation nor the daily
-    // sweep would ever give them the free allowance: give it here, quietly,
-    // as account creation does. A failure only costs this read the grant.
-    match store.get_admin_conn().await {
-        Ok(client) => {
-            if let Err(e) = ensure_free_plan(&client, &email).await {
-                app_log!(error, error = %e, email = %email, "Could not give a free plan on a subscription read");
+    // The gateway asks with the email of a verified sign-in. A mayorana.ch
+    // visitor gets the free allowance here, quietly: someone who only signed in
+    // on the site would otherwise never get it. The api0 dashboard's plan panel
+    // reads with grant_free=false: looking at Settings does not make an api0
+    // user a mayorana customer. A failure only costs this read the grant.
+    if query.grant_free.unwrap_or(true) {
+        match store.get_admin_conn().await {
+            Ok(client) => {
+                if let Err(e) = ensure_free_plan(&client, &email, Origin::Mayorana).await {
+                    app_log!(error, error = %e, email = %email, "Could not give a free plan on a subscription read");
+                }
             }
+            Err(e) => app_log!(error, error = %e, "Could not give a free plan on a subscription read"),
         }
-        Err(e) => app_log!(error, error = %e, "Could not give a free plan on a subscription read"),
     }
     match current_subscription(&store, &email).await {
         Ok(sub) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription": sub })),

@@ -8,11 +8,17 @@
 // (subscriptions): a subscriber needs no account, so licence holders who never
 // signed in to the dashboard are listed too, with has_account false.
 //
-//   GET /api/admin/users?q=&tenant_id=&role=&licence=&sort=&page=&page_size=
+// Which product they use (`products`): api0 when they have an account;
+// mayorana when they hold a licence that is not only their api0 wallet
+// (subscriptions.origin 'api0': the free allowance of a member of a workspace
+// that bills each person).
+//
+//   GET /api/admin/users?q=&tenant_id=&role=&licence=&product=&sort=&page=&page_size=
 //       q          matches the email or the name of any workspace they are in
 //       tenant_id  only members of that workspace (with `role`, only that role)
 //       role       owner | admin | member | consumer
 //       licence    live (any plan that gives access now) | paid | free | none
+//       product    api0 (only) | mayorana (only) | both
 //       sort       email (default) | last_active | newest
 //       page       1-based; page_size up to 200
 //       export=1   the whole filtered list (up to 10 000) in one page, for a CSV
@@ -38,12 +44,18 @@ const ROLES: &[&str] = &["owner", "admin", "member", "consumer"];
 /// store starts its next month on the next read.
 const LIVE: &str = "s.licence IS NOT NULL AND s.status IN ('active', 'trialing') AND (s.period_end > NOW() OR s.is_free)";
 
+/// Whether the person is a mayorana customer: a licence that is not only an
+/// api0 workspace member's wallet.
+const MAYORANA: &str = "EXISTS (SELECT 1 FROM subscriptions s WHERE s.email = lower(up.email) \
+                         AND s.licence IS NOT NULL AND s.origin IS DISTINCT FROM 'api0')";
+
 #[derive(Debug, Deserialize)]
 pub struct DirectoryQuery {
     pub q: Option<String>,
     pub tenant_id: Option<String>,
     pub role: Option<String>,
     pub licence: Option<String>,
+    pub product: Option<String>,
     pub sort: Option<String>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
@@ -76,6 +88,17 @@ fn licence_filter(licence: &str) -> Option<String> {
     }
 }
 
+/// The WHERE clause for a product filter, None for an unknown one. A whitelist.
+fn product_filter(product: &str) -> Option<String> {
+    match product {
+        "" => Some("TRUE".into()),
+        "api0" => Some(format!("up.has_account AND NOT {MAYORANA}")),
+        "mayorana" => Some(format!("NOT up.has_account AND {MAYORANA}")),
+        "both" => Some(format!("up.has_account AND {MAYORANA}")),
+        _ => None,
+    }
+}
+
 pub async fn list_users(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
@@ -94,6 +117,10 @@ pub async fn list_users(
     let Some(licence_where) = licence_filter(query.licence.as_deref().map(str::trim).unwrap_or("")) else {
         return HttpResponse::BadRequest()
             .json(serde_json::json!({"success": false, "error": "Unknown licence filter"}));
+    };
+    let Some(product_where) = product_filter(query.product.as_deref().map(str::trim).unwrap_or("")) else {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"success": false, "error": "Unknown product filter"}));
     };
     let export = query.export == Some(1);
     let page_size = if export {
@@ -131,7 +158,14 @@ pub async fn list_users(
              up.default_tenant_id,
              up.created_at,
              (SELECT COALESCE(json_agg(json_build_object(
-                        'tenant_id', t.id, 'tenant', t.name, 'role', tu.role)
+                        'tenant_id', t.id, 'tenant', t.name, 'role', tu.role,
+                        -- Who pays for its tools, and its live workspace plan.
+                        'billing_mode', t.billing_mode,
+                        'plan', (SELECT wp.name FROM workspace_subscriptions ws
+                                   JOIN workspace_plans wp ON wp.id = ws.plan_id
+                                  WHERE ws.tenant_id = t.id AND ws.status IN ('active', 'trialing')
+                                    AND ws.period_end > NOW()
+                                  ORDER BY ws.period_end DESC LIMIT 1))
                         ORDER BY t.name), '[]'::json)
                 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
                WHERE tu.email = up.email) AS workspaces,
@@ -152,6 +186,7 @@ pub async fn list_users(
              -- number itself stays out: it is what unlocks the apps.
              (SELECT COALESCE(json_agg(json_build_object(
                         'id', s.id, 'plan_id', s.plan_id, 'plan', p.name, 'is_free', s.is_free,
+                        'origin', s.origin,
                         'on_stripe', s.stripe_customer_id <> '',
                         'status', s.status, 'live', ({LIVE}),
                         'cancel_at_period_end', s.cancel_at_period_end,
@@ -164,7 +199,8 @@ pub async fn list_users(
                 FROM subscriptions s JOIN plans p ON p.id = s.plan_id
                WHERE s.email = lower(up.email) AND s.licence IS NOT NULL) AS licences,
              -- Where the account came from (api/signup_source.rs).
-             up.signup_source
+             up.signup_source,
+             {MAYORANA} AS uses_mayorana
          FROM people up
          WHERE ($1 = '' OR up.email ILIKE '%' || $1 || '%'
                 OR EXISTS (SELECT 1 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
@@ -175,6 +211,7 @@ pub async fn list_users(
            AND ($3 = '' OR $2 <> '' OR EXISTS (SELECT 1 FROM tenant_users tu
                                                 WHERE tu.email = up.email AND tu.role = $3))
            AND {licence_where}
+           AND {product_where}
          ORDER BY {}
          LIMIT $4 OFFSET $5",
         order_by(query.sort.as_deref())
@@ -209,6 +246,7 @@ pub async fn list_users(
                 "has_account": r.get::<_, bool>(8),
                 "licences": r.get::<_, serde_json::Value>(9),
                 "signup_source": r.get::<_, Option<serde_json::Value>>(10),
+                "products": products(r.get::<_, bool>(8), r.get::<_, bool>(11)),
             })
         })
         .collect();
@@ -221,6 +259,18 @@ pub async fn list_users(
         "page_size": page_size,
         "users": users,
     }))
+}
+
+/// The products a person uses, api0 first.
+fn products(has_account: bool, uses_mayorana: bool) -> Vec<&'static str> {
+    let mut p = Vec::with_capacity(2);
+    if has_account {
+        p.push("api0");
+    }
+    if uses_mayorana {
+        p.push("mayorana");
+    }
+    p
 }
 
 pub async fn tenant_names(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
@@ -274,6 +324,23 @@ mod tests {
         assert!(licence_filter("paid").unwrap().contains("NOT s.is_free"));
         assert!(licence_filter("none").unwrap().starts_with("NOT EXISTS"));
         assert!(licence_filter("x' OR 1=1 --").is_none());
+    }
+
+    #[test]
+    fn product_filter_is_a_whitelist() {
+        assert_eq!(product_filter("").as_deref(), Some("TRUE"));
+        assert!(product_filter("api0").unwrap().starts_with("up.has_account AND NOT EXISTS"));
+        assert!(product_filter("mayorana").unwrap().starts_with("NOT up.has_account AND EXISTS"));
+        assert!(product_filter("both").unwrap().starts_with("up.has_account AND EXISTS"));
+        assert!(product_filter("api0' --").is_none());
+    }
+
+    #[test]
+    fn an_api0_wallet_alone_is_not_mayorana() {
+        assert!(MAYORANA.contains("origin IS DISTINCT FROM 'api0'"));
+        assert_eq!(products(true, false), vec!["api0"]);
+        assert_eq!(products(true, true), vec!["api0", "mayorana"]);
+        assert_eq!(products(false, true), vec!["mayorana"]);
     }
 
 }
