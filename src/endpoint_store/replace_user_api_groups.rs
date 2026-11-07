@@ -145,6 +145,9 @@ pub async fn replace_user_api_groups(
 
         // Process endpoints for this group
         for endpoint in &group_with_endpoints.endpoints {
+            let response_fields = crate::endpoint_store::mcp_tools_management::clean_response_fields(
+                endpoint.response_fields.as_deref(),
+            );
             let endpoint_id = if endpoint.id.is_empty() {
                 generate_id_from_text(&endpoint.text)
             } else {
@@ -165,8 +168,8 @@ pub async fn replace_user_api_groups(
             if endpoint_exists_row.is_none() {
                 app_log!(debug, endpoint_id = %endpoint_id, "Creating new endpoint");
                 tx.execute(
-                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, suggested_sentence, content_type, body_template, forward_identity) 
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                    "INSERT INTO endpoints (id, text, description, verb, base, path, group_id, suggested_sentence, content_type, body_template, forward_identity, response_fields) 
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
                     &[
                         &endpoint_id,
                         &endpoint.text,
@@ -179,6 +182,7 @@ pub async fn replace_user_api_groups(
                         &endpoint.content_type,
                         &endpoint.body_template,
                         &endpoint.forward_identity,
+                        &response_fields,
                     ],
                 )
                 .await
@@ -186,7 +190,7 @@ pub async fn replace_user_api_groups(
             } else {
                 app_log!(debug, endpoint_id = %endpoint_id, "Updating existing endpoint");
                 tx.execute(
-                    "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6, suggested_sentence = $7 WHERE id = $8",
+                    "UPDATE endpoints SET text = $1, description = $2, verb = $3, base = $4, path = $5, group_id = $6, suggested_sentence = $7, response_fields = $9 WHERE id = $8",
                     &[
                         &endpoint.text,
                         &endpoint.description,
@@ -196,6 +200,7 @@ pub async fn replace_user_api_groups(
                         &group_id,
                         &endpoint.suggested_sentence,
                         &endpoint_id,
+                        &response_fields,
                     ],
                 )
                 .await
@@ -355,5 +360,58 @@ mod db_tests {
             )
             .await.unwrap().get(0);
         assert!(!identity, "no api0 identity headers to a third party");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn response_fields_reach_the_tool_and_come_back_on_export() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let email = format!("fields-{}@example.com", uuid::Uuid::new_v4().simple());
+        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
+
+        let with_fields: ApiStorage = serde_json::from_value(serde_json::json!({ "api_groups": [{
+            "name": "Azure DevOps",
+            "base": "https://dev.azure.com/acme",
+            "endpoints": [
+                { "text": "list work item types", "verb": "GET", "path": "/{project}/_apis/wit/workitemtypes",
+                  "response_fields": ["count", " value", "name", "name", ""],
+                  "parameters": [{ "name": "project", "description": "Project.", "required": "true" }] },
+                { "text": "list projects", "verb": "GET", "path": "/_apis/projects", "parameters": [] }
+            ]
+        }]}))
+        .expect("import document");
+        store.replace_user_api_groups(&email, with_fields.api_groups, Some(&tenant)).await.unwrap();
+        resync_tenant_tools(&store, &tenant).await;
+
+        let tool = crate::endpoint_store::mcp_tools_management::get_mcp_tool(
+            &store, &tenant, "azure-devops-list-work-item-types", None,
+        )
+        .await
+        .unwrap()
+        .expect("tool");
+        assert_eq!(
+            tool.response_fields,
+            Some(vec!["count".to_string(), "value".to_string(), "name".to_string()]),
+            "trimmed, without blanks or repeats"
+        );
+        let plain = crate::endpoint_store::mcp_tools_management::get_mcp_tool(&store, &tenant, "azure-devops-list-projects", None)
+            .await
+            .unwrap()
+            .expect("tool");
+        assert_eq!(plain.response_fields, None, "no list: the whole answer");
+        // What the gateway reads is the tool's JSON.
+        assert_eq!(serde_json::to_value(&tool).unwrap()["response_fields"][2], "name");
+
+        // Exported and imported again (what an edit in the dashboard does), the list survives.
+        let exported = crate::endpoint_store::get_api_groups_by_email::get_api_groups_by_tenant(&store, &tenant)
+            .await
+            .unwrap();
+        let types = exported
+            .iter()
+            .flat_map(|g| g.endpoints.iter())
+            .find(|e| e.text == "list work item types")
+            .expect("exported");
+        assert_eq!(types.response_fields.as_deref().map(|f| f.len()), Some(3));
     }
 }

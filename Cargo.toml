@@ -45,3 +45,9 @@ path = "src/main.rs"
 [dev-dependencies]
 # Checks the form bodies sent to Stripe, encoded as async-stripe encodes them.
 serde_qs = "0.10.1"
+
+# Builds against the local api0-types, which has Endpoint::response_fields
+# before it is committed. Once api0-types is pushed, remove this and move the
+# `rev` above to that commit.
+[patch."https://github.com/bennekrouf/api0-types"]
+api0-types = { path = "../api0-types" }

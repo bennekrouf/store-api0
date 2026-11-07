@@ -104,14 +104,14 @@ async fn fetch_custom_endpoints(
             e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
             p.name, p.description, p.required, 
             string_agg(pa.alternative, ',') as alternatives,
-            e.content_type, e.body_template, e.forward_identity
+            e.content_type, e.body_template, e.forward_identity, e.response_fields
         FROM endpoints e
         LEFT JOIN parameters p ON e.id = p.endpoint_id
         LEFT JOIN parameter_alternatives pa ON e.id = pa.endpoint_id AND p.name = pa.parameter_name
         WHERE e.group_id = $1
         GROUP BY 
             e.id, e.text, e.description, e.verb, e.base, e.path, e.suggested_sentence,
-            e.content_type, e.body_template, e.forward_identity,
+            e.content_type, e.body_template, e.forward_identity, e.response_fields,
             p.name, p.description, p.required
     "#;
 
@@ -139,6 +139,7 @@ async fn fetch_custom_endpoints(
         let content_type: Option<String> = row.get(11);
         let body_template: Option<String> = row.get(12);
         let forward_identity: Option<bool> = row.get(13);
+        let response_fields: Option<Vec<String>> = row.get(14);
 
         let endpoint = endpoints_map.entry(id.clone()).or_insert_with(|| {
             app_log!(debug,
@@ -160,6 +161,7 @@ async fn fetch_custom_endpoints(
                 content_type,
                 body_template,
                 forward_identity,
+                response_fields,
                 ..Default::default()
             }
         });
