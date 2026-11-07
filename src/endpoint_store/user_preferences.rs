@@ -66,6 +66,10 @@ pub async fn update_user_preferences_with_conn(
     action: &str,
     endpoint_id: &str,
 ) -> Result<(), StoreError> {
+    // The insert below creates an account: never for a blank or half address.
+    if !crate::endpoint_store::tenant_management::is_account_email(email) {
+        return Err(StoreError::InvalidInput("A valid email is required".into()));
+    }
     // Note: We don't strictly need a transaction for SET app.bypass_rls if we already have it on the conn,
     // but if we want to be safe with multiple statements, we can.
     // However, deadpool's Object doesn't allow easy re-wrapping in a transaction while keeping RLS session.

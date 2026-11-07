@@ -34,6 +34,7 @@ use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::middleware::service_key::Caller;
 use crate::payment::spend::{self, SpendRequest};
+use crate::payment::subscription::{self, Origin};
 use crate::payment::workspace_plans;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
@@ -79,6 +80,21 @@ pub async fn billing_mode(store: &EndpointStore, tenant_id: &str) -> Result<Bill
     BillingMode::parse(&mode).ok_or_else(|| format!("Tenant {} has an unknown billing mode '{}'", tenant_id, mode))
 }
 
+/// A member of a workspace that bills each person pays from their own plan.
+/// Someone who has none gets the free allowance here, the first time it is
+/// needed, rather than at sign-up: an api0 account is not a mayorana customer
+/// until its workspace makes it one. A failure is logged; the read that
+/// follows then finds no credits, and the call is refused as it would be.
+async fn give_member_wallet(store: &EndpointStore, email: &str) {
+    let given = match store.get_admin_conn().await {
+        Ok(client) => subscription::ensure_free_plan(&client, email, Origin::Api0).await,
+        Err(e) => Err(e.to_string()),
+    };
+    if let Err(e) = given {
+        app_log!(error, error = %e, email = %email, "Could not give a workspace member the free allowance");
+    }
+}
+
 /// What `email` may spend on `tenant_id`'s tools: the tenant's balance, or the
 /// person's plan credits left this month — never the two added up.
 pub async fn available(store: &EndpointStore, tenant_id: &str, email: &str) -> Result<(BillingMode, i64), String> {
@@ -88,7 +104,10 @@ pub async fn available(store: &EndpointStore, tenant_id: &str, email: &str) -> R
             Some(with_plan) => with_plan,
             None => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?,
         },
-        BillingMode::User => spend::plan_credits_left_for(store, email).await?,
+        BillingMode::User => {
+            give_member_wallet(store, email).await;
+            spend::plan_credits_left_for(store, email).await?
+        }
     };
     Ok((mode, credits))
 }
@@ -128,6 +147,7 @@ pub async fn charge(
         }
         BillingMode::User => {
             let email = email.trim().to_lowercase();
+            give_member_wallet(store, &email).await;
             // Someone can hold a paid plan and the free allowance at once; each
             // take spends one of them, so keep going until the call is paid or
             // nothing is left.
@@ -240,6 +260,7 @@ pub async fn spend_strict(
         }
         BillingMode::User => {
             let email = email.trim().to_lowercase();
+            give_member_wallet(store, &email).await;
             let left = spend::plan_credits_left_for(store, &email).await?;
             if left < amount {
                 return Ok(StrictSpend::Short { available: left });

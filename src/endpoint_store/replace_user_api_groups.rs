@@ -3,7 +3,7 @@ use crate::endpoint_store::db_helpers::ResultExt;
 use crate::endpoint_store::{
     generate_id_from_text, ApiGroupWithEndpoints, EndpointStore, StoreError,
 };
-/// Replaces all API groups and endpoints for a user.
+/// Imports API groups into a workspace, replacing its groups of the same name.
 ///
 /// `tenant_id` names the tenant the groups belong to. `None` means the caller's
 /// default tenant, which is what every caller did before this was a choice. It
@@ -51,12 +51,21 @@ pub async fn replace_user_api_groups(
     let mut client = store.get_admin_conn().await?;
     let tx = client.transaction().await.to_store_error()?;
 
-    // An upload replaces *this workspace's* APIs, in the same transaction as
-    // the insert. It used to clear everything the uploading email had created,
-    // in every workspace it belongs to, and never removed old groups — so they
-    // piled up (and one person's second workspace lost its endpoints).
+    // An upload replaces the groups of *this workspace* that it brings again,
+    // matched by name (ids get a fresh suffix on every upload), in the same
+    // transaction as the insert. Groups the file does not mention stay: a
+    // workspace mixes APIs from several files and from the setup wizard, and
+    // importing one must not wipe the others. A group is removed with its
+    // delete button.
+    let names: Vec<String> = api_groups
+        .iter()
+        .map(|g| g.group.name.trim().to_lowercase())
+        .collect();
     let old_groups: Vec<String> = tx
-        .query("SELECT id FROM api_groups WHERE tenant_id = $1", &[&tenant_id])
+        .query(
+            "SELECT id FROM api_groups WHERE tenant_id = $1 AND lower(trim(name)) = ANY($2)",
+            &[&tenant_id, &names],
+        )
         .await
         .to_store_error()?
         .iter()
@@ -252,4 +261,99 @@ pub async fn replace_user_api_groups(
 
     tx.commit().await.to_store_error()?;
     Ok(imported_count)
+}
+
+/// Against a real database. Run with a throwaway Postgres:
+///   TEST_DATABASE_URL=postgres://app:app@localhost:55432/app \
+///     cargo test --bin store -- --ignored an_import_keeps_the_groups_it_does_not_mention
+#[cfg(test)]
+mod db_tests {
+    use crate::endpoint_store::mcp_tools_management::resync_tenant_tools;
+    use crate::endpoint_store::tenant_management::get_default_tenant;
+    use crate::endpoint_store::{ApiStorage, EndpointStore};
+
+    /// An import document in the shape the setup wizard sends (JSON, required
+    /// as a string) — parsed the way the upload route parses it.
+    fn doc(groups: &[(&str, &str)]) -> ApiStorage {
+        let groups: Vec<_> = groups
+            .iter()
+            .map(|(name, text)| {
+                serde_json::json!({
+                    "name": name,
+                    "base": "https://dev.azure.com/acme",
+                    "endpoints": [{
+                        "text": text,
+                        "verb": "GET",
+                        "path": format!("/{{project}}/{}", text.replace(' ', "-")),
+                        "forward_identity": false,
+                        "parameters": [{ "name": "project", "description": "Project.", "required": "true" }]
+                    }]
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({ "api_groups": groups })).expect("import document")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn an_import_keeps_the_groups_it_does_not_mention() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let email = format!("import-{}@example.com", uuid::Uuid::new_v4().simple());
+        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
+
+        // A file with two APIs, then the wizard importing its own.
+        store
+            .replace_user_api_groups(&email, doc(&[("Billing", "list invoices"), ("Azure DevOps", "list projects")]).api_groups, Some(&tenant))
+            .await
+            .unwrap();
+        resync_tenant_tools(&store, &tenant).await;
+
+        // Reconfigure imports "Azure DevOps" again, with different operations
+        // (and the name spelt differently): it replaces that group only.
+        store
+            .replace_user_api_groups(&email, doc(&[(" azure devops", "list teams")]).api_groups, Some(&tenant))
+            .await
+            .unwrap();
+        let synced = resync_tenant_tools(&store, &tenant).await;
+        assert_eq!(synced, 2);
+
+        let c = store.get_admin_conn().await.unwrap();
+        let mut groups: Vec<String> = c
+            .query("SELECT name FROM api_groups WHERE tenant_id = $1", &[&tenant])
+            .await.unwrap().iter().map(|r| r.get(0)).collect();
+        groups.sort();
+        assert_eq!(groups, vec![" azure devops".to_string(), "Billing".to_string()]);
+
+        let mut endpoints: Vec<String> = c
+            .query(
+                "SELECT e.text FROM endpoints e JOIN api_groups g ON g.id = e.group_id WHERE g.tenant_id = $1",
+                &[&tenant],
+            )
+            .await.unwrap().iter().map(|r| r.get(0)).collect();
+        endpoints.sort();
+        assert_eq!(endpoints, vec!["list invoices".to_string(), "list teams".to_string()]);
+
+        let mut active: Vec<String> = c
+            .query("SELECT tool_name FROM mcp_tools WHERE tenant_id = $1 AND is_active", &[&tenant])
+            .await.unwrap().iter().map(|r| r.get(0)).collect();
+        active.sort();
+        assert_eq!(active, vec!["azure-devops-list-teams".to_string(), "billing-list-invoices".to_string()]);
+
+        let gone: bool = c
+            .query_one(
+                "SELECT is_active FROM mcp_tools WHERE tenant_id = $1 AND tool_name = 'azure-devops-list-projects'",
+                &[&tenant],
+            )
+            .await.unwrap().get(0);
+        assert!(!gone, "the replaced operation's tool is switched off");
+
+        let identity: bool = c
+            .query_one(
+                "SELECT forward_identity FROM mcp_tools WHERE tenant_id = $1 AND tool_name = 'azure-devops-list-teams'",
+                &[&tenant],
+            )
+            .await.unwrap().get(0);
+        assert!(!identity, "no api0 identity headers to a third party");
+    }
 }

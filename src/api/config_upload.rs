@@ -1,5 +1,5 @@
 use crate::app_log;
-use crate::endpoint_store::mcp_tools_management::sync_endpoints_as_mcp_tools;
+use crate::endpoint_store::mcp_tools_management::resync_tenant_tools;
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::{generate_id_from_text, ApiGroupWithEndpoints, ApiStorage};
 use crate::infra::models::UploadRequest;
@@ -399,20 +399,11 @@ pub async fn upload_api_config(
                     .map(|tenant| tenant.id),
             };
 
+            // The whole workspace is resynced, not just this file: the sync
+            // switches off imported tools missing from the set it is given, and
+            // an upload now keeps the groups it does not mention.
             let synced = match sync_tenant {
-                Ok(tenant_id) => {
-                    match sync_endpoints_as_mcp_tools(&store, &tenant_id, &processed_groups).await {
-                        Ok(n) => n,
-                        Err(e) => {
-                            app_log!(warn,
-                                error = %e,
-                                email = %upload_data.email,
-                                "MCP tool sync failed (non-fatal)"
-                            );
-                            0
-                        }
-                    }
-                }
+                Ok(tenant_id) => resync_tenant_tools(&store, &tenant_id).await,
                 Err(e) => {
                     app_log!(warn,
                         error = %e,

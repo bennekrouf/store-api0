@@ -192,6 +192,18 @@ impl EmailKind {
         )
     }
 
+    /// Who the reader sees the email come from; an opt-out is per brand.
+    pub fn brand(&self) -> unsubscribe::Brand {
+        match self {
+            Self::LicenceIssued { .. }
+            | Self::PlanCancelled { .. }
+            | Self::PlanComeBack { .. }
+            | Self::PlanGifted { .. }
+            | Self::AppDigest { .. } => unsubscribe::Brand::Mayorana,
+            _ => unsubscribe::Brand::Api0,
+        }
+    }
+
     /// The name the email is sent as. Plan emails go to people who bought a
     /// desktop app from mayorana.ch and have never heard of api0, and come from
     /// Benek so that a reply is a conversation.
@@ -534,11 +546,11 @@ async fn deliver_internal(store: &EndpointStore, to: &str, kind: &EmailKind) -> 
     // Optional emails go only to people who have not opted out, and always
     // carry the way to opt out. Checked here so no sender can skip it.
     let unsubscribe = if kind.is_optional() {
-        if unsubscribe::is_opted_out(store, to).await {
+        if unsubscribe::is_opted_out(store, to, kind.brand()).await {
             app_log!(info, kind = %kind.name(), "Skipped optional email: recipient opted out");
             return Ok(());
         }
-        Some(unsubscribe::link(to).ok_or_else(|| {
+        Some(unsubscribe::link(to, kind.brand()).ok_or_else(|| {
             anyhow::anyhow!("no unsubscribe link (API0_ENCRYPTION_KEY unset); optional email not sent")
         })?)
     } else {
@@ -825,7 +837,7 @@ pub async fn broadcast_whats_new_handler(
         .query(
             "SELECT email FROM user_preferences up
               WHERE email IS NOT NULL AND email != ''
-                AND NOT EXISTS (SELECT 1 FROM email_opt_outs o WHERE o.email = lower(up.email))",
+                AND NOT EXISTS (SELECT 1 FROM email_opt_outs o WHERE o.email = lower(up.email) AND o.brand = 'api0')",
             &[],
         )
         .await.unwrap_or_default();

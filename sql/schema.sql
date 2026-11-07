@@ -1046,19 +1046,50 @@ UPDATE user_preferences up
 -- the digest, nudge, win-back and "what's new". Stored lowercased; see
 -- src/email/unsubscribe.rs.
 CREATE TABLE IF NOT EXISTS email_opt_outs (
-    email      TEXT PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    email      TEXT NOT NULL,
+    brand      TEXT NOT NULL,                -- 'api0' or 'mayorana' (unsubscribe::Brand)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (email, brand)
 );
 -- Addresses that asked for them: the box on mayorana.ch, or undoing an
 -- unsubscribe. An address is in at most one of the two tables, and in neither
 -- until it chooses. `source` is where the choice was made, `locale` the site's
 -- language then: together with created_at, the record of consent.
 CREATE TABLE IF NOT EXISTS email_opt_ins (
-    email      TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
+    brand      TEXT NOT NULL,
     source     TEXT NOT NULL,
     locale     TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (email, brand)
 );
+-- Before brands, one choice covered both, and is kept as it was meant: a no
+-- was a no to every email, so it holds for both; a yes from the box on
+-- mayorana.ch is mayorana's; a yes from undoing an unsubscribe ('email-link')
+-- took the no back everywhere, so it holds for both too.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'email_opt_outs' AND column_name = 'brand') THEN
+        ALTER TABLE email_opt_outs DROP CONSTRAINT email_opt_outs_pkey;
+        ALTER TABLE email_opt_outs ADD COLUMN brand TEXT;
+        UPDATE email_opt_outs SET brand = 'api0';
+        INSERT INTO email_opt_outs (email, brand, created_at)
+             SELECT email, 'mayorana', created_at FROM email_opt_outs;
+        ALTER TABLE email_opt_outs ALTER COLUMN brand SET NOT NULL;
+        ALTER TABLE email_opt_outs ADD PRIMARY KEY (email, brand);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'email_opt_ins' AND column_name = 'brand') THEN
+        ALTER TABLE email_opt_ins DROP CONSTRAINT email_opt_ins_pkey;
+        ALTER TABLE email_opt_ins ADD COLUMN brand TEXT;
+        UPDATE email_opt_ins SET brand = 'mayorana';
+        INSERT INTO email_opt_ins (email, brand, source, locale, created_at)
+             SELECT email, 'api0', source, locale, created_at FROM email_opt_ins WHERE source = 'email-link';
+        ALTER TABLE email_opt_ins ALTER COLUMN brand SET NOT NULL;
+        ALTER TABLE email_opt_ins ADD PRIMARY KEY (email, brand);
+    END IF;
+END $$;
 
 -- ── LLM provider: usage ─────────────────────────────────────────────────────
 -- A tenant named by LLM_PROVIDER_TENANT_ID serves chat completions to the
@@ -1097,6 +1128,29 @@ ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS region VARCHAR;
 -- The answer stopped at max_tokens (finish_reason "length"): a model that
 -- starts looping shows as a rising share of these per region and model.
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cut_off BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Where a licence came from (payment::subscription::Origin), so a mayorana
+-- customer is told apart from an api0 user whose workspace bills each person:
+--   stripe    bought through Stripe Checkout
+--   granted   given by hand (scripts/grant-licence.sh)
+--   app       an app asked for the free licence, or one was used from an app
+--   mayorana  given to someone signed in on mayorana.ch
+--   api0      the wallet of a member of a workspace that bills each person
+--   fallback  a paid plan ended and fell back to the free allowance
+-- Here, after llm_usage, because the backfill reads it. Rows from before the
+-- column are guessed once: paid through Stripe is stripe, any other paid plan
+-- was granted by hand; a free licence that was emailed or
+-- used from an app is app; else an api0 account's is api0 (every account got
+-- one at sign-up); else it came from mayorana.ch.
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS origin VARCHAR;
+UPDATE subscriptions s SET origin = CASE
+    WHEN NOT s.is_free AND s.stripe_customer_id <> '' THEN 'stripe'
+    WHEN NOT s.is_free THEN 'granted'
+    WHEN s.licence_emailed_at IS NOT NULL
+      OR EXISTS (SELECT 1 FROM llm_usage u WHERE u.license_id = s.id) THEN 'app'
+    WHEN EXISTS (SELECT 1 FROM user_preferences p WHERE lower(p.email) = lower(s.email)) THEN 'api0'
+    ELSE 'mayorana' END
+ WHERE s.origin IS NULL;
 
 -- Who pays for a tenant's paid tools — one or the other, never both:
 --   'user'    each caller pays from their own plan's monthly credits

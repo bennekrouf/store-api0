@@ -640,16 +640,21 @@ pub async fn sync_endpoints_as_mcp_tools(
 /// sync switches off imported tools missing from the set it is given, so it
 /// must always see the whole workspace, never one group. Non-fatal: the
 /// change itself is already committed.
-pub async fn resync_tenant_tools(store: &EndpointStore, tenant_id: &str) {
+/// Returns how many tools were synced, 0 when the resync failed.
+pub async fn resync_tenant_tools(store: &EndpointStore, tenant_id: &str) -> usize {
     let groups = match crate::endpoint_store::get_api_groups_by_email::get_api_groups_by_tenant(store, tenant_id).await {
         Ok(g) => g,
         Err(e) => {
             app_log!(warn, tenant_id = %tenant_id, error = %e, "Could not read groups to resync tools");
-            return;
+            return 0;
         }
     };
-    if let Err(e) = sync_endpoints_as_mcp_tools(store, tenant_id, &groups).await {
-        app_log!(warn, tenant_id = %tenant_id, error = %e, "Tool resync failed");
+    match sync_endpoints_as_mcp_tools(store, tenant_id, &groups).await {
+        Ok(n) => n,
+        Err(e) => {
+            app_log!(warn, tenant_id = %tenant_id, error = %e, "Tool resync failed");
+            0
+        }
     }
 }
 
@@ -746,18 +751,11 @@ fn build_input_schema(params: &[crate::endpoint_store::models::Parameter]) -> St
                 serde_json::Value::String(p.description.clone()),
             );
         }
-        // Also list any known alternatives as an enum
-        if !p.alternatives.is_empty() {
-            prop.insert(
-                "enum".into(),
-                serde_json::Value::Array(
-                    p.alternatives
-                        .iter()
-                        .map(|a| serde_json::Value::String(a.clone()))
-                        .collect(),
-                ),
-            );
-        }
+        // `alternatives` are other *names* for the parameter (synonyms such as
+        // project_name for project), not allowed values: as an `enum` they
+        // would tell the client the value must be one of those names. The
+        // gateway maps no synonym to the real name either, so they stay out
+        // of the schema rather than invite an argument it would not forward.
         if arg_name != p.name {
             prop.insert(WIRE_NAME_KEY.into(), serde_json::Value::String(p.name.clone()));
         }
@@ -854,6 +852,20 @@ mod tests {
         assert_eq!(s["properties"]["top"][WIRE_NAME_KEY], "$top");
         assert!(s["properties"].get("$filter").is_none());
         assert_eq!(s["required"], serde_json::json!(["filter"]));
+    }
+
+    #[test]
+    fn alternatives_are_synonyms_and_never_restrict_the_value() {
+        let mut project = param("project", true);
+        project.description = "Azure DevOps project name.".into();
+        project.alternatives = vec!["project_name".into(), "team_project".into()];
+        let s = schema(&[project]);
+        let prop = &s["properties"]["project"];
+        assert!(prop.get("enum").is_none());
+        assert_eq!(prop["type"], "string");
+        assert_eq!(prop["description"], "Azure DevOps project name.");
+        // Nor do the synonyms become arguments of their own.
+        assert_eq!(s["properties"].as_object().unwrap().len(), 1);
     }
 
     #[test]
