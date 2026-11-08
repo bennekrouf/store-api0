@@ -27,7 +27,7 @@ pub async fn add_user_api_group(
     if let Some(owner) = crate::endpoint_store::workspace_access::group_tenant(&tx, group_id).await? {
         if owner != tenant_id {
             return Err(StoreError::InvalidInput(format!(
-                "API group id '{}' is used by another workspace",
+                "API group id '{}' is used by another tenant",
                 group_id
             )));
         }
@@ -67,7 +67,7 @@ pub async fn add_user_api_group(
         if let Some(owner) = crate::endpoint_store::workspace_access::endpoint_tenant(&tx, &endpoint.id).await? {
             if owner != tenant_id {
                 return Err(StoreError::InvalidInput(format!(
-                    "Endpoint id '{}' is used by another workspace",
+                    "Endpoint id '{}' is used by another tenant",
                     endpoint.id
                 )));
             }

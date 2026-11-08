@@ -111,7 +111,7 @@ pub async fn set_channel_label_handler(
     match set_channel_label(&store, &tenant.id, &body.channel, label).await {
         Ok(true) => HttpResponse::Ok().json(serde_json::json!({"success": true, "channel": body.channel, "label": label})),
         Ok(false) => HttpResponse::NotFound()
-            .json(serde_json::json!({"success": false, "error": "This workspace has no such channel"})),
+            .json(serde_json::json!({"success": false, "error": "This tenant has no such channel"})),
         Err(e) => fail(e),
     }
 }

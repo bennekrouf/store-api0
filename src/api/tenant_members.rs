@@ -30,9 +30,9 @@ fn respond(result: Result<serde_json::Value, MemberError>) -> HttpResponse {
         Err(MemberError::Conflict(m)) => HttpResponse::Conflict()
             .json(serde_json::json!({"success": false, "message": m})),
         Err(MemberError::Store(e)) => {
-            app_log!(error, error = %e, "Workspace membership request failed");
+            app_log!(error, error = %e, "Tenant membership request failed");
             HttpResponse::InternalServerError()
-                .json(serde_json::json!({"success": false, "message": "Could not update the workspace"}))
+                .json(serde_json::json!({"success": false, "message": "Could not update the tenant"}))
         }
     }
 }

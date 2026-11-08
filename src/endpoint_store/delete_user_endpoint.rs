@@ -20,7 +20,7 @@ pub async fn delete_user_endpoint(
     };
     if !is_member(&tx, email, &tenant_id).await? {
         app_log!(warn, email = %email, endpoint_id = %endpoint_id, tenant_id = %tenant_id,
-            "Refused to delete an endpoint outside the caller's workspaces");
+            "Refused to delete an endpoint outside the caller's tenants");
         return Ok(false);
     }
 

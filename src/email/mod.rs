@@ -400,7 +400,7 @@ impl EmailKind {
                     "<p>Sign in with Google using <strong>this email address</strong> — that is what the invitation is attached to.</p>"
                 };
                 let manage = if role == "owner" || role == "admin" {
-                    "<p style=\"color:#64748B;font-size:13px\">To set the workspace up — tools, bots, members — use the <a href=\"https://app.api0.ai\" style=\"color:#6366F1\">dashboard</a>.</p>"
+                    "<p style=\"color:#64748B;font-size:13px\">To set the tenant up — tools, bots, members — use the <a href=\"https://app.api0.ai\" style=\"color:#6366F1\">dashboard</a>.</p>"
                 } else {
                     ""
                 };
@@ -439,7 +439,7 @@ impl EmailKind {
                 } else {
                     format!(
                         r#"<h1>Turn your first API into a Claude tool</h1>
-<p>Your api0 workspace is set up, but it has no tools yet. Adding one takes about two minutes:</p>
+<p>Your api0 tenant is set up, but it has no tools yet. Adding one takes about two minutes:</p>
 <ol style="padding-left:20px">
   <li>Paste the URL of your API's OpenAPI description, or pick a ready-made one</li>
   <li>Choose who may use it and how they sign in</li>

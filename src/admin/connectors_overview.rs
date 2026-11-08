@@ -158,7 +158,7 @@ members AS (
 ),
 -- Claude tenant_id is stamped from the caller's own tool_namespace() at call
 -- time (see gateway mcp_routes.rs) — it is whatever tenant their OAuth client
--- id resolved to, not necessarily the workspace they meant to use. A member
+-- id resolved to, not necessarily the tenant they meant to use. A member
 -- whose calls land somewhere other than their own tenant is the exact shape of
 -- a Claude.ai connector left on the default Client ID, or pointed at the wrong
 -- one: this tenant reads as silent while a member's own account absorbs it.

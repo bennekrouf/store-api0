@@ -26,7 +26,7 @@ pub async fn get_api_groups_by_email(
         return Ok(Vec::new());
     }
 
-    app_log!(info, email = %email, tenant_id = %tenant.id, "Fetching the workspace's groups and endpoints");
+    app_log!(info, email = %email, tenant_id = %tenant.id, "Fetching the tenant's groups and endpoints");
     let result = fetch_custom_groups_with_endpoints(&client, &tenant.id).await?;
 
     app_log!(info,
@@ -53,7 +53,7 @@ async fn fetch_custom_groups_with_endpoints(
     client: &deadpool_postgres::Object,
     tenant_id: &str,
 ) -> Result<Vec<ApiGroupWithEndpoints>, StoreError> {
-    app_log!(debug, tenant_id = %tenant_id, "Fetching the workspace's groups and endpoints");
+    app_log!(debug, tenant_id = %tenant_id, "Fetching the tenant's groups and endpoints");
 
     let groups_query = r#"
         SELECT g.id, g.name, g.description, g.base, g.tenant_id

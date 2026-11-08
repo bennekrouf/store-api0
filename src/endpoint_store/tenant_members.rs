@@ -78,7 +78,7 @@ impl From<deadpool_postgres::PoolError> for MemberError {
 }
 
 const LAST_OWNER: &str =
-    "A workspace needs at least one owner — make someone else owner first";
+    "A tenant needs at least one owner — make someone else owner first";
 
 /// The caller's active workspace and their role in it.
 struct Seat {
@@ -102,7 +102,7 @@ async fn seat(tx: &Transaction<'_>, email: &str) -> Result<Seat, MemberError> {
         )
         .await?;
     let row = row.ok_or_else(|| {
-        MemberError::Forbidden("You are not a member of your active workspace".into())
+        MemberError::Forbidden("You are not a member of your active tenant".into())
     })?;
     Ok(Seat { tenant_id: row.get(0), tenant_name: row.get(1), role: row.get(2) })
 }
@@ -258,7 +258,7 @@ async fn add_or_invite(
         .get(0);
     if pending >= MAX_PENDING_INVITES {
         return Err(MemberError::Conflict(format!(
-            "This workspace already has {} pending invitations — cancel some first",
+            "This tenant already has {} pending invitations — cancel some first",
             MAX_PENDING_INVITES
         )));
     }
@@ -341,7 +341,7 @@ pub async fn invite(
     tx.commit().await?;
 
     app_log!(info, tenant_id = %seat.tenant_id, by = %caller, invitee = %invitee, role = %role,
-        outcome = ?outcome, "Workspace invitation");
+        outcome = ?outcome, "Tenant invitation");
     notify(store, &seat.tenant_id, &invitee, &seat.tenant_name, role, caller, outcome).await;
     Ok(outcome)
 }
@@ -364,13 +364,13 @@ pub async fn admin_add_member(
         .query_opt("SELECT name FROM tenants WHERE id = $1 FOR UPDATE", &[&tenant_id])
         .await?
         .map(|r| r.get::<_, String>(0))
-        .ok_or_else(|| MemberError::Invalid("No such workspace".into()))?;
+        .ok_or_else(|| MemberError::Invalid("No such tenant".into()))?;
 
     let outcome = add_or_invite(&tx, tenant_id, &invitee, role, admin_email).await?;
     tx.commit().await?;
 
     app_log!(warn, tenant_id = %tenant_id, by = %admin_email, invitee = %invitee, role = %role,
-        outcome = ?outcome, "Platform admin added a workspace member");
+        outcome = ?outcome, "Platform admin added a tenant member");
     notify(store, tenant_id, &invitee, &name, role, admin_email, outcome).await;
     Ok(outcome)
 }
@@ -440,7 +440,7 @@ pub async fn accept_pending_invites(
     }
 
     if !accepted.is_empty() {
-        app_log!(info, email = %email, count = accepted.len(), "Accepted workspace invitations at sign-in");
+        app_log!(info, email = %email, count = accepted.len(), "Accepted tenant invitations at sign-in");
     }
     Ok(first.map(|(id, _)| id))
 }
@@ -523,7 +523,7 @@ async fn detach(tx: &Transaction<'_>, tenant_id: &str, member: &str) -> Result<(
     )
     .await?;
     app_log!(info, tenant_id = %tenant_id, member = %member, keys_deactivated = keys,
-        "Removed a member from a workspace");
+        "Removed a member from a tenant");
     Ok(())
 }
 
@@ -565,7 +565,7 @@ pub async fn leave(store: &EndpointStore, caller: &str) -> Result<(), MemberErro
 
     if seat.role == "owner" && owner_count(&tx, &seat.tenant_id).await? <= 1 {
         return Err(MemberError::Conflict(
-            "You are this workspace's only owner — make someone else owner before leaving".into(),
+            "You are this tenant's only owner — make someone else owner before leaving".into(),
         ));
     }
 
@@ -672,11 +672,11 @@ mod db_tests {
         assert_eq!(listed["can_manage"], true);
 
         let carol_ws = get_default_tenant(&store, &carol).await.unwrap();
-        assert_eq!(carol_ws.id, ws_id, "carol lands in the workspace she was invited to");
+        assert_eq!(carol_ws.id, ws_id, "carol lands in the tenant she was invited to");
         {
             let c = store.get_admin_conn().await.unwrap();
             let list = list_user_tenants_with_conn(&c, &carol).await.unwrap();
-            assert_eq!(list.len(), 1, "no personal workspace was created for carol");
+            assert_eq!(list.len(), 1, "no personal tenant was created for carol");
             assert_eq!(list[0].role, "admin");
             let left: i64 = c.query_one("SELECT count(*) FROM tenant_invites WHERE email = $1", &[&carol])
                 .await.unwrap().get(0);
@@ -703,7 +703,7 @@ mod db_tests {
         leave(&store, &owner).await.unwrap();
         assert_eq!(default_of(&store, &owner).await, None, "owner belongs nowhere now");
         let owner_new = get_default_tenant(&store, &owner).await.unwrap();
-        assert_ne!(owner_new.id, ws_id, "and gets a fresh personal workspace");
+        assert_ne!(owner_new.id, ws_id, "and gets a fresh personal tenant");
 
         // ── removal deactivates keys and moves the default ───────────────────
         {
@@ -719,10 +719,10 @@ mod db_tests {
             let c = store.get_admin_conn().await.unwrap();
             let active: bool = c.query_one("SELECT is_active FROM api_keys WHERE id = $1", &[&format!("key-{run}")])
                 .await.unwrap().get(0);
-            assert!(!active, "bob's key on the workspace is off");
+            assert!(!active, "bob's key on the tenant is off");
         }
         assert_eq!(default_of(&store, &bob).await.as_deref(), Some(bob_personal.id.as_str()),
-            "bob's default falls back to his own workspace");
+            "bob's default falls back to his own tenant");
         assert!(set_active_tenant(&store, &bob, &ws_id).await.unwrap().is_none(),
             "and he can no longer switch into it");
 

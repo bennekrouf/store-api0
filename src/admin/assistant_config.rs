@@ -408,7 +408,7 @@ pub async fn internal_assistant_config(
             Ok(r) => r,
             Err(e) => {
                 // The platform's provider still answers rather than none.
-                app_log!(warn, error = %e, tenant_id = %t, "Could not read the workspace's region");
+                app_log!(warn, error = %e, tenant_id = %t, "Could not read the tenant's region");
                 None
             }
         },

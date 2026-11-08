@@ -189,7 +189,7 @@ async fn on_subscription_changed(store: &Arc<EndpointStore>, stripe: &PaymentSer
         return match workspace_plans::sync_subscription(store, &sub).await {
             Ok(()) => false,
             Err(e) => {
-                app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: workspace subscription could not be synced");
+                app_log!(error, error = %e, subscription_id = %subscription_id, "Webhook: tenant subscription could not be synced");
                 true
             }
         };

@@ -159,7 +159,7 @@ pub async fn list_users(
              up.created_at,
              (SELECT COALESCE(json_agg(json_build_object(
                         'tenant_id', t.id, 'tenant', t.name, 'role', tu.role,
-                        -- Who pays for its tools, and its live workspace plan.
+                        -- Who pays for its tools, and its live tenant plan.
                         'billing_mode', t.billing_mode,
                         'plan', (SELECT wp.name FROM workspace_subscriptions ws
                                    JOIN workspace_plans wp ON wp.id = ws.plan_id
@@ -168,7 +168,7 @@ pub async fn list_users(
                                   ORDER BY ws.period_end DESC LIMIT 1))
                         ORDER BY t.name), '[]'::json)
                 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
-               WHERE tu.email = up.email) AS workspaces,
+               WHERE tu.email = up.email) AS tenants,
              (SELECT count(*) FROM api_keys k WHERE k.email = up.email AND k.is_active) AS active_keys,
              -- Every tool call, from Claude or a messaging bot, is logged with
              -- the key owner's email, and with the consumer's when a provider

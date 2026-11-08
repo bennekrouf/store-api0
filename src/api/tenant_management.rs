@@ -87,24 +87,24 @@ pub async fn set_active_tenant(
 
     match crate::endpoint_store::tenant_management::set_active_tenant(&store, &email, tenant_id).await {
         Ok(Some(tenant)) => {
-            app_log!(info, email = %email, tenant_id = %tenant.id, "Switched active workspace");
+            app_log!(info, email = %email, tenant_id = %tenant.id, "Switched active tenant");
             HttpResponse::Ok().json(serde_json::json!({
                 "success": true,
                 "tenant": tenant,
             }))
         }
         Ok(None) => {
-            app_log!(warn, email = %email, tenant_id = %tenant_id, "Refused a switch into a workspace the caller is not a member of");
+            app_log!(warn, email = %email, tenant_id = %tenant_id, "Refused a switch into a tenant the caller is not a member of");
             HttpResponse::Forbidden().json(serde_json::json!({
                 "success": false,
-                "message": "You are not a member of that workspace",
+                "message": "You are not a member of that tenant",
             }))
         }
         Err(e) => {
-            app_log!(error, email = %email, tenant_id = %tenant_id, "Failed to switch workspace: {}", e);
+            app_log!(error, email = %email, tenant_id = %tenant_id, "Failed to switch tenant: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "success": false,
-                "message": "Could not switch workspace",
+                "message": "Could not switch tenant",
             }))
         }
     }

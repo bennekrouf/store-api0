@@ -124,7 +124,7 @@ async fn bound_balance(
         BillingMode::Tenant => match store.get_credit_balance(tenant_id).await {
             Ok(b) => (b.max(0), 0, serde_json::Value::Null),
             Err(e) => {
-                app_log!(error, error = %e, tenant_id = %tenant_id, "Failed to read a workspace balance");
+                app_log!(error, error = %e, tenant_id = %tenant_id, "Failed to read a tenant balance");
                 return HttpResponse::InternalServerError().json(serde_json::json!({
                     "success": false,
                     "message": "Error retrieving credit balance",

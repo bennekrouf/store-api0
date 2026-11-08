@@ -90,7 +90,7 @@ pub async fn get_my_region_handler(
     }
     let tenant = match get_default_tenant(&store, &query.email).await {
         Ok(t) => t,
-        Err(e) => return failed("find the workspace", e.to_string()),
+        Err(e) => return failed("find the tenant", e.to_string()),
     };
     let (chosen, offered, editable) = match (
         tenant_region(&store, &tenant.id).await,
@@ -131,14 +131,14 @@ pub async fn set_my_region_handler(
     }
     let tenant = match get_default_tenant(&store, &body.email).await {
         Ok(t) => t,
-        Err(e) => return failed("find the workspace", e.to_string()),
+        Err(e) => return failed("find the tenant", e.to_string()),
     };
     match can_edit(&store, &tenant.id, &body.email).await {
         Ok(true) => {}
         Ok(false) => {
             return HttpResponse::Forbidden().json(serde_json::json!({
                 "success": false,
-                "error": "Only the workspace's owners and admins can change the assistant's region",
+                "error": "Only the tenant's owners and admins can change the assistant's region",
             }))
         }
         Err(e) => return failed("read the caller's role", e),

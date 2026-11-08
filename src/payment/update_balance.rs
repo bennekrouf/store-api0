@@ -115,10 +115,10 @@ async fn per_person_credit(
 ) -> HttpResponse {
     if amount <= 0 || !action_type.ends_with(REFUND_SUFFIX) {
         app_log!(warn, email = %email, amount = amount, action = %action_type, caller = %caller,
-            "Refused a balance change: the workspace bills each person's plan");
+            "Refused a balance change: the tenant bills each person's plan");
         return HttpResponse::Conflict().json(serde_json::json!({
             "success": false,
-            "message": "This workspace bills each person's plan, so credits cannot be added to or taken from a balance",
+            "message": "This tenant bills each person's plan, so credits cannot be added to or taken from a balance",
         }));
     }
     match crate::payment::spend::refund_to_plan(store, email, amount).await {

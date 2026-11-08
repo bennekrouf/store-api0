@@ -66,7 +66,7 @@ pub async fn link_info_handler(
         Ok(Some(row)) => row,
         Ok(None) => {
             return HttpResponse::NotFound()
-                .json(serde_json::json!({"success": false, "error": "No such workspace"}))
+                .json(serde_json::json!({"success": false, "error": "No such tenant"}))
         }
         Err(e) => {
             app_log!(error, error = %e, "link-info lookup failed");

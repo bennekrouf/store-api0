@@ -35,7 +35,7 @@ pub async fn manage_single_endpoint(
     if let Some(current) = workspace_access::endpoint_tenant(&tx, endpoint_id).await? {
         if current != tenant_id {
             return Err(StoreError::InvalidInput(format!(
-                "Endpoint id '{}' belongs to another workspace",
+                "Endpoint id '{}' belongs to another tenant",
                 endpoint_id
             )));
         }

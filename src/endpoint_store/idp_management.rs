@@ -73,7 +73,7 @@ pub async fn get_idp_by_mcp_client_id(
         })?,
         None => {
             return Err(StoreError::InvalidInput(
-                "this workspace has an issuer configured but no client secret".into(),
+                "this tenant has an issuer configured but no client secret".into(),
             ))
         }
     };
