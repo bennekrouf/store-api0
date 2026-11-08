@@ -256,6 +256,9 @@ pub async fn start_http_server(
                             .route("/admin/users/delete", web::post().to(crate::admin::user_admin::delete_user))
                             // Super admin: every AI call, its model and tokens, paged
                             .route("/admin/llm-calls", web::get().to(crate::admin::llm_calls::list_llm_calls))
+                            // Super admin: the counts above the admin tabs, and AI calls by period
+                            .route("/admin/stats", web::get().to(crate::admin::platform_stats::platform_stats))
+                            .route("/admin/llm-stats", web::get().to(crate::admin::platform_stats::llm_stats))
                             // Super admin: the provider and model behind each region the apps offer
                             .route("/admin/llm-regions", web::get().to(crate::admin::llm_regions::get_regions))
                             .route("/admin/llm-regions", web::put().to(crate::admin::llm_regions::save_regions))
