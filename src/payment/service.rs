@@ -448,7 +448,7 @@ impl PaymentService {
     /// too, which the dashboard does (workspace_plans::change).
     pub async fn save_workspace_portal_configuration(&self, existing: Option<&str>) -> Result<String> {
         let form = serde_json::json!({
-            "business_profile": { "headline": "Manage your api0 workspace plan" },
+            "business_profile": { "headline": "Manage your api0 tenant plan" },
             "features": {
                 "invoice_history": { "enabled": true },
                 "payment_method_update": { "enabled": true },

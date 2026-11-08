@@ -159,7 +159,7 @@ fn diagnose(t: &TenantFacts, leaks: &[serde_json::Value]) -> Vec<serde_json::Val
     }
 
     if !filled(&t.mcp_client_id) {
-        push("warn", "No Client ID — Claude has nothing to name this workspace with.".into());
+        push("warn", "No Client ID — Claude has nothing to name this tenant with.".into());
     } else if !t.can_sign_in() {
         push(
             "warn",

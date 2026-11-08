@@ -12,7 +12,7 @@ use chrono::Utc;
 pub fn personal_tenant_name(email: &str) -> String {
     let local = email.split('@').next().unwrap_or(email).trim();
     if local.is_empty() {
-        "Personal workspace".to_string()
+        "Personal tenant".to_string()
     } else {
         format!("Personal — {}", local)
     }
@@ -47,7 +47,7 @@ pub const NAME_TAKEN_SQL: &str = "SELECT 1 FROM tenants
 
 /// The refusal for a name already in use. Carried in `StoreError::InvalidInput`;
 /// handlers compare against it to answer 409 rather than 400.
-pub const NAME_TAKEN: &str = "That name is already used by another workspace";
+pub const NAME_TAKEN: &str = "That name is already used by another tenant";
 
 /// The unique index behind [`NAME_TAKEN_SQL`], for recognising the race where
 /// two renames to the same name both pass the check.
@@ -76,7 +76,7 @@ pub async fn get_or_create_personal_tenant_with_conn(
     let email = email.to_lowercase();
     if !is_account_email(&email) {
         return Err(StoreError::InvalidInput(format!(
-            "'{}' is not an account email, so it has no workspace",
+            "'{}' is not an account email, so it has no tenant",
             email
         )));
     }
@@ -207,7 +207,7 @@ async fn get_or_create_personal_tenant_locked(
             )
             .await
             .to_store_error()?;
-        app_log!(info, email = %email, tenant_id = %tenant_id, "Default workspace restored from an existing membership");
+        app_log!(info, email = %email, tenant_id = %tenant_id, "Default tenant restored from an existing membership");
         return Ok(Tenant {
             id: row.get(0),
             name: row.get(1),
@@ -413,7 +413,7 @@ pub async fn update_tenant_name(
     let new_name = new_name.trim();
     if !is_valid_tenant_name(new_name) {
         return Err(StoreError::InvalidInput(
-            "A workspace name is required, and cannot be an email address".to_string(),
+            "A tenant name is required, and cannot be an email address".to_string(),
         ));
     }
 
@@ -614,7 +614,7 @@ mod db_tests {
             ids.push(h.await.unwrap());
         }
         ids.dedup();
-        assert_eq!(ids.len(), 1, "every caller got the same workspace");
+        assert_eq!(ids.len(), 1, "every caller got the same tenant");
 
         let c = store.get_admin_conn().await.unwrap();
         let memberships: i64 = c
@@ -628,7 +628,7 @@ mod db_tests {
                 &[&personal_tenant_name(&email)],
             )
             .await.unwrap().get(0);
-        assert_eq!(orphans, 0, "no member-less workspace left behind");
+        assert_eq!(orphans, 0, "no member-less tenant left behind");
     }
 
     #[tokio::test]
@@ -652,10 +652,10 @@ mod db_tests {
         c.execute("DELETE FROM tenants WHERE id = $1", &[&bob_personal.id]).await.unwrap();
 
         let now = get_default_tenant(&store, &bob).await.unwrap();
-        assert_eq!(now.id, shared.id, "bob lands in the workspace he still belongs to");
+        assert_eq!(now.id, shared.id, "bob lands in the tenant he still belongs to");
         let owned: i64 = c
             .query_one("SELECT count(*) FROM tenant_users WHERE email = $1", &[&bob])
             .await.unwrap().get(0);
-        assert_eq!(owned, 1, "and no new personal workspace was made");
+        assert_eq!(owned, 1, "and no new personal tenant was made");
     }
 }

@@ -345,7 +345,7 @@ pub async fn delete_user(
     {
         Ok(rows) => rows,
         Err(e) => {
-            app_log!(error, error = %e, "Delete user: workspace check failed");
+            app_log!(error, error = %e, "Delete user: tenant check failed");
             return server_error("Query failed");
         }
     };
@@ -381,8 +381,8 @@ pub async fn delete_user(
     for (tenant_id, name) in &solo {
         for (label, sql) in cascade_steps() {
             if let Err(e) = tx.execute(sql.as_str(), &[tenant_id]).await {
-                app_log!(error, error = %e, tenant_id = %tenant_id, step = %label, "Delete user: workspace step failed, rolling back");
-                return server_error(&format!("Failed while deleting workspace {}: {}", name, e));
+                app_log!(error, error = %e, tenant_id = %tenant_id, step = %label, "Delete user: tenant step failed, rolling back");
+                return server_error(&format!("Failed while deleting tenant {}: {}", name, e));
             }
         }
     }

@@ -267,7 +267,7 @@ pub async fn live_plan(store: &EndpointStore, tenant_id: &str) -> Result<Option<
     let Some(sub) = current_subscription(store, tenant_id).await?.filter(|s| s.live) else {
         return Ok(None);
     };
-    let plan = get_plan(store, &sub.plan_id).await?.ok_or_else(|| format!("No workspace plan {}", sub.plan_id))?;
+    let plan = get_plan(store, &sub.plan_id).await?.ok_or_else(|| format!("No tenant plan {}", sub.plan_id))?;
     Ok(Some((sub, plan)))
 }
 
@@ -372,7 +372,7 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
     let tenant_id = meta
         .get("tenant_id")
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| format!("Workspace subscription {} has no tenant_id", sub.id))?
+        .ok_or_else(|| format!("Tenant subscription {} has no tenant_id", sub.id))?
         .clone();
     let bought_by = meta.get("email").cloned().unwrap_or_default();
 
@@ -396,7 +396,7 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
             plan = get_plan(store, id).await?;
         }
     }
-    let plan = plan.ok_or_else(|| format!("Workspace subscription {} matches no plan", sub.id))?;
+    let plan = plan.ok_or_else(|| format!("Tenant subscription {} matches no plan", sub.id))?;
     let seats_billed = plan
         .stripe_seat_price_id
         .as_deref()
@@ -455,11 +455,11 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
             .await
             .map_err(|e| e.to_string())?;
         if changed > 0 {
-            app_log!(info, tenant_id = %tenant_id, "Workspace plan live: the workspace now pays for its calls");
+            app_log!(info, tenant_id = %tenant_id, "Tenant plan live: the tenant now pays for its calls");
         }
     }
     app_log!(info, subscription_id = %sub.id, tenant_id = %tenant_id, plan = %plan.id, status = %sub.status.as_str(),
-        seats_billed = seats_billed, "Workspace subscription synced");
+        seats_billed = seats_billed, "Tenant subscription synced");
     Ok(())
 }
 
@@ -583,7 +583,7 @@ pub async fn reconcile(store: &Arc<EndpointStore>, stripe: &PaymentService) {
     let rows = match rows {
         Ok(r) => r,
         Err(e) => {
-            app_log!(error, error = %e, "Workspace plans: could not read the subscriptions to reconcile");
+            app_log!(error, error = %e, "Tenant plans: could not read the subscriptions to reconcile");
             return;
         }
     };
@@ -593,7 +593,7 @@ pub async fn reconcile(store: &Arc<EndpointStore>, stripe: &PaymentService) {
         let members = match member_count(store, &tenant_id).await {
             Ok(n) => n,
             Err(e) => {
-                app_log!(warn, error = %e, tenant_id = %tenant_id, "Workspace plans: could not count members");
+                app_log!(warn, error = %e, tenant_id = %tenant_id, "Tenant plans: could not count members");
                 continue;
             }
         };
@@ -604,12 +604,12 @@ pub async fn reconcile(store: &Arc<EndpointStore>, stripe: &PaymentService) {
         match stripe.set_subscription_items(&sub_id, &[(seat_price, wanted)], &[]).await {
             Ok(sub) => {
                 app_log!(info, subscription_id = %sub_id, tenant_id = %tenant_id, members = members, seats_billed = wanted,
-                    "Workspace seats billed changed");
+                    "Tenant seats billed changed");
                 if let Err(e) = sync_subscription(store, &sub).await {
-                    app_log!(warn, error = %e, subscription_id = %sub_id, "Workspace plans: could not sync after a seat change");
+                    app_log!(warn, error = %e, subscription_id = %sub_id, "Tenant plans: could not sync after a seat change");
                 }
             }
-            Err(e) => app_log!(error, error = %e, subscription_id = %sub_id, "Workspace plans: Stripe refused the seat change"),
+            Err(e) => app_log!(error, error = %e, subscription_id = %sub_id, "Tenant plans: Stripe refused the seat change"),
         }
     }
 }
@@ -628,7 +628,7 @@ async fn portal_configuration(store: &EndpointStore, stripe: &PaymentService) ->
     let made = match stripe.save_workspace_portal_configuration(None).await {
         Ok(id) => id,
         Err(e) => {
-            app_log!(error, error = %e, "Could not create the workspace plans' portal configuration");
+            app_log!(error, error = %e, "Could not create the tenant plans' portal configuration");
             return None;
         }
     };
@@ -715,7 +715,7 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
     if input.custom {
         for old in [price_id.take(), seat_price_id.take()].into_iter().flatten() {
             if let Err(e) = stripe.archive_price(&old).await {
-                app_log!(warn, error = %e, price_id = %old, "Could not archive a workspace plan's Stripe price");
+                app_log!(warn, error = %e, price_id = %old, "Could not archive a tenant plan's Stripe price");
             }
         }
     } else if input.active {
@@ -730,7 +730,7 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
                 .map_err(|e| format!("Stripe refused the plan price: {}", e))?;
             if let Some(old) = price_id.as_deref() {
                 if let Err(e) = stripe.archive_price(old).await {
-                    app_log!(warn, error = %e, price_id = %old, "Could not archive a workspace plan's previous price");
+                    app_log!(warn, error = %e, price_id = %old, "Could not archive a tenant plan's previous price");
                 }
             }
             product_id = Some(product);
@@ -743,7 +743,7 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
         if input.seat_price_cents == 0 {
             if let Some(old) = seat_price_id.take() {
                 if let Err(e) = stripe.archive_price(&old).await {
-                    app_log!(warn, error = %e, price_id = %old, "Could not archive a workspace plan's seat price");
+                    app_log!(warn, error = %e, price_id = %old, "Could not archive a tenant plan's seat price");
                 }
             }
         } else if seat_changed || seat_price_id.is_none() {
@@ -761,7 +761,7 @@ async fn save_plan(store: &EndpointStore, stripe: &PaymentService, id: &str, inp
     if let (Some(product), Some(old)) = (product_id.as_deref(), existing.as_ref()) {
         if old.name != input.name {
             if let Err(e) = stripe.rename_product(product, &input.name).await {
-                app_log!(warn, error = %e, product_id = %product, "Could not rename a workspace plan's product");
+                app_log!(warn, error = %e, product_id = %product, "Could not rename a tenant plan's product");
             }
         }
     }
@@ -816,7 +816,7 @@ fn fail(status: StatusCode, message: &str) -> HttpResponse {
 }
 
 fn internal(what: &str, e: String) -> HttpResponse {
-    app_log!(error, error = %e, "Workspace plans: {}", what);
+    app_log!(error, error = %e, "Tenant plans: {}", what);
     fail(StatusCode::INTERNAL_SERVER_ERROR, &format!("Could not {}", what))
 }
 
@@ -912,7 +912,7 @@ pub async fn save_rates_handler(
     .await;
     match saved {
         Ok(_) => {
-            app_log!(info, rates = %value, "Workspace plan display rates changed");
+            app_log!(info, rates = %value, "Tenant plan display rates changed");
             HttpResponse::Ok().json(serde_json::json!({ "success": true, "display_rates": read_display_rates(&store).await }))
         }
         Err(e) => internal("save the display rates", e),
@@ -942,7 +942,7 @@ pub async fn current_handler(
     }
     let (tenant_id, tenant_name, balance, can_edit) = match workspace_of(&store, &query.email).await {
         Ok(w) => w,
-        Err(e) => return internal("find the workspace", e),
+        Err(e) => return internal("find the tenant", e),
     };
     let members = match member_count(&store, &tenant_id).await {
         Ok(n) => n,
@@ -1033,10 +1033,10 @@ pub async fn checkout_handler(
     let email = body.email.trim().to_lowercase();
     let (tenant_id, _, _, can_edit) = match workspace_of(&store, &email).await {
         Ok(w) => w,
-        Err(e) => return internal("find the workspace", e),
+        Err(e) => return internal("find the tenant", e),
     };
     if !can_edit {
-        return fail(StatusCode::FORBIDDEN, "Only the workspace's owners and admins can buy a plan");
+        return fail(StatusCode::FORBIDDEN, "Only the tenant's owners and admins can buy a plan");
     }
     let plan = match get_plan(&store, &body.plan_id).await {
         Ok(Some(p)) if p.on_sale() => p,
@@ -1045,7 +1045,7 @@ pub async fn checkout_handler(
     };
     match current_subscription(&store, &tenant_id).await {
         Ok(Some(s)) if s.live => {
-            return fail(StatusCode::CONFLICT, "This workspace already has a plan — change it instead");
+            return fail(StatusCode::CONFLICT, "This tenant already has a plan — change it instead");
         }
         Ok(_) => {}
         Err(e) => return internal("read the subscription", e),
@@ -1070,7 +1070,7 @@ pub async fn checkout_handler(
     let customer = earlier_customer(&store, &tenant_id).await;
     match stripe.create_workspace_checkout(&lines, customer.as_deref(), &email, &success, &back, metadata).await {
         Ok(session) => {
-            app_log!(info, tenant_id = %tenant_id, plan = %plan.id, members = members, "Workspace plan checkout started");
+            app_log!(info, tenant_id = %tenant_id, plan = %plan.id, members = members, "Tenant plan checkout started");
             HttpResponse::Ok().json(serde_json::json!({ "success": true, "url": session.url }))
         }
         Err(e) => internal("start the checkout", e.to_string()),
@@ -1091,15 +1091,15 @@ pub async fn change_handler(
     let email = body.email.trim().to_lowercase();
     let (tenant_id, _, _, can_edit) = match workspace_of(&store, &email).await {
         Ok(w) => w,
-        Err(e) => return internal("find the workspace", e),
+        Err(e) => return internal("find the tenant", e),
     };
     if !can_edit {
-        return fail(StatusCode::FORBIDDEN, "Only the workspace's owners and admins can change the plan");
+        return fail(StatusCode::FORBIDDEN, "Only the tenant's owners and admins can change the plan");
     }
     let (sub, old) = match live_plan(&store, &tenant_id).await {
         Ok(Some((s, p))) if s.on_stripe => (s, p),
         Ok(Some(_)) => return fail(StatusCode::CONFLICT, "This plan was set up by api0; contact us to change it"),
-        Ok(None) => return fail(StatusCode::NOT_FOUND, "This workspace has no plan to change"),
+        Ok(None) => return fail(StatusCode::NOT_FOUND, "This tenant has no plan to change"),
         Err(e) => return internal("read the plan", e),
     };
     let new = match get_plan(&store, &body.plan_id).await {
@@ -1124,7 +1124,7 @@ pub async fn change_handler(
             if let Err(e) = sync_subscription(&store, &updated).await {
                 return internal("save the new plan", e);
             }
-            app_log!(info, tenant_id = %tenant_id, from = %old.id, to = %new.id, "Workspace plan changed");
+            app_log!(info, tenant_id = %tenant_id, from = %old.id, to = %new.id, "Tenant plan changed");
             HttpResponse::Ok().json(serde_json::json!({ "success": true }))
         }
         Err(e) => internal("change the plan on Stripe", e.to_string()),
@@ -1143,13 +1143,13 @@ pub async fn portal_handler(
     }
     let (tenant_id, _, _, can_edit) = match workspace_of(&store, &body.email).await {
         Ok(w) => w,
-        Err(e) => return internal("find the workspace", e),
+        Err(e) => return internal("find the tenant", e),
     };
     if !can_edit {
-        return fail(StatusCode::FORBIDDEN, "Only the workspace's owners and admins can manage billing");
+        return fail(StatusCode::FORBIDDEN, "Only the tenant's owners and admins can manage billing");
     }
     let Some(customer) = earlier_customer(&store, &tenant_id).await else {
-        return fail(StatusCode::NOT_FOUND, "This workspace has never paid with Stripe");
+        return fail(StatusCode::NOT_FOUND, "This tenant has never paid with Stripe");
     };
     let config = portal_configuration(&store, &stripe).await;
     let back = format!("{}/?view=settings&tab=workspace-plan", dashboard_url());
@@ -1217,7 +1217,7 @@ pub async fn save_handler(
     }
     match save_plan(&store, &stripe, &id, input).await {
         Ok(plan) => {
-            app_log!(info, plan = %id, "Workspace plan saved");
+            app_log!(info, plan = %id, "Tenant plan saved");
             HttpResponse::Ok().json(serde_json::json!({ "success": true, "plan": plan }))
         }
         Err(e) => internal("save the plan", e),
@@ -1246,7 +1246,7 @@ pub async fn grant_handler(
         Err(e) => return internal("read the plan", e),
     };
     match current_subscription(&store, &body.tenant_id).await {
-        Ok(Some(s)) if s.live => return fail(StatusCode::CONFLICT, "This workspace already has a live plan"),
+        Ok(Some(s)) if s.live => return fail(StatusCode::CONFLICT, "This tenant already has a live plan"),
         Ok(_) => {}
         Err(e) => return internal("read the subscription", e),
     }
@@ -1271,7 +1271,7 @@ pub async fn grant_handler(
     .await;
     match result {
         Ok(_) => {
-            app_log!(info, tenant_id = %body.tenant_id, plan = %plan.id, subscription_id = %id, "Workspace plan granted");
+            app_log!(info, tenant_id = %body.tenant_id, plan = %plan.id, subscription_id = %id, "Tenant plan granted");
             HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription_id": id }))
         }
         Err(e) => internal("grant the plan", e),
@@ -1308,7 +1308,7 @@ pub async fn revoke_handler(
     match result {
         Ok(0) => fail(StatusCode::NOT_FOUND, "No granted plan with that id"),
         Ok(_) => {
-            app_log!(info, subscription_id = %body.subscription_id, "Workspace plan grant revoked");
+            app_log!(info, subscription_id = %body.subscription_id, "Tenant plan grant revoked");
             HttpResponse::Ok().json(serde_json::json!({ "success": true }))
         }
         Err(e) => internal("revoke the grant", e),

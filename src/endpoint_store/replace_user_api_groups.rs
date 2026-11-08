@@ -93,7 +93,7 @@ pub async fn replace_user_api_groups(
         tx.execute(sql, &[&old_groups]).await.to_store_error()?;
     }
     app_log!(info, tenant_id = %tenant_id, groups = old_groups.len(), endpoints = old_endpoints.len(),
-        "Replaced the workspace's previous API groups");
+        "Replaced the tenant's previous API groups");
 
     for group_with_endpoints in &api_groups {
         let group = &group_with_endpoints.group;
@@ -113,7 +113,7 @@ pub async fn replace_user_api_groups(
 
         if group_exists_row.is_some() {
             return Err(StoreError::InvalidInput(format!(
-                "API group id '{}' is used by another workspace; remove the explicit id or choose another",
+                "API group id '{}' is used by another tenant; remove the explicit id or choose another",
                 group_id
             )));
         }
@@ -161,7 +161,7 @@ pub async fn replace_user_api_groups(
 
             if endpoint_exists_row.is_some() {
                 return Err(StoreError::InvalidInput(format!(
-                    "Endpoint id '{}' is used by another workspace; remove the explicit id or choose another",
+                    "Endpoint id '{}' is used by another tenant; remove the explicit id or choose another",
                     endpoint_id
                 )));
             }

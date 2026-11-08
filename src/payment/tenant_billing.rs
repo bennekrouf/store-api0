@@ -93,7 +93,7 @@ async fn give_member_wallet(store: &EndpointStore, email: &str, origin: Origin) 
         Err(e) => Err(e.to_string()),
     };
     if let Err(e) = given {
-        app_log!(error, error = %e, email = %email, "Could not give a workspace member the free allowance");
+        app_log!(error, error = %e, email = %email, "Could not give a tenant member the free allowance");
     }
 }
 
@@ -131,7 +131,7 @@ pub async fn charge(
             let rest = match workspace_plans::take(store, tenant_id, amount).await? {
                 Some(taken) => {
                     app_log!(info, tenant_id = %tenant_id, email = %email, action = %action_type,
-                        from_plan = taken.from_plan, overage = taken.overage, rest = taken.rest, "Workspace plan charged");
+                        from_plan = taken.from_plan, overage = taken.overage, rest = taken.rest, "Tenant plan charged");
                     taken.rest
                 }
                 None => amount,
@@ -236,7 +236,7 @@ pub async fn spend_strict(
             let Some(row) = row else {
                 if let Some(taken) = &plan_taken {
                     if let Err(e) = workspace_plans::give_back(store, taken).await {
-                        app_log!(error, error = %e, tenant_id = %tenant_id, "Could not give credits back to a workspace plan");
+                        app_log!(error, error = %e, tenant_id = %tenant_id, "Could not give credits back to a tenant plan");
                     }
                 }
                 let available = match workspace_plans::available(store, tenant_id).await? {
@@ -255,7 +255,7 @@ pub async fn spend_strict(
                 )
                 .await
             {
-                app_log!(error, error = %e, tenant_id = %tenant_id, email = %email, "Failed to record a workspace charge");
+                app_log!(error, error = %e, tenant_id = %tenant_id, email = %email, "Failed to record a tenant charge");
             }
             let available = workspace_plans::available(store, tenant_id).await?.unwrap_or(after);
             Ok(StrictSpend::Paid { from_plan, from_balance: amount, available })
@@ -315,7 +315,7 @@ pub async fn spend_strict(
 /// for this (it would put them on api0's own emails). Best effort, logged.
 async fn link_app_user(store: &EndpointStore, tenant_id: &str, email: &str) {
     if let Err(e) = crate::endpoint_store::tenant_management::link_consumer_to_tenant(store, email, tenant_id).await {
-        app_log!(warn, error = %e, tenant_id = %tenant_id, email = %email, "Could not record an app user in its workspace");
+        app_log!(warn, error = %e, tenant_id = %tenant_id, email = %email, "Could not record an app user in its tenant");
     }
 }
 
@@ -432,7 +432,7 @@ pub async fn get_my_billing_mode_handler(
     }
     let tenant = match get_default_tenant(&store, &query.email).await {
         Ok(t) => t,
-        Err(e) => return failed("find the workspace", e.to_string()),
+        Err(e) => return failed("find the tenant", e.to_string()),
     };
     let mode = match billing_mode(&store, &tenant.id).await {
         Ok(m) => m,
@@ -477,7 +477,7 @@ pub async fn set_my_billing_mode_handler(
         }
         Err(SetModeError::Forbidden) => HttpResponse::Forbidden().json(serde_json::json!({
             "success": false,
-            "error": "Only the workspace's owners and admins can change who pays",
+            "error": "Only the tenant's owners and admins can change who pays",
         })),
         Err(SetModeError::Store(e)) => failed("save who pays", e),
     }
@@ -535,13 +535,13 @@ mod db_tests {
         let store = EndpointStore::new(&url).await.expect("store");
         let id = uuid::Uuid::new_v4().simple().to_string();
         let owner = format!("owner_{id}@example.com");
-        let app = get_default_tenant(&store, &owner).await.expect("app workspace");
+        let app = get_default_tenant(&store, &owner).await.expect("app tenant");
         let client = store.get_admin_conn().await.unwrap();
         client.execute("UPDATE tenants SET billing_mode = 'user' WHERE id = $1", &[&app.id]).await.unwrap();
 
         // Someone with an api0 account elsewhere, and no plan yet.
         let user = format!("user_{id}@example.com");
-        let own = get_default_tenant(&store, &user).await.expect("own workspace");
+        let own = get_default_tenant(&store, &user).await.expect("own tenant");
         assert_ne!(own.id, app.id);
         assert!(origins(&store, &user).await.is_empty(), "an account alone holds no licence");
 

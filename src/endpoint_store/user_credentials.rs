@@ -201,7 +201,7 @@ pub async fn require_tenant_access(
     } else {
         app_log!(warn, tenant_id = %tenant_id, "Rejected a credential for an inaccessible tenant");
         Err(StoreError::InvalidInput(
-            "You do not have access to that workspace".into(),
+            "You do not have access to that tenant".into(),
         ))
     }
 }

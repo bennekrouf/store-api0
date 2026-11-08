@@ -22,7 +22,7 @@ pub async fn delete_user_api_group(
     };
     if !is_member(&tx, email, &tenant_id).await? {
         app_log!(warn, email = %email, group_id = %group_id, tenant_id = %tenant_id,
-            "Refused to delete a group outside the caller's workspaces");
+            "Refused to delete a group outside the caller's tenants");
         return Ok(false);
     }
 
