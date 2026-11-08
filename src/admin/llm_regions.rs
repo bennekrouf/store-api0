@@ -248,6 +248,7 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
         "providers": providers,
         "models": catalog,
         "defaults_priced_on": llm_models::DEFAULTS_PRICED_ON,
+        "recommendations": crate::admin::llm_recommendations::read(&store).await,
     }))
 }
 
