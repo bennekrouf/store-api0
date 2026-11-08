@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-api0-types = { git = "https://github.com/bennekrouf/api0-types", rev = "5f43efa6d329a1c096bf617d7039391eaa61dfe2" }
+api0-types = { git = "https://github.com/bennekrouf/api0-types", rev = "3fea52c62f8cbe6e412856298c01c80e45791f65" }
 chrono = { version = "0.4.39", features = ["serde"] }
 futures = "0.3.31"
 serde = { version = "1.0.217", features = ["derive"] }
@@ -45,9 +45,3 @@ path = "src/main.rs"
 [dev-dependencies]
 # Checks the form bodies sent to Stripe, encoded as async-stripe encodes them.
 serde_qs = "0.10.1"
-
-# Builds against the local api0-types, which has Endpoint::response_fields
-# before it is committed. Once api0-types is pushed, remove this and move the
-# `rev` above to that commit.
-[patch."https://github.com/bennekrouf/api0-types"]
-api0-types = { path = "../api0-types" }
