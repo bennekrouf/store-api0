@@ -841,6 +841,10 @@ CREATE TABLE IF NOT EXISTS messaging_channels (
 ALTER TABLE messaging_channels ADD COLUMN IF NOT EXISTS label VARCHAR NOT NULL DEFAULT '';
 ALTER TABLE whatsapp_channels  ADD COLUMN IF NOT EXISTS label VARCHAR NOT NULL DEFAULT '';
 
+-- A workspace's own branding for the app the platform shows (today the Teams
+-- app): icons, colour, legal links. See endpoint_store/channel_brand.rs.
+ALTER TABLE messaging_channels ADD COLUMN IF NOT EXISTS app_brand JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 -- What a tenant tells the model about its own tools, returned as `instructions`
 -- in the MCP initialize result, after the guidance api0 generates from the
 -- tenant's tool groups. Plain text, written by the tenant — for example which
