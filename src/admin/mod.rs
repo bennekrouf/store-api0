@@ -6,6 +6,7 @@ pub mod user_admin;
 pub mod tenant_overview;
 pub mod user_roles;
 pub mod llm_calls;
+pub mod platform_stats;
 pub mod llm_regions;
 pub mod llm_models;
 pub mod tenant_region;
