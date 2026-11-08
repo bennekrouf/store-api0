@@ -14,7 +14,7 @@
 // an `alert = false` field: the email path's own failures do, so a broken SMTP
 // setup cannot mail about itself.
 //
-// The same file lives in gateway-api0 and store-api0; keep them identical.
+// The same file lives in gateway-api0, store-api0 and whatsapp-bridge; keep them identical.
 
 use graflog::tracing::field::{Field, Visit};
 use graflog::tracing::{Event, Level, Subscriber};
