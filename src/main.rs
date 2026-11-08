@@ -302,6 +302,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         });
     }
+    // Recommended models per region, from OpenRouter's public list: checked
+    // every six hours, recomputed once a week.
+    {
+        let store = Arc::clone(&store_arc);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+            loop {
+                interval.tick().await;
+                crate::admin::llm_recommendations::refresh_if_due(&store).await;
+            }
+        });
+    }
     let http_payment_service = payment_service;
 
     // Start the HTTP server as a separate task

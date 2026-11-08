@@ -9,4 +9,5 @@ pub mod llm_calls;
 pub mod platform_stats;
 pub mod llm_regions;
 pub mod llm_models;
+pub mod llm_recommendations;
 pub mod tenant_region;
