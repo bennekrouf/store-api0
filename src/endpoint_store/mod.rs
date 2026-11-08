@@ -5,6 +5,7 @@ pub mod idp_management;
 pub mod oauth_codes;
 pub mod downstream_oauth;
 pub mod messaging_channels;
+pub mod channel_brand;
 pub mod user_credentials;
 pub mod api_key_management;
 pub mod mcp_tools_management;

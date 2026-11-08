@@ -6,6 +6,8 @@
 //   GET    /user/messaging-channels?email=…       — the caller's channels
 //   DELETE /user/messaging-channels/{channel}?email=…
 //   PUT    /user/channel-label                    — name a channel { email, channel, label }
+//   GET    /user/channel-brand?email=…&channel=…  — the channel's app branding
+//   PUT    /user/channel-brand                    — replace it { email, channel, brand }
 //   GET    /internal/messaging-channels/{channel}/{channel_ref}  — for the bridge
 
 use crate::app_log;
@@ -13,6 +15,7 @@ use crate::endpoint_store::messaging_channels::{
     channel_for_bridge, delete_channel, list_channels, register_channel, set_channel_label,
     RegisterChannel,
 };
+use crate::endpoint_store::channel_brand::{get_channel_brand, set_channel_brand, AppBrand};
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::{EndpointStore, StoreError};
 use crate::middleware::internal_secret::require_internal_secret;
@@ -110,6 +113,71 @@ pub async fn set_channel_label_handler(
     };
     match set_channel_label(&store, &tenant.id, &body.channel, label).await {
         Ok(true) => HttpResponse::Ok().json(serde_json::json!({"success": true, "channel": body.channel, "label": label})),
+        Ok(false) => HttpResponse::NotFound()
+            .json(serde_json::json!({"success": false, "error": "This tenant has no such channel"})),
+        Err(e) => fail(e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrandQuery {
+    pub email: String,
+    pub channel: String,
+}
+
+/// The branding of one of the caller's workspace's channels (the Teams app's
+/// icons, colour and links). The gateway binds `email` to the signed-in user.
+pub async fn get_channel_brand_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    query: web::Query<BrandQuery>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let tenant = match get_default_tenant(&store, &query.email).await {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
+    match get_channel_brand(&store, &tenant.id, &query.channel).await {
+        Ok(Some(brand)) => HttpResponse::Ok().json(serde_json::json!({"success": true, "brand": brand})),
+        Ok(None) => HttpResponse::NotFound()
+            .json(serde_json::json!({"success": false, "error": "This tenant has no such channel"})),
+        Err(e) => fail(e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrandRequest {
+    pub email: String,
+    pub channel: String,
+    #[serde(default)]
+    pub brand: AppBrand,
+}
+
+/// Replace the branding of one of the caller's workspace's channels.
+pub async fn set_channel_brand_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<BrandRequest>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let body = body.into_inner();
+    let brand = match body.brand.validated() {
+        Ok(b) => b,
+        Err(msg) => return HttpResponse::BadRequest().json(serde_json::json!({"success": false, "error": msg})),
+    };
+    let tenant = match get_default_tenant(&store, &body.email).await {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
+    match set_channel_brand(&store, &tenant.id, &body.channel, &brand).await {
+        Ok(true) => {
+            app_log!(info, tenant_id = %tenant.id, channel = %body.channel, has_icons = brand.color_png.is_some(), "Channel brand saved");
+            HttpResponse::Ok().json(serde_json::json!({"success": true, "brand": brand}))
+        }
         Ok(false) => HttpResponse::NotFound()
             .json(serde_json::json!({"success": false, "error": "This tenant has no such channel"})),
         Err(e) => fail(e),
