@@ -13,3 +13,4 @@ pub mod llm_recommendations;
 pub mod tenant_region;
 pub mod security_audit;
 pub mod legal_details;
+pub mod agreement_pdf;

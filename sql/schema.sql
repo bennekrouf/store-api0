@@ -1338,3 +1338,8 @@ CREATE TABLE IF NOT EXISTS legal_acceptances (
     accepted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (legal_entity_id, document, version)
 );
+-- The PDF sent to the customer, kept as sent. agreement_emailed_at stays empty
+-- until the mail server has taken it, so a failed send is tried again.
+ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_sha256 VARCHAR;
+ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS agreement_pdf BYTEA;
+ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS agreement_emailed_at TIMESTAMPTZ;

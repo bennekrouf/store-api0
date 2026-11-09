@@ -17,6 +17,7 @@ use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use lettre::message::header::{ContentType, HeaderName, HeaderValue};
+use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
@@ -599,6 +600,76 @@ fn founder_reply_to() -> Option<lettre::message::Mailbox> {
     }
 }
 
+// ── Accepted agreements ───────────────────────────────────────────────────────
+
+pub(crate) struct AgreementMail {
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub document_title: String,
+    pub version: String,
+    pub legal_name: String,
+    pub pdf: Vec<u8>,
+}
+
+fn agreement_html(mail: &AgreementMail) -> String {
+    let content = format!(
+        "<h2>Your acceptance record</h2>\
+         <p>{name} has accepted the api0 {title}, version {version}.</p>\
+         <p>The attached PDF records who accepted it and when, followed by the full text of that version. \
+         Please keep it with your contract records.</p>\
+         <p>If you do not recognise this acceptance, reply to this email.</p>",
+        name = escape_html(&mail.legal_name),
+        title = escape_html(&mail.document_title),
+        version = escape_html(&mail.version),
+    );
+    wrap_layout(&content, None)
+}
+
+/// An address that cannot be parsed is left out, so it cannot hold up the others.
+fn mailboxes(addresses: &[String]) -> Vec<Mailbox> {
+    addresses
+        .iter()
+        .filter_map(|a| match a.parse() {
+            Ok(mailbox) => Some(mailbox),
+            Err(e) => {
+                app_log!(warn, error = %e, "Agreement email: skipping an address that cannot be parsed");
+                None
+            }
+        })
+        .collect()
+}
+
+fn agreement_message(from_addr: &str, mail: &AgreementMail) -> anyhow::Result<Message> {
+    let to = mailboxes(&mail.to);
+    if to.is_empty() {
+        anyhow::bail!("no address to send the agreement to");
+    }
+    let mut builder = Message::builder()
+        .from(format!("api0 <{from_addr}>").parse()?)
+        .subject(format!("Your api0 {} acceptance record", mail.document_title));
+    for mailbox in to {
+        builder = builder.to(mailbox);
+    }
+    for mailbox in mailboxes(&mail.cc) {
+        builder = builder.cc(mailbox);
+    }
+    let pdf = Attachment::new(format!("api0-{}-acceptance.pdf", mail.document_title.to_lowercase().replace(' ', "-")))
+        .body(mail.pdf.clone(), ContentType::parse("application/pdf")?);
+    Ok(builder.multipart(MultiPart::mixed().singlepart(SinglePart::html(agreement_html(mail))).singlepart(pdf))?)
+}
+
+/// Returns once the mail server has taken the message, so the caller can retry.
+pub(crate) async fn send_agreement(store: &EndpointStore, mail: &AgreementMail) -> anyhow::Result<()> {
+    let cfg = load_smtp_config(store).await.ok_or_else(|| anyhow::anyhow!("SMTP not configured"))?;
+    let email = agreement_message(&cfg.from_addr, mail)?;
+    let transport = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)?
+        .credentials(Credentials::new(cfg.user.clone(), cfg.password.clone()))
+        .port(cfg.port)
+        .build();
+    transport.send(email).await?;
+    Ok(())
+}
+
 // ── SMTP config (DB + env fallback) ──────────────────────────────────────────
 
 struct SmtpCfg { host: String, port: u16, user: String, password: String, from_addr: String }
@@ -857,6 +928,39 @@ pub async fn broadcast_whats_new_handler(
 #[cfg(test)]
 mod invite_tests {
     use super::*;
+
+    #[test]
+    fn the_agreement_goes_to_everyone_with_the_pdf_attached() {
+        let mail = AgreementMail {
+            to: vec!["owner@example.com".into(), "not an address".into(), "billing@example.com".into()],
+            cc: vec!["legal@example.org".into()],
+            document_title: "Terms of Service".into(),
+            version: "2025-10-27".into(),
+            legal_name: "<b>Example</b> SA".into(),
+            pdf: b"%PDF-1.4 sample".to_vec(),
+        };
+        let message = agreement_message("no-reply@example.org", &mail).unwrap();
+        let raw = String::from_utf8(message.formatted()).unwrap();
+        assert!(raw.contains("To: owner@example.com, billing@example.com"));
+        assert!(raw.contains("Cc: legal@example.org"));
+        assert!(raw.contains("api0-terms-of-service-acceptance.pdf"));
+        assert!(raw.contains("application/pdf"));
+        assert!(!raw.contains("not an address"));
+        assert!(agreement_html(&mail).contains("&lt;b&gt;Example&lt;/b&gt; SA"));
+    }
+
+    #[test]
+    fn an_agreement_with_nobody_to_send_to_is_an_error() {
+        let mail = AgreementMail {
+            to: vec![],
+            cc: vec!["legal@example.org".into()],
+            document_title: "Terms".into(),
+            version: "1".into(),
+            legal_name: "Example".into(),
+            pdf: vec![],
+        };
+        assert!(agreement_message("no-reply@example.org", &mail).is_err());
+    }
 
     fn invite(role: &str, link_ref: &str) -> EmailKind {
         EmailKind::WorkspaceInvite {

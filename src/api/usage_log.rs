@@ -4,7 +4,60 @@ use std::sync::Arc;
 
 use crate::app_log;
 use crate::email::{send_async, EmailKind};
-use crate::endpoint_store::{EndpointStore, LogApiUsageRequest, LogApiUsageResponse};
+use crate::endpoint_store::{tenant_management, EndpointStore, LogApiUsageRequest, LogApiUsageResponse};
+use crate::payment::{plans, tenant_billing};
+
+/// Takes a logged AI call's credits from whoever its workspace's billing mode
+/// names, priced as any AI call is (plans::Pricing), and notes what was charged
+/// on the log row for the super admin's ledger (admin/llm_calls.rs). The tokens
+/// are already spent, so a failure here is logged and the call stays logged.
+async fn charge_usage(store: &EndpointStore, request: &LogApiUsageRequest, log_id: &str) {
+    let Some(usage) = &request.usage else { return };
+    let cost = match plans::effective_pricing(store).await {
+        Ok(pricing) => pricing.credits_for(&usage.model, usage.total_tokens),
+        Err(e) => {
+            app_log!(error, error = %e, email = %request.email, "Could not price an AI call");
+            return;
+        }
+    };
+    if cost == 0 {
+        return;
+    }
+    // The tenant the call names (a messaging bot's workspace, say), else the
+    // person's default one.
+    let tenant_id = match request.tenant_id.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => match tenant_management::get_default_tenant(store, &request.email).await {
+            Ok(t) => t.id,
+            Err(e) => {
+                app_log!(error, error = %e, email = %request.email, "Failed to resolve tenant for credit deduction");
+                return;
+            }
+        },
+    };
+    let charged = match tenant_billing::charge(store, &tenant_id, &request.email, cost, "api_usage", Some(&request.endpoint_path)).await {
+        Ok((_, charged, _)) => charged,
+        Err(e) => {
+            app_log!(error, error = %e, email = %request.email, tenant_id = %tenant_id, "Failed to deduct credits");
+            return;
+        }
+    };
+    app_log!(info, email = %request.email, tenant_id = %tenant_id, cost = cost, charged = charged, "Credits deducted for usage");
+    let noted = match store.get_admin_conn().await {
+        Ok(client) => client
+            .execute(
+                "UPDATE api_usage_logs SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('credits', $1::BIGINT) WHERE id = $2",
+                &[&charged, &log_id],
+            )
+            .await
+            .map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    if let Err(e) = noted {
+        app_log!(warn, error = %e, log_id = %log_id, "Could not note the credits on the usage log");
+    }
+}
+
 /// Handler for logging detailed API usage with token information
 pub async fn log_api_usage(
     store: web::Data<Arc<EndpointStore>>,
@@ -32,43 +85,7 @@ pub async fn log_api_usage(
                 "Successfully logged API usage with token data"
             );
 
-            // Deduct credits if usage is present
-            if let Some(usage) = &log_request.usage {
-                // Pricing model:
-                // 1 Cent = 100 Internal Credits (allows fractional cents)
-                // Cost: $0.002 per 1k tokens = 0.2 cents = 20 Credits
-                // Formula: (total_tokens * 20) / 1000 = total_tokens / 50
-                // Minimum 1 credit if tokens > 0
-                let total_tokens = usage.total_tokens;
-                let cost = if total_tokens > 0 {
-                    (total_tokens / 50).max(1)
-                } else {
-                    0
-                };
-
-                if cost > 0 {
-                    app_log!(info, email = %log_request.email, cost = cost, "Deducting credits for usage");
-                    // The tenant the call names (a messaging bot's workspace,
-                    // say), else the person's default one.
-                    let tenant_id = match &log_request.tenant_id {
-                        Some(t) if !t.is_empty() => t.clone(),
-                        _ => match crate::endpoint_store::tenant_management::get_default_tenant(&store, &log_request.email).await {
-                            Ok(t) => t.id,
-                            Err(e) => {
-                                 app_log!(error, error = %e, email = %log_request.email, "Failed to resolve tenant for credit deduction");
-                                 "".to_string()
-                            }
-                        },
-                    };
-                    
-                    if !tenant_id.is_empty() {
-                        // Pass negative amount to decrement
-                        if let Err(e) = store.update_credit_balance(&tenant_id, &log_request.email, -cost, "api_usage", None).await {
-                             app_log!(error, error = %e, email = %log_request.email, "Failed to deduct credits");
-                        }
-                    }
-                }
-            }
+            charge_usage(&store, &log_request, &log_id).await;
 
             // First-call milestone: fire once per user (idempotent via first_call_at column).
             let store2 = store.as_ref().clone();
