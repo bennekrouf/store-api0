@@ -165,9 +165,6 @@ pub async fn upsert_mcp_tool(
                 connection_name  = CASE WHEN $17 THEN EXCLUDED.connection_name
                                         ELSE mcp_tools.connection_name END,
                 is_active        = true,
-                -- A write here is a hand registration unless the import sync
-                -- marks it right after (see sync_endpoints_as_mcp_tools).
-                from_import      = false,
                 updated_at       = EXCLUDED.updated_at
              RETURNING id, tenant_id, tool_name, backend_url, description,
                        input_schema, cost_credits, timeout_ms, http_verb,
@@ -493,9 +490,8 @@ pub async fn delete_mcp_tool(
 
 /// Point some of a tenant's tools at a connection, changing nothing else.
 ///
-/// Separate from the upsert because an imported tool re-registered through the
-/// upsert becomes a hand-registered one, which the next import no longer
-/// manages. Assigning a connection must not have that side effect.
+/// Separate from the upsert, which rewrites every field of the tool. Assigning
+/// a connection must change nothing else.
 ///
 /// `connection` "" or "default" → the tenant default. Returns how many tools
 /// were changed; names that match no active tool are ignored.
@@ -540,7 +536,10 @@ pub async fn sync_endpoints_as_mcp_tools(
     groups: &[ApiGroupWithEndpoints],
 ) -> Result<usize, StoreError> {
     let mut count = 0usize;
-    let mut synced: Vec<String> = Vec::new();
+    // Every tool the tenant's endpoints call for, whether or not its write below
+    // succeeds: one failed write must not switch off a tool that is still meant
+    // to exist.
+    let mut expected: Vec<String> = Vec::new();
 
     for group in groups {
         for endpoint in &group.endpoints {
@@ -550,6 +549,7 @@ pub async fn sync_endpoints_as_mcp_tools(
             if tool_name.is_empty() {
                 continue;
             }
+            expected.push(tool_name.clone());
 
             // ── backend_url ───────────────────────────────────────────────────
             let base = if endpoint.base.is_empty() {
@@ -600,10 +600,7 @@ pub async fn sync_endpoints_as_mcp_tools(
             };
 
             match upsert_mcp_tool(store, tenant_id, &req).await {
-                Ok(_) => {
-                    count += 1;
-                    synced.push(req.tool_name.clone());
-                }
+                Ok(_) => count += 1,
                 Err(e) => {
                     // Non-fatal: log and continue with the remaining endpoints
                     app_log!(
@@ -618,23 +615,15 @@ pub async fn sync_endpoints_as_mcp_tools(
         }
     }
 
-    // Mark what this upload produced, then switch off the workspace's imported
-    // tools it no longer contains — otherwise a removed or renamed endpoint
-    // stays callable from Claude forever. Hand-registered tools (from_import
-    // false) are left alone.
+    // A tenant's endpoints are the only source of its tools: switch off any tool
+    // with no endpoint behind it, or a removed or renamed endpoint stays callable
+    // from Claude forever. Only ever this tenant's rows.
     let client = store.get_admin_conn().await?;
-    client
-        .execute(
-            "UPDATE mcp_tools SET from_import = true WHERE tenant_id = $1 AND tool_name = ANY($2)",
-            &[&tenant_id, &synced],
-        )
-        .await
-        .to_store_error()?;
     let retired = client
         .execute(
             "UPDATE mcp_tools SET is_active = false, updated_at = NOW()
-              WHERE tenant_id = $1 AND from_import AND is_active AND NOT (tool_name = ANY($2))",
-            &[&tenant_id, &synced],
+              WHERE tenant_id = $1 AND is_active AND NOT (tool_name = ANY($2))",
+            &[&tenant_id, &expected],
         )
         .await
         .to_store_error()?;
@@ -649,10 +638,10 @@ pub async fn sync_endpoints_as_mcp_tools(
     Ok(count)
 }
 
-/// Re-sync a workspace's imported tools from *all* its API groups, after any
-/// change to them — a single endpoint edited, a group added or deleted. The
-/// sync switches off imported tools missing from the set it is given, so it
-/// must always see the whole workspace, never one group. Non-fatal: the
+/// Re-sync a workspace's tools from *all* its API groups, after any change to
+/// them — a single endpoint edited, a group added or deleted. The sync switches
+/// off tools missing from the set it is given, so it must always see the whole
+/// workspace, never one group. Non-fatal: the
 /// change itself is already committed.
 /// Returns how many tools were synced, 0 when the resync failed.
 pub async fn resync_tenant_tools(store: &EndpointStore, tenant_id: &str) -> usize {

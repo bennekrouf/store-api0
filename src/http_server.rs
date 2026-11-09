@@ -43,8 +43,7 @@ use crate::mcp::user_credentials::{
 };
 use crate::mcp::tools::{
     delete_mcp_tool_handler, delete_my_mcp_tool_handler, get_mcp_tool_handler,
-    list_mcp_tools_handler, list_my_mcp_tools_handler, upsert_mcp_tool_handler,
-    upsert_my_mcp_tool_handler,
+    list_mcp_tools_handler, list_my_mcp_tools_handler,
 };
 use crate::mcp::instructions::{
     get_mcp_instructions_handler, get_my_mcp_instructions_handler,
@@ -307,13 +306,11 @@ pub async fn start_http_server(
                                 web::get().to(list_user_tenants),
                             )
                             // MCP tool registry
-                            .route("/mcp-tools", web::post().to(upsert_mcp_tool_handler))
                             .route("/mcp-tools/{tenant_id}", web::get().to(list_mcp_tools_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::get().to(get_mcp_tool_handler))
                             .route("/mcp-tools/{tenant_id}/{tool_name}", web::delete().to(delete_mcp_tool_handler))
                             // Tenant-facing registry (email-keyed; proxied by the gateway)
                             .route("/user/mcp-tools", web::get().to(list_my_mcp_tools_handler))
-                            .route("/user/mcp-tools", web::put().to(upsert_my_mcp_tool_handler))
                             .route("/user/mcp-tools/connection", web::put().to(crate::mcp::tools::set_my_tools_connection_handler))
                             .route("/user/mcp-tools/{tool_name}", web::delete().to(delete_my_mcp_tool_handler))
                             // MCP initialize instructions: tool summary + the tenant's own text

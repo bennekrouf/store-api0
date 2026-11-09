@@ -507,14 +507,6 @@ impl EndpointStore {
 
     // ── MCP tools ─────────────────────────────────────────────────────────────
 
-    pub async fn upsert_mcp_tool(
-        &self,
-        tenant_id: &str,
-        req: &mcp_tools_management::UpsertMcpToolRequest,
-    ) -> Result<mcp_tools_management::McpTool, StoreError> {
-        mcp_tools_management::upsert_mcp_tool(self, tenant_id, req).await
-    }
-
     pub async fn list_mcp_tools(
         &self,
         tenant_id: &str,
