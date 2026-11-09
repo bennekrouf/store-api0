@@ -54,7 +54,8 @@ pub async fn link_info_handler(
             "SELECT id, name, mcp_client_id,
                     -- What the gateway checks before Claude may connect: a
                     -- sign-in method, and something to list once connected.
-                    (NULLIF(trim(google_client_id), '') IS NOT NULL OR allow_api0_signin)
+                    ((idp_issuer IS NOT NULL AND idp_client_id IS NOT NULL)
+                     OR NULLIF(trim(google_client_id), '') IS NOT NULL OR allow_api0_signin)
                     AND (EXISTS (SELECT 1 FROM mcp_tools m WHERE m.tenant_id = t.id AND m.is_active)
                          OR EXISTS (SELECT 1 FROM api_groups g JOIN endpoints e ON e.group_id = g.id
                                      WHERE g.tenant_id = t.id))

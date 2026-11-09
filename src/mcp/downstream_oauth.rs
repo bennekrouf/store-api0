@@ -109,6 +109,10 @@ pub struct SaveSecretBody {
     pub expires_at: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    /// The account named by the token, read by the gateway. This route is
+    /// internal, so the value never comes from a browser.
+    #[serde(default)]
+    pub verified_identity: Option<String>,
 }
 
 pub async fn save_secret_handler(
@@ -126,10 +130,7 @@ pub async fn save_secret_handler(
         secret: body.secret.clone(),
         label: body.label.clone(),
         expires_at: body.expires_at.clone(),
-        // Only meaningful for a hand-pasted PAT, which the tenant can ask us to
-        // verify against a "who is this token?" endpoint. An OAuth token's
-        // identity is settled by the authorization itself.
-        verified_identity: None,
+        verified_identity: body.verified_identity.clone(),
     };
     match save_credential(&store, &tenant_id, &body.email, &r).await {
         Ok(summary) => {

@@ -10,9 +10,11 @@
 //   GET /api/admin/llm-regions   every region with what is behind it, the
 //                                providers (with whether their key is set) and
 //                                the models to choose from, priced (llm_models.rs)
-//   PUT /api/admin/llm-regions   { regions: [{ id, provider, model, tasks? }] } —
+//   PUT /api/admin/llm-regions   { regions: [{ id, provider, model, tasks?, open }] } —
 //                                an empty provider takes the region off offer;
 //                                `tasks` is { "<task>": { provider, model } }
+//   GET /api/internal/llm/regions  every region and whether it can be used now,
+//                                for the apps' flags, licence or not
 //
 // A region may run another model for one task (llm_models::TASKS): code for
 // GitAgent, text for PublishKit. A call's task is the one it names in
@@ -25,7 +27,10 @@
 // Stored in system_config as `llm.regions`:
 // { "<region>": { provider, model, tasks: { "<task>": { provider, model } } } };
 // until it is saved, defaults() stands. A region is offered only once its
-// provider's key is set.
+// provider's key is set and the super admin has opened it: `llm.regions.open`
+// holds the open ids, DEFAULT_OPEN until it is saved. A closed region keeps its
+// models, so it can be tuned before it opens; everyone else sees its flag
+// greyed, "Coming soon", and a call naming it is refused.
 // The keys are the platform ones set in Admin → Platform (assistant_config).
 // Both need X-Internal-Secret; the gateway restricts them to the super admin.
 
@@ -40,6 +45,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 const CONFIG_KEY: &str = "llm.regions";
+const OPEN_KEY: &str = "llm.regions.open";
+
+/// The regions open before the super admin saves a choice.
+const DEFAULT_OPEN: &[&str] = &["china"];
 
 pub(crate) struct Region {
     pub id: &'static str,
@@ -177,8 +186,40 @@ pub(crate) async fn read_regions(store: &EndpointStore) -> Result<HashMap<String
     Ok(row.map(|r| parse(r.get::<_, &str>(0))).unwrap_or_else(defaults))
 }
 
+/// The ids `llm.regions.open` holds, without regions that no longer exist.
+/// Anything unreadable opens nothing: a broken value must not start spending.
+fn parse_open(value: Option<&str>) -> Vec<String> {
+    match value {
+        None => DEFAULT_OPEN.iter().map(|s| s.to_string()).collect(),
+        Some(v) => serde_json::from_str::<Vec<String>>(v)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| region(id).is_some())
+            .collect(),
+    }
+}
+
+/// The ids of the regions the super admin has opened.
+pub(crate) async fn read_open(store: &EndpointStore) -> Result<Vec<String>, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let row = client
+        .query_opt("SELECT value FROM system_config WHERE key = $1", &[&OPEN_KEY])
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(parse_open(row.as_ref().map(|r| r.get::<_, &str>(0))))
+}
+
+/// read_regions without the closed ones: what anyone but the super admin may
+/// use. Pricing keeps read_regions, so opening a region does not reprice the rest.
+pub(crate) async fn read_offered(store: &EndpointStore) -> Result<HashMap<String, Backing>, String> {
+    let mut regions = read_regions(store).await?;
+    let open = read_open(store).await?;
+    regions.retain(|id, _| open.contains(id));
+    Ok(regions)
+}
+
 /// The regions an app can use now — set, and their provider's key too — in
-/// the order of REGIONS.
+/// the order of REGIONS. Give it read_offered's map, so closed ones stay out.
 pub(crate) fn live<'a>(regions: &'a HashMap<String, Backing>, keyed: &[String]) -> Vec<(&'static Region, &'a Backing)> {
     REGIONS
         .iter()
@@ -206,13 +247,14 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    let (regions, keyed, catalog) = match (
+    let (regions, keyed, catalog, open) = match (
         read_regions(&store).await,
         assistant_config::providers_with_key(&store).await,
         llm_models::read_catalog(&store).await,
+        read_open(&store).await,
     ) {
-        (Ok(r), Ok(k), Ok(c)) => (r, k, c),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+        (Ok(r), Ok(k), Ok(c), Ok(o)) => (r, k, c, o),
+        (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => {
             app_log!(error, error = %e, "Could not read the LLM regions");
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the regions");
         }
@@ -229,6 +271,7 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
                 "model": b.map(|b| &b.model),
                 "tasks": b.map(|b| &b.tasks),
                 "live": b.is_some_and(|b| keyed.contains(&b.provider)),
+                "open": open.iter().any(|id| id == r.id),
             })
         })
         .collect();
@@ -264,6 +307,9 @@ pub struct RegionChoice {
     /// By task; an empty provider leaves the task on the region's model.
     #[serde(default)]
     pub tasks: HashMap<String, PickChoice>,
+    /// Open to users. Left out, it closes: a stale page must not start spending.
+    #[serde(default)]
+    pub open: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,6 +386,15 @@ fn validate(choices: &[RegionChoice], keyed: &[String], catalog: &[CatalogModel]
     Ok(out)
 }
 
+/// The regions to open: asked for, and with a model behind them, in REGIONS' order.
+fn opened(choices: &[RegionChoice], saved: &HashMap<String, Backing>) -> Vec<&'static str> {
+    REGIONS
+        .iter()
+        .filter(|r| saved.contains_key(r.id) && choices.iter().any(|c| c.open && region(&c.id).is_some_and(|x| x.id == r.id)))
+        .map(|r| r.id)
+        .collect()
+}
+
 pub async fn save_regions(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
@@ -364,23 +419,54 @@ pub async fn save_regions(
         Err(e) => return fail(StatusCode::BAD_REQUEST, e),
     };
     let value = serde_json::to_string(&regions).unwrap_or_else(|_| "{}".into());
+    let open = serde_json::to_string(&opened(&body.regions, &regions)).unwrap_or_else(|_| "[]".into());
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "Database unavailable"),
     };
     if let Err(e) = client
         .execute(
-            "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
+            "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW()), ($3, $4, NOW())
              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
-            &[&CONFIG_KEY, &value],
+            &[&CONFIG_KEY, &value, &OPEN_KEY, &open],
         )
         .await
     {
         app_log!(error, error = %e, "Could not save the LLM regions");
         return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the regions");
     }
-    app_log!(info, regions = %value, "LLM regions changed");
+    app_log!(info, regions = %value, open = %open, "LLM regions changed");
     HttpResponse::Ok().json(serde_json::json!({ "success": true }))
+}
+
+// ── GET /api/internal/llm/regions ────────────────────────────────────────────
+
+/// Every region and whether it can be used now. The gateway serves it with no
+/// licence, so it says nothing about what runs behind a region.
+pub async fn list_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let (regions, keyed) = match (read_offered(&store).await, assistant_config::providers_with_key(&store).await) {
+        (Ok(r), Ok(k)) => (r, k),
+        (Err(e), _) | (_, Err(e)) => {
+            app_log!(error, error = %e, "Could not read the LLM regions");
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the regions");
+        }
+    };
+    let on = live(&regions, &keyed);
+    let list: Vec<serde_json::Value> = REGIONS
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "label": r.label,
+                "flag": r.flag,
+                "available": on.iter().any(|(x, _)| x.id == r.id),
+            })
+        })
+        .collect();
+    HttpResponse::Ok().json(serde_json::json!({ "success": true, "regions": list }))
 }
 
 #[cfg(test)]
@@ -388,7 +474,7 @@ mod tests {
     use super::*;
 
     fn choice(id: &str, provider: &str, model: &str) -> RegionChoice {
-        RegionChoice { id: id.into(), provider: provider.into(), model: model.into(), tasks: HashMap::new() }
+        RegionChoice { id: id.into(), provider: provider.into(), model: model.into(), tasks: HashMap::new(), open: false }
     }
 
     fn with_task(mut c: RegionChoice, task: &str, provider: &str, model: &str) -> RegionChoice {
@@ -412,6 +498,27 @@ mod tests {
         assert!(validate(&[choice("mars", "deepseek", "deepseek-chat")], &keyed).is_err());
         assert!(validate(&[choice("europe", "mistral", "gpt-5")], &keyed).is_err());
         assert!(validate(&[choice("usa", "anthropic", "claude-sonnet-5-5")], &keyed).is_err(), "no key yet");
+    }
+
+    #[test]
+    fn china_alone_is_open_until_a_choice_is_saved() {
+        assert_eq!(parse_open(None), ["china"]);
+        assert_eq!(parse_open(Some(r#"["usa","mars"]"#)), ["usa"], "an unknown region is dropped");
+        assert!(parse_open(Some("[]")).is_empty());
+        assert!(parse_open(Some("not json")).is_empty(), "unreadable opens nothing");
+    }
+
+    #[test]
+    fn only_a_region_with_a_model_can_be_opened() {
+        let keyed = vec!["deepseek".to_string()];
+        let catalog = llm_models::defaults();
+        let open = |mut c: RegionChoice| {
+            c.open = true;
+            c
+        };
+        let choices = [open(choice("usa", "", "")), open(choice("CHINA", "deepseek", "deepseek-chat")), choice("europe", "", "")];
+        let saved = validate(&choices, &keyed, &catalog).unwrap();
+        assert_eq!(opened(&choices, &saved), ["china"]);
     }
 
     #[test]

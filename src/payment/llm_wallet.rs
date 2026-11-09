@@ -165,7 +165,7 @@ pub async fn authorize_handler(
         .filter(|p| keyed.iter().any(|k| k == p.id))
         .flat_map(|p| p.models.iter().map(move |m| (p.id, *m)))
         .collect();
-    let regions = match llm_regions::read_regions(&store).await {
+    let regions = match llm_regions::read_offered(&store).await {
         Ok(r) => r,
         Err(e) => {
             app_log!(error, error = %e, "Could not read the LLM regions");
@@ -231,6 +231,12 @@ pub async fn authorize_handler(
         "balance": if who.active { who.credits_left } else { 0 },
         // What the app may list: the regions, never the models behind them.
         "models": live.iter().map(|(r, _)| r.id).collect::<Vec<_>>(),
+        // So a call naming one is told why it is refused.
+        "coming_soon": llm_regions::REGIONS
+            .iter()
+            .filter(|r| !live.iter().any(|(l, _)| l.id == r.id))
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
         "regions": live
             .iter()
             .map(|(r, b)| serde_json::json!({
