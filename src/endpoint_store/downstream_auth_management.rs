@@ -112,7 +112,7 @@ pub struct SaveDownstreamAuthRequest {
 /// would hand the caller a null credential and produce a confusing 401 from some
 /// third party. It is logged and surfaced as missing, which at least says the
 /// problem is here.
-fn unseal_or_plain(
+pub(crate) fn unseal_or_plain(
     sealed: Option<Vec<u8>>,
     plain: Option<String>,
     tenant_id: &str,
@@ -133,7 +133,7 @@ fn unseal_or_plain(
 
 /// Seal a value for storage, or fail loudly. Returning the plaintext on error
 /// would quietly reintroduce exactly what this is meant to remove.
-fn seal_for(value: &str, tenant_id: &str, purpose: &str) -> Result<Vec<u8>, StoreError> {
+pub(crate) fn seal_for(value: &str, tenant_id: &str, purpose: &str) -> Result<Vec<u8>, StoreError> {
     secret_box::seal(value, &SecretContext { tenant_id, purpose }).map_err(|e| {
         app_log!(error, tenant_id = %tenant_id, purpose = %purpose, error = %e,
             "Could not seal a downstream secret");

@@ -12,6 +12,7 @@ use chrono::Utc;
 use serde::Serialize;
 
 const SECRET_PURPOSE: &str = "messaging_channel_credential";
+pub const WEBHOOK_SECRET_PURPOSE: &str = "messaging_channel_webhook_secret";
 
 /// What a person sees about their channel. Never the credential.
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +58,16 @@ pub async fn register_channel(
     let sealed = secret_box::seal(req.credential, &SecretContext { tenant_id, purpose: SECRET_PURPOSE })
         .map_err(|e| StoreError::InvalidInput(format!("could not store the bot token: {}", e)))?;
 
+    // Teams has no webhook secret and sends an empty one: nothing to seal.
+    let webhook_secret_enc = if req.webhook_secret.is_empty() {
+        None
+    } else {
+        Some(
+            secret_box::seal(req.webhook_secret, &SecretContext { tenant_id, purpose: WEBHOOK_SECRET_PURPOSE })
+                .map_err(|e| StoreError::InvalidInput(format!("could not store the webhook secret: {}", e)))?,
+        )
+    };
+
     let client = store.get_admin_conn().await?;
 
     // One bot per platform per tenant: registering again replaces it.
@@ -64,14 +75,15 @@ pub async fn register_channel(
         .query_one(
             "INSERT INTO messaging_channels
                 (channel, channel_ref, tenant_id, credential_enc, display_ref,
-                 webhook_secret, system_prompt, created_at)
+                 webhook_secret_enc, system_prompt, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
              ON CONFLICT (channel, tenant_id) DO UPDATE SET
-                channel_ref    = EXCLUDED.channel_ref,
-                credential_enc = EXCLUDED.credential_enc,
-                display_ref    = EXCLUDED.display_ref,
-                webhook_secret = EXCLUDED.webhook_secret,
-                system_prompt  = EXCLUDED.system_prompt
+                channel_ref        = EXCLUDED.channel_ref,
+                credential_enc     = EXCLUDED.credential_enc,
+                display_ref        = EXCLUDED.display_ref,
+                webhook_secret     = NULL,
+                webhook_secret_enc = EXCLUDED.webhook_secret_enc,
+                system_prompt      = EXCLUDED.system_prompt
              RETURNING channel, channel_ref, tenant_id, display_ref, system_prompt, created_at, label",
             &[
                 &req.channel,
@@ -79,7 +91,7 @@ pub async fn register_channel(
                 &tenant_id,
                 &sealed,
                 &req.display_ref,
-                &req.webhook_secret,
+                &webhook_secret_enc,
                 &req.system_prompt,
             ],
         )
@@ -99,7 +111,7 @@ pub async fn channel_for_bridge(
     let client = store.get_admin_conn().await?;
     let row = client
         .query_opt(
-            "SELECT tenant_id, credential_enc, webhook_secret, system_prompt
+            "SELECT tenant_id, credential_enc, webhook_secret, system_prompt, webhook_secret_enc
              FROM messaging_channels WHERE channel = $1 AND channel_ref = $2",
             &[&channel, &channel_ref],
         )
@@ -119,10 +131,21 @@ pub async fn channel_for_bridge(
             StoreError::Database("channel credential could not be read".into())
         })?;
 
+    // The plaintext column only holds rows the legacy backfill has not reached.
+    let sealed_webhook: Option<Vec<u8>> = row.get(4);
+    let webhook_secret = match sealed_webhook {
+        Some(bytes) => secret_box::open(&bytes, &SecretContext { tenant_id: &tenant_id, purpose: WEBHOOK_SECRET_PURPOSE })
+            .map_err(|e| {
+                app_log!(error, channel = %channel, error = %e, "Channel webhook secret would not open");
+                StoreError::Database("channel webhook secret could not be read".into())
+            })?,
+        None => row.get::<_, Option<String>>(2).unwrap_or_default(),
+    };
+
     Ok(Some(ChannelForBridge {
         tenant_id,
         credential,
-        webhook_secret: row.get(2),
+        webhook_secret,
         system_prompt: row.get(3),
     }))
 }

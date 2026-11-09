@@ -271,7 +271,13 @@ pub async fn tenants_overview(
                  t.idp_issuer,
                  t.idp_client_id,
                  t.idp_client_secret IS NOT NULL,
-                 d.oauth_client_secret_enc IS NOT NULL
+                 d.oauth_client_secret_enc IS NOT NULL,
+                 -- Identifies the provider; a URL, not a credential.
+                 COALESCE(d.oauth_authorize_url, d.oauth_token_url),
+                 -- WhatsApp keeps its own table; the other chats share one.
+                 ARRAY(SELECT 'whatsapp'::varchar FROM whatsapp_channels w WHERE w.tenant_id = t.id
+                       UNION ALL
+                       SELECT mc.channel FROM messaging_channels mc WHERE mc.tenant_id = t.id)
              FROM tenants t
              -- The default connection only: a tenant with named connections
              -- would otherwise appear once per connection.
@@ -383,6 +389,8 @@ pub async fn tenants_overview(
             "idp_client_id": idp_client_id,
             "has_idp_client_secret": r.get::<_, bool>(26),
             "has_oauth_client_secret": has_oauth_secret,
+            "oauth_endpoint": r.get::<_, Option<String>>(28),
+            "connected_channels": r.get::<_, Vec<String>>(29),
             "per_user_scheme": r.get::<_, Option<String>>(15),
             "per_user_header": r.get::<_, Option<String>>(16),
             "per_user_verify_url": r.get::<_, Option<String>>(17),

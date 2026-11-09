@@ -116,7 +116,6 @@ CREATE TABLE IF NOT EXISTS domains (
     verified BOOLEAN NOT NULL DEFAULT false,
     added_at TIMESTAMP WITH TIME ZONE NOT NULL,
     last_used TIMESTAMP WITH TIME ZONE,
-    verification_token VARCHAR,
     PRIMARY KEY (id),
     UNIQUE(email, domain)
 );
@@ -355,7 +354,6 @@ BEGIN
         WHERE table_name = 'tenants' AND column_name = 'firebase_project_id'
     ) THEN
         ALTER TABLE tenants ADD COLUMN firebase_project_id VARCHAR;
-        ALTER TABLE tenants ADD COLUMN firebase_api_key VARCHAR;
         ALTER TABLE tenants ADD COLUMN firebase_auth_domain VARCHAR;
     END IF;
 END $$;
@@ -856,6 +854,22 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS mcp_instructions TEXT;
 -- own app — so one platform-wide secret verifies at most one tenant and rejects
 -- the rest. NULL falls back to the platform's META_APP_SECRET.
 ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS app_secret TEXT;
+
+-- ── Channel secrets, sealed ──────────────────────────────────────────────────
+-- Sealed by infra::secret_box. Saves write only these columns; the plaintext
+-- ones are read as a fallback until the legacy backfill has emptied them
+-- (POST /api/internal/encrypt-legacy-secrets).
+ALTER TABLE whatsapp_channels  ADD COLUMN IF NOT EXISTS wa_token_enc       BYTEA;
+ALTER TABLE whatsapp_channels  ADD COLUMN IF NOT EXISTS verify_token_enc   BYTEA;
+ALTER TABLE whatsapp_channels  ADD COLUMN IF NOT EXISTS app_secret_enc     BYTEA;
+ALTER TABLE messaging_channels ADD COLUMN IF NOT EXISTS webhook_secret_enc BYTEA;
+ALTER TABLE whatsapp_channels  ALTER COLUMN wa_token       DROP NOT NULL;
+ALTER TABLE whatsapp_channels  ALTER COLUMN verify_token   DROP NOT NULL;
+ALTER TABLE messaging_channels ALTER COLUMN webhook_secret DROP NOT NULL;
+
+-- Never read or written by any api0 service.
+ALTER TABLE domains DROP COLUMN IF EXISTS verification_token;
+ALTER TABLE tenants DROP COLUMN IF EXISTS firebase_api_key;
 
 -- The last time a platform delivered a message to the bridge, written at the
 -- door before identity, rate limits or the model are involved. The only trace a

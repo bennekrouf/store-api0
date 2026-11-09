@@ -53,6 +53,17 @@ pub fn new_code() -> String {
         .collect()
 }
 
+/// What is stored in place of a code. Keyed, because six characters are too few
+/// for a plain hash: the code could be recovered from it by trying them all.
+fn code_digest(code: &str) -> Result<String, StoreError> {
+    use hmac::{Hmac, Mac};
+    let unavailable = || StoreError::InvalidInput("API0_ENCRYPTION_KEY is not set — a link code could not be protected".into());
+    let key = secret_box::derive_key("channel_link_code").map_err(|_| unavailable())?;
+    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&key).map_err(|_| unavailable())?;
+    mac.update(code.as_bytes());
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
 pub async fn create_link_code(
     store: &EndpointStore,
     user_email: &str,
@@ -66,12 +77,13 @@ pub async fn create_link_code(
         .await;
 
     let code = new_code();
+    let digest = code_digest(&code)?;
     let expires_at = Utc::now() + Duration::minutes(CODE_TTL_MINUTES);
 
     client
         .execute(
             "INSERT INTO channel_link_codes (code, user_email, expires_at) VALUES ($1, $2, $3)",
-            &[&code, &email, &expires_at],
+            &[&digest, &email, &expires_at],
         )
         .await
         .to_store_error()?;
@@ -95,7 +107,7 @@ pub async fn redeem_link_code(
     }
 
     let client = store.get_admin_conn().await?;
-    let code = code.trim().to_uppercase();
+    let code = code_digest(&code.trim().to_uppercase())?;
 
     // Single use: the DELETE is the redemption. A replayed code finds nothing.
     let row = client
