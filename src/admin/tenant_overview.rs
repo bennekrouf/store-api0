@@ -135,7 +135,7 @@ fn diagnose(t: &TenantFacts, leaks: &[serde_json::Value]) -> Vec<serde_json::Val
         push(
             "risk",
             format!(
-                "{} tool{} send api0's internal secret and the caller's email to {} ({}{}). \
+                "{} tool{} send the caller's email and workspace identifiers to {} ({}{}). \
                  Set forward_identity: false on them.",
                 leaks.len(),
                 if leaks.len() == 1 { "" } else { "s" },
@@ -401,7 +401,7 @@ pub async fn tenants_overview(
                 .get::<_, Option<chrono::DateTime<chrono::Utc>>>(21)
                 .map(|t| t.to_rfc3339()),
             "consumer_count": facts.consumer_count,
-            // Tools that send api0's identity headers (internal secret, the
+            // Tools that send api0's identity headers (workspace identifiers, the
             // caller's email) to a host outside `first_party_hosts`.
             "identity_leaks": tenant_leaks,
             "findings": findings,
@@ -559,7 +559,7 @@ pub async fn tenants_overview(
 /// `API0_FIRST_PARTY_HOSTS` is a comma-separated list. The defaults are the
 /// platform's own domains; a host on the private network is always trusted
 /// (see [`is_first_party`]), so internal service names need no entry.
-fn first_party_hosts() -> Vec<String> {
+pub(crate) fn first_party_hosts() -> Vec<String> {
     let raw = std::env::var("API0_FIRST_PARTY_HOSTS")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -574,7 +574,7 @@ fn first_party_hosts() -> Vec<String> {
 
 /// The host of a backend URL, lowercased, without port or credentials.
 /// `None` when there is no host to speak of (relative or placeholder-only).
-fn host_of(url: &str) -> Option<String> {
+pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.trim().split_once("://").map(|(_, r)| r).unwrap_or(url.trim());
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
@@ -594,7 +594,7 @@ fn host_of(url: &str) -> Option<String> {
 ///
 /// Besides the listed domains: loopback, a bare service name (no dot — only
 /// resolvable inside the deployment's own network) and the RFC 1918 ranges.
-fn is_first_party(host: &str, own: &[String]) -> bool {
+pub(crate) fn is_first_party(host: &str, own: &[String]) -> bool {
     if host == "localhost" || host == "::1" || !host.contains('.') {
         return true;
     }
@@ -605,40 +605,55 @@ fn is_first_party(host: &str, own: &[String]) -> bool {
         .any(|d| host == d || host.ends_with(&format!(".{d}")))
 }
 
-/// Per tenant, every tool that forwards identity to a host outside `own`.
+/// A tool as the gateway will call it.
+pub(crate) struct ToolRow {
+    pub name: String,
+    pub url: String,
+    pub forward: bool,
+    /// `None` is the MCP envelope, sent as a POST.
+    pub verb: Option<String>,
+    pub has_static_headers: bool,
+}
+
+/// `(tenant, tool)` for one tenant, or every tenant with `None`.
 ///
 /// Mirrors how the gateway assembles a tenant's tools: the active `mcp_tools`
 /// rows, plus an endpoint only when no row already carries its name. Checking
 /// the endpoint behind an explicit row would report a setting nobody uses.
-async fn identity_leaks(
+async fn tool_rows(
     client: &deadpool_postgres::Object,
-    own: &[String],
-) -> Result<HashMap<String, Vec<serde_json::Value>>, tokio_postgres::Error> {
+    tenant: Option<&str>,
+) -> Result<Vec<(String, ToolRow)>, tokio_postgres::Error> {
     let explicit = client
         .query(
-            "SELECT tenant_id, tool_name, backend_url, forward_identity
-               FROM mcp_tools WHERE is_active = true",
-            &[],
+            "SELECT tenant_id, tool_name, backend_url, forward_identity, http_verb,
+                    (static_headers IS NOT NULL OR static_headers_enc IS NOT NULL)
+               FROM mcp_tools
+              WHERE is_active = true AND ($1::text IS NULL OR tenant_id = $1::text)",
+            &[&tenant],
         )
         .await?;
     let endpoints = client
         .query(
             "SELECT g.tenant_id, g.name, e.text, e.base, g.base, e.path,
-                    COALESCE(e.forward_identity, true)
+                    COALESCE(e.forward_identity, true), e.verb
                FROM api_groups g JOIN endpoints e ON g.id = e.group_id
-              WHERE g.tenant_id IS NOT NULL",
-            &[],
+              WHERE g.tenant_id IS NOT NULL AND ($1::text IS NULL OR g.tenant_id = $1::text)",
+            &[&tenant],
         )
         .await?;
 
     let mut named: HashSet<(String, String)> = HashSet::new();
-    let mut tools: Vec<(String, String, String, bool)> = Vec::new();
+    let mut tools: Vec<(String, ToolRow)> = Vec::new();
 
     for r in &explicit {
         let tenant: String = r.get(0);
         let name: String = r.get(1);
         named.insert((tenant.clone(), name.clone()));
-        tools.push((tenant, name, r.get(2), r.get(3)));
+        tools.push((
+            tenant,
+            ToolRow { name, url: r.get(2), forward: r.get(3), verb: r.get(4), has_static_headers: r.get(5) },
+        ));
     }
     for r in &endpoints {
         let tenant: String = r.get(0);
@@ -653,11 +668,31 @@ async fn identity_leaks(
         }
         let base = if e_base.is_empty() { &g_base } else { &e_base };
         let url = format!("{}{}", base.trim_end_matches('/'), path);
-        tools.push((tenant, name, url, r.get(6)));
+        tools.push((
+            tenant,
+            ToolRow { name, url, forward: r.get(6), verb: Some(r.get(7)), has_static_headers: false },
+        ));
     }
+    Ok(tools)
+}
+
+/// The tools of one tenant.
+pub(crate) async fn tools_of(
+    client: &deadpool_postgres::Object,
+    tenant: Option<&str>,
+) -> Result<Vec<ToolRow>, tokio_postgres::Error> {
+    Ok(tool_rows(client, tenant).await?.into_iter().map(|(_, t)| t).collect())
+}
+
+/// Per tenant, every tool that forwards identity to a host outside `own`.
+async fn identity_leaks(
+    client: &deadpool_postgres::Object,
+    own: &[String],
+) -> Result<HashMap<String, Vec<serde_json::Value>>, tokio_postgres::Error> {
+    let tools = tool_rows(client, None).await?;
 
     let mut out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-    for (tenant, name, url, forward) in tools {
+    for (tenant, ToolRow { name, url, forward, .. }) in tools {
         if !forward {
             continue;
         }

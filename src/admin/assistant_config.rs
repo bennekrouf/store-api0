@@ -30,6 +30,7 @@
 // take OpenAI-style audio transcriptions, which a region's speech model runs on
 // (`transcription_path`).
 
+use crate::admin::tenant_region::AssistantRegion;
 use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use crate::infra::secret_box::{self, SecretContext};
@@ -387,12 +388,22 @@ pub async fn delete_assistant_key(
 // ── GET /api/internal/assistant-config ── the bridge ─────────────────────────
 //
 // With `?tenant_id=`, the provider that workspace's assistant answers with: its
-// region's (tenant_region.rs) when it chose one on offer, else the platform's.
+// region's (tenant_region.rs) when it chose one, else the platform's. A chosen
+// region that cannot answer comes back as `region_unavailable`, never as another
+// provider, and a choice that cannot be read is an error for the same reason.
 
 #[derive(Debug, Deserialize)]
 pub struct InternalConfigQuery {
     #[serde(default)]
     pub tenant_id: Option<String>,
+}
+
+fn not_configured(region: Option<&str>) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "configured": false,
+        "region_unavailable": region,
+    }))
 }
 
 pub async fn internal_assistant_config(
@@ -407,16 +418,16 @@ pub async fn internal_assistant_config(
         Some(t) => match crate::admin::tenant_region::resolve(&store, t).await {
             Ok(r) => r,
             Err(e) => {
-                // The platform's provider still answers rather than none.
-                app_log!(warn, error = %e, tenant_id = %t, "Could not read the tenant's region");
-                None
+                app_log!(error, error = %e, tenant_id = %t, "Could not read the tenant's region");
+                return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the region");
             }
         },
-        None => None,
+        None => AssistantRegion::NotChosen,
     };
     let (region, choice) = match by_region {
-        Some((r, p, m)) => (Some(r.id), Some((p, m))),
-        None => match read_choice(&store).await {
+        AssistantRegion::Unavailable(r) => return not_configured(Some(r.id)),
+        AssistantRegion::Live { region, provider, model } => (Some(region.id), Some((provider, model))),
+        AssistantRegion::NotChosen => match read_choice(&store).await {
             Ok(c) => (None, c),
             Err(e) => {
                 app_log!(error, error = %e, "Could not read the assistant configuration");
@@ -425,14 +436,14 @@ pub async fn internal_assistant_config(
         },
     };
     let Some((id, model)) = choice else {
-        return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false }));
+        return not_configured(region);
     };
     let Some(p) = provider(&id) else {
-        return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false }));
+        return not_configured(region);
     };
     let api_key = match api_key(&store, p.id).await {
         Ok(Some(k)) => k,
-        Ok(None) => return HttpResponse::Ok().json(serde_json::json!({ "success": true, "configured": false })),
+        Ok(None) => return not_configured(region),
         Err(e) => {
             app_log!(error, error = %e, "Could not read the assistant API key");
             return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the key");

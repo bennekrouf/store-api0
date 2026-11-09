@@ -15,8 +15,8 @@
 //                                             platform's; owners and admins
 //
 // Stored in tenants.llm_region. A region taken off offer (no provider behind
-// it, or its key removed) answers with the platform's provider until it is
-// back; the choice is kept. Both need X-Internal-Secret; the gateway binds
+// it, or its key removed) stops the assistant until it is back, and the choice
+// is kept: a workspace that chose where its data goes is never moved elsewhere. Both need X-Internal-Secret; the gateway binds
 // `email` to the signed-in caller.
 
 use crate::admin::assistant_config;
@@ -43,11 +43,18 @@ pub(crate) async fn tenant_region(store: &EndpointStore, tenant_id: &str) -> Res
     Ok(row.and_then(|r| r.get::<_, Option<String>>(0)).and_then(|id| llm_regions::region(&id)))
 }
 
-/// The region, provider and model a tenant's assistant runs on, when it chose
-/// a region that is on offer now.
-pub(crate) async fn resolve(store: &EndpointStore, tenant_id: &str) -> Result<Option<(&'static Region, String, String)>, String> {
+/// What a tenant's choice of region means for its assistant now.
+pub(crate) enum AssistantRegion {
+    /// None chosen: the platform's provider answers.
+    NotChosen,
+    Live { region: &'static Region, provider: String, model: String },
+    /// Chosen but off offer: nothing may answer in its place.
+    Unavailable(&'static Region),
+}
+
+pub(crate) async fn resolve(store: &EndpointStore, tenant_id: &str) -> Result<AssistantRegion, String> {
     let Some(region) = tenant_region(store, tenant_id).await? else {
-        return Ok(None);
+        return Ok(AssistantRegion::NotChosen);
     };
     let (regions, keyed) = (
         llm_regions::read_offered(store).await?,
@@ -58,8 +65,9 @@ pub(crate) async fn resolve(store: &EndpointStore, tenant_id: &str) -> Result<Op
         .find(|(r, _)| r.id == region.id)
         .map(|(r, b)| {
             let (p, m) = b.for_task(Some(TASK), &keyed);
-            (r, p.to_string(), m.to_string())
-        }))
+            AssistantRegion::Live { region: r, provider: p.to_string(), model: m.to_string() }
+        })
+        .unwrap_or(AssistantRegion::Unavailable(region)))
 }
 
 fn failed(what: &str, e: String) -> HttpResponse {
@@ -181,4 +189,29 @@ pub async fn set_my_region_handler(
     }
     app_log!(info, tenant_id = %tenant.id, email = %body.email, region = ?region.map(|r| r.id), "Assistant region set");
     HttpResponse::Ok().json(serde_json::json!({ "success": true, "region": region.map(|r| r.id) }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn a_region_off_offer_is_unavailable_and_no_choice_is_not() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = Arc::new(EndpointStore::new(&url).await.expect("store"));
+        let run = uuid::Uuid::new_v4().simple().to_string();
+        let tenant = get_default_tenant(&store, &format!("region-{run}@example.com")).await.unwrap();
+        let t = tenant.id.as_str();
+
+        assert!(matches!(resolve(&store, t).await.unwrap(), AssistantRegion::NotChosen));
+
+        // No provider has a key on a fresh database, so no region is on offer.
+        let c = store.get_admin_conn().await.unwrap();
+        c.execute("UPDATE tenants SET llm_region = 'europe' WHERE id = $1", &[&t]).await.unwrap();
+        match resolve(&store, t).await.unwrap() {
+            AssistantRegion::Unavailable(r) => assert_eq!(r.id, "europe"),
+            _ => panic!("a region off offer must not resolve to a provider"),
+        }
+    }
 }
