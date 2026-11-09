@@ -279,6 +279,15 @@ pub async fn get_tenant_stats(
         })
         .collect();
 
+    // A report on top of the activity log: its failure must not take the log down.
+    let assistant_cost = match crate::api::assistant_cost::assistant_cost(&client, &tenant_id, hours).await {
+        Ok(cost) => Some(cost),
+        Err(e) => {
+            app_log!(warn, error = %e, tenant_id = %tenant_id, "Assistant cost query failed");
+            None
+        }
+    };
+
     app_log!(info,
         email = %email,
         tenant_id = %tenant_id,
@@ -303,5 +312,6 @@ pub async fn get_tenant_stats(
         },
         "events":      events,
         "total_count": total_count,
+        "assistant_cost": assistant_cost,
     }))
 }

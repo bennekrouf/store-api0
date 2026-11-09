@@ -1,3 +1,4 @@
+pub mod assistant_cost;
 pub mod group_add;
 pub mod group_delete;
 pub mod group_update;
