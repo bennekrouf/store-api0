@@ -19,14 +19,14 @@
 # sets `forward_identity: false`. It is declared once per group and inherited by
 # each endpoint; an endpoint may override it.
 #
-# Replace `oryxenergies` below if you point this at another organisation.
+# Replace `YOUR-ORGANIZATION` below if you point this at another organisation.
 
 api_groups:
 
   # ── Work items ──────────────────────────────────────────────────────────────
   - name: "Azure DevOps Work Items"
     description: "Find, read and comment on Azure DevOps work items"
-    base: "https://dev.azure.com/oryxenergies"
+    base: "https://dev.azure.com/YOUR-ORGANIZATION"
     forward_identity: false
     endpoints:
 
@@ -106,7 +106,7 @@ api_groups:
             {"op": "add", "path": "/fields/System.IterationPath", "value": "{iteration_path}"},
             {"op": "add", "path": "/relations/-", "value": {
               "rel": "System.LinkTypes.Hierarchy-Reverse",
-              "url": "https://dev.azure.com/oryxenergies/_apis/wit/workItems/{parent_id}"
+              "url": "https://dev.azure.com/YOUR-ORGANIZATION/_apis/wit/workItems/{parent_id}"
             }}
           ]
         parameters:
@@ -170,7 +170,7 @@ api_groups:
   # which projects exist, which sprints, which teams.
   - name: "Azure DevOps Projects"
     description: "Projects, iterations and teams in Azure DevOps"
-    base: "https://dev.azure.com/oryxenergies"
+    base: "https://dev.azure.com/YOUR-ORGANIZATION"
     forward_identity: false
     endpoints:
 
@@ -239,7 +239,7 @@ api_groups:
   # Optional. Delete this group if you only care about work items.
   - name: "Azure DevOps Code"
     description: "Repositories, pull requests and builds"
-    base: "https://dev.azure.com/oryxenergies"
+    base: "https://dev.azure.com/YOUR-ORGANIZATION"
     forward_identity: false
     endpoints:
 
