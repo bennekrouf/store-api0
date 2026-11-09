@@ -1299,3 +1299,42 @@ CREATE TABLE IF NOT EXISTS workspace_subscriptions (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_subscriptions_tenant ON workspace_subscriptions(tenant_id);
+
+-- ── Legal details (admin::legal_details) ────────────────────────────────────
+-- The company a workspace contracts through, filled in by its owners or admins.
+-- Workspaces point here, so one company can hold several and deleting a
+-- workspace leaves its contract records in place.
+CREATE TABLE IF NOT EXISTS legal_entities (
+    id                     VARCHAR     PRIMARY KEY,
+    legal_name             VARCHAR     NOT NULL,
+    registered_address     TEXT        NOT NULL,
+    country                VARCHAR(2)  NOT NULL,
+    company_number         VARCHAR     NOT NULL DEFAULT '',
+    vat_id                 VARCHAR     NOT NULL DEFAULT '',
+    billing_email          VARCHAR     NOT NULL,
+    privacy_contact_name   VARCHAR     NOT NULL DEFAULT '',
+    privacy_contact_email  VARCHAR     NOT NULL,
+    security_contact_email VARCHAR     NOT NULL,
+    acts_as_business       BOOLEAN     NOT NULL,
+    created_by             VARCHAR     NOT NULL,
+    updated_by             VARCHAR     NOT NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS legal_entity_id VARCHAR REFERENCES legal_entities(id) ON DELETE SET NULL;
+
+-- Proof of who accepted which version, as it stood that day. Never updated.
+-- tenant_id has no foreign key: this row outlives the workspace.
+CREATE TABLE IF NOT EXISTS legal_acceptances (
+    id                 BIGSERIAL   PRIMARY KEY,
+    legal_entity_id    VARCHAR     NOT NULL REFERENCES legal_entities(id),
+    legal_name         VARCHAR     NOT NULL,
+    tenant_id          VARCHAR     NOT NULL,
+    tenant_name        VARCHAR     NOT NULL,
+    document           VARCHAR     NOT NULL,
+    version            VARCHAR     NOT NULL,
+    accepted_by        VARCHAR     NOT NULL,
+    authority_declared BOOLEAN     NOT NULL,
+    accepted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (legal_entity_id, document, version)
+);

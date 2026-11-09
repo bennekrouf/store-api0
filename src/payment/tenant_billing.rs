@@ -41,7 +41,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 /// Roles that may change who pays. It moves money, so members may not.
-const EDITOR_ROLES: &[&str] = &["owner", "admin"];
+pub(crate) const EDITOR_ROLES: &[&str] = &["owner", "admin"];
 
 /// What a plan's usage history shows these charges as.
 const PRODUCT: &str = "mcp";

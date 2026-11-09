@@ -12,3 +12,4 @@ pub mod llm_models;
 pub mod llm_recommendations;
 pub mod tenant_region;
 pub mod security_audit;
+pub mod legal_details;
