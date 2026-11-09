@@ -318,6 +318,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_payment_service = payment_service;
 
     // Start the HTTP server as a separate task
+    {
+        let store = Arc::clone(&store_arc);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                crate::admin::legal_details::retry_unsent(&store).await;
+            }
+        });
+    }
+
     let http_handle = tokio::spawn(async move {
         app_log!(info, "Starting HTTP server on {}:{}", http_host, http_port);
 

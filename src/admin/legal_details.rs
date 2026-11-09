@@ -6,10 +6,15 @@
 //   GET /api/user/legal-details?email=…
 //   PUT /api/user/legal-details
 //
-// Accepting a new version adds a row and never changes an old one. To publish a
-// new version, or a new document, change `DOCUMENTS`: the form then asks again.
+// Accepting a new version adds a row and never changes an old one. Each one gets
+// a PDF, stored as sent and emailed to the customer with a copy to api0.
+//
+// To publish a new version, or a new document, add its text under legal/ and
+// change `DOCUMENTS`: the form then asks again, and new subscriptions wait for it.
 
+use crate::admin::agreement_pdf::{self, Agreement};
 use crate::app_log;
+use crate::email::{send_agreement, AgreementMail};
 use crate::endpoint_store::tenant_management::get_default_tenant;
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
@@ -18,6 +23,7 @@ use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio_postgres::Row;
 
@@ -27,6 +33,7 @@ struct Document {
     title: &'static str,
     version: &'static str,
     url: &'static str,
+    text: &'static str,
 }
 
 const DOCUMENTS: &[Document] = &[Document {
@@ -34,7 +41,13 @@ const DOCUMENTS: &[Document] = &[Document {
     title: "Terms of Service",
     version: "2025-10-27",
     url: "https://api0.ai/terms",
+    text: include_str!("../../legal/terms-2025-10-27.md"),
 }];
+
+const LEGAL_COPY_ENV: &str = "LEGAL_COPY_EMAIL";
+const DEFAULT_LEGAL_COPY: &str = "mb@mayorana.ch";
+const RETRY_AFTER_MINUTES: i32 = 10;
+const RETRY_FOR_DAYS: i32 = 7;
 
 const MAX_NAME: usize = 200;
 const MAX_ADDRESS: usize = 500;
@@ -246,9 +259,31 @@ fn documents_json(accepted: &[Accepted]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn is_complete(details: Option<&Details>, accepted: &[Accepted]) -> bool {
+fn all_done(details: Option<&Details>, accepted: &[Accepted]) -> bool {
     details.is_some()
         && DOCUMENTS.iter().all(|d| accepted.iter().any(|a| a.document == d.id && a.version == d.version))
+}
+
+/// Has this workspace's company filled in its details and accepted every current
+/// document? A workspace needs this before it can buy a plan.
+pub(crate) async fn is_complete(store: &EndpointStore, tenant_id: &str) -> Result<bool, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let rows = client
+        .query(
+            "SELECT a.document, a.version
+               FROM tenants t
+               JOIN legal_acceptances a ON a.legal_entity_id = t.legal_entity_id
+              WHERE t.id = $1",
+            &[&tenant_id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let accepted: Vec<(String, String)> = rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+    Ok(all_accepted(DOCUMENTS, &accepted))
+}
+
+fn all_accepted(documents: &[Document], accepted: &[(String, String)]) -> bool {
+    documents.iter().all(|d| accepted.iter().any(|(id, version)| id == d.id && version == d.version))
 }
 
 async fn read(store: &EndpointStore, tenant_id: &str, tenant_name: &str, email: &str, editable: bool) -> Result<serde_json::Value, String> {
@@ -280,7 +315,7 @@ async fn read(store: &EndpointStore, tenant_id: &str, tenant_name: &str, email: 
             .map(|r| Accepted { document: r.get(0), version: r.get(1), at: r.get(2), by: r.get(3) })
             .collect();
     }
-    let complete = is_complete(details.as_ref(), &accepted);
+    let complete = all_done(details.as_ref(), &accepted);
 
     let mut others = Vec::new();
     if editable {
@@ -331,7 +366,7 @@ async fn save(
     tenant_name: &str,
     body: &SaveBody,
     details: &Details,
-) -> Result<(), SaveError> {
+) -> Result<Vec<i64>, SaveError> {
     let mut client = store.get_admin_conn().await.map_err(|e| SaveError::Failed(e.to_string()))?;
     let tx = client.transaction().await?;
 
@@ -424,27 +459,144 @@ async fn save(
 
     tx.execute("UPDATE tenants SET legal_entity_id = $2 WHERE id = $1", &[&tenant_id, &entity_id]).await?;
 
+    let mut recorded = Vec::new();
     for document in to_record {
-        tx.execute(
-            "INSERT INTO legal_acceptances
-                 (legal_entity_id, legal_name, tenant_id, tenant_name, document, version, accepted_by, authority_declared)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
-             ON CONFLICT (legal_entity_id, document, version) DO NOTHING",
-            &[
-                &entity_id,
-                &details.legal_name,
-                &tenant_id,
-                &tenant_name,
-                &document.id,
-                &document.version,
-                &body.email,
-            ],
-        )
-        .await?;
+        let accepted_at = Utc::now();
+        let sha256 = fingerprint(document.text);
+        let inserted = tx
+            .query_opt(
+                "INSERT INTO legal_acceptances
+                     (legal_entity_id, legal_name, tenant_id, tenant_name, document, version, accepted_by,
+                      authority_declared, accepted_at, document_sha256)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+                 ON CONFLICT (legal_entity_id, document, version) DO NOTHING
+                 RETURNING id",
+                &[
+                    &entity_id,
+                    &details.legal_name,
+                    &tenant_id,
+                    &tenant_name,
+                    &document.id,
+                    &document.version,
+                    &body.email,
+                    &accepted_at,
+                    &sha256,
+                ],
+            )
+            .await?;
+        let Some(row) = inserted else { continue };
+        let id: i64 = row.get(0);
+        let pdf = agreement_pdf::render(&Agreement {
+            reference: &format!("A-{id}"),
+            document_title: document.title,
+            version: document.version,
+            url: document.url,
+            text: document.text,
+            sha256: &sha256,
+            accepted_at,
+            accepted_by: &body.email,
+            legal_name: &details.legal_name,
+            registered_address: &details.registered_address,
+            country: &details.country,
+            company_number: &details.company_number,
+            vat_id: &details.vat_id,
+            tenant_name,
+            tenant_id,
+        });
+        tx.execute("UPDATE legal_acceptances SET agreement_pdf = $2 WHERE id = $1", &[&id, &pdf]).await?;
+        recorded.push(id);
     }
 
     tx.commit().await?;
+    Ok(recorded)
+}
+
+fn fingerprint(text: &str) -> String {
+    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn legal_copy() -> String {
+    std::env::var(LEGAL_COPY_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_LEGAL_COPY.to_string())
+}
+
+/// The customer's two addresses, once each, and api0's copy where everyone can
+/// see it, unless api0's address is already among them.
+fn recipients(accepted_by: &str, billing: &str, copy: &str) -> (Vec<String>, Vec<String>) {
+    let mut to = vec![accepted_by.to_string()];
+    if !billing.eq_ignore_ascii_case(accepted_by) {
+        to.push(billing.to_string());
+    }
+    let cc = if to.iter().any(|a| a.eq_ignore_ascii_case(copy)) { vec![] } else { vec![copy.to_string()] };
+    (to, cc)
+}
+
+async fn deliver(store: &EndpointStore, id: i64) -> Result<(), String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let row = client
+        .query_opt(
+            "SELECT a.accepted_by, a.legal_name, a.document, a.version, a.agreement_pdf, e.billing_email
+               FROM legal_acceptances a
+               JOIN legal_entities e ON e.id = a.legal_entity_id
+              WHERE a.id = $1 AND a.agreement_pdf IS NOT NULL AND a.agreement_emailed_at IS NULL",
+            &[&id],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(row) = row else { return Ok(()) };
+
+    let document: String = row.get("document");
+    let (to, cc) = recipients(row.get("accepted_by"), row.get("billing_email"), &legal_copy());
+    let mail = AgreementMail {
+        to,
+        cc,
+        document_title: DOCUMENTS.iter().find(|d| d.id == document).map_or(document.clone(), |d| d.title.to_string()),
+        version: row.get("version"),
+        legal_name: row.get("legal_name"),
+        pdf: row.get("agreement_pdf"),
+    };
+    send_agreement(store, &mail).await.map_err(|e| e.to_string())?;
+    client
+        .execute("UPDATE legal_acceptances SET agreement_emailed_at = NOW() WHERE id = $1", &[&id])
+        .await
+        .map_err(|e| e.to_string())?;
+    app_log!(info, acceptance = id, "Agreement emailed");
     Ok(())
+}
+
+/// Tries again for records whose email did not leave. Recent ones are skipped:
+/// the send started by the save may still be running.
+pub async fn retry_unsent(store: &EndpointStore) {
+    let ids: Vec<i64> = match store.get_admin_conn().await {
+        Err(e) => {
+            app_log!(error, error = %e, "Agreement email retry: no connection");
+            return;
+        }
+        Ok(client) => match client
+            .query(
+                "SELECT id FROM legal_acceptances
+                  WHERE agreement_pdf IS NOT NULL AND agreement_emailed_at IS NULL
+                    AND accepted_at < NOW() - make_interval(mins => $1)
+                    AND accepted_at > NOW() - make_interval(days => $2)",
+                &[&RETRY_AFTER_MINUTES, &RETRY_FOR_DAYS],
+            )
+            .await
+        {
+            Ok(rows) => rows.iter().map(|r| r.get(0)).collect(),
+            Err(e) => {
+                app_log!(error, error = %e, "Agreement email retry: could not list");
+                return;
+            }
+        },
+    };
+    for id in ids {
+        if let Err(e) = deliver(store, id).await {
+            app_log!(error, error = %e, acceptance = id, "Agreement email failed");
+        }
+    }
 }
 
 fn failure(status: actix_web::http::StatusCode, error: impl Into<String>) -> HttpResponse {
@@ -508,7 +660,17 @@ pub async fn put_handler(
         Err(why) => return failure(StatusCode::BAD_REQUEST, why),
     };
     match save(&store, &tenant.id, &tenant.name, &body, &details).await {
-        Ok(()) => HttpResponse::Ok().json(json!({ "success": true })),
+        Ok(recorded) => {
+            let store = store.get_ref().clone();
+            tokio::spawn(async move {
+                for id in recorded {
+                    if let Err(e) = deliver(&store, id).await {
+                        app_log!(error, error = %e, acceptance = id, "Agreement email failed");
+                    }
+                }
+            });
+            HttpResponse::Ok().json(json!({ "success": true }))
+        }
         Err(SaveError::Invalid(why)) => failure(StatusCode::BAD_REQUEST, why),
         Err(SaveError::NotYourCompany) => failure(StatusCode::FORBIDDEN, "You do not manage a workspace of that company"),
         Err(SaveError::Failed(e)) => failed("save the legal details", e),
@@ -540,8 +702,8 @@ mod tests {
     }
 
     const DOCS: &[Document] = &[
-        Document { id: "terms", title: "Terms", version: "2", url: "" },
-        Document { id: "dpa", title: "DPA", version: "1", url: "" },
+        Document { id: "terms", title: "Terms", version: "2", url: "", text: "" },
+        Document { id: "dpa", title: "DPA", version: "1", url: "", text: "" },
     ];
 
     #[test]
@@ -610,6 +772,38 @@ mod tests {
         assert_eq!(due[0].id, "terms");
     }
 
+    #[test]
+    fn everyone_gets_it_once() {
+        let (to, cc) = recipients("owner@example.com", "billing@example.com", "legal@example.org");
+        assert_eq!(to, ["owner@example.com", "billing@example.com"]);
+        assert_eq!(cc, ["legal@example.org"]);
+
+        let (to, _) = recipients("owner@example.com", "OWNER@example.com", "legal@example.org");
+        assert_eq!(to, ["owner@example.com"]);
+
+        let (to, cc) = recipients("legal@example.org", "billing@example.com", "legal@example.org");
+        assert_eq!(to, ["legal@example.org", "billing@example.com"]);
+        assert!(cc.is_empty());
+    }
+
+    #[test]
+    fn a_plan_needs_every_current_document() {
+        let accepted = |id: &str, v: &str| (id.to_string(), v.to_string());
+        assert!(!all_accepted(DOCS, &[]));
+        assert!(!all_accepted(DOCS, &[accepted("terms", "2")]));
+        assert!(!all_accepted(DOCS, &[accepted("terms", "1"), accepted("dpa", "1")]));
+        assert!(all_accepted(DOCS, &[accepted("terms", "2"), accepted("dpa", "1")]));
+    }
+
+    #[test]
+    fn the_stored_terms_are_a_full_copy_at_the_published_version() {
+        let terms = &DOCUMENTS[0];
+        assert!(terms.text.contains("Last updated: October 27, 2025"));
+        assert!(terms.text.contains("1. Agreement to Terms"));
+        assert!(terms.text.contains("16. Contact Information"));
+        assert_eq!(fingerprint(terms.text).len(), 64);
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL"]
     async fn records_survive_the_workspace_and_stay_with_the_company() {
@@ -649,6 +843,21 @@ mod tests {
         assert_eq!(seen["complete"], true);
         assert_eq!(seen["details"]["legal_name"], "Example SA");
         assert_eq!(seen["documents"][0]["accepted"]["by"], owner.as_str());
+        assert!(is_complete(&store, &first.id).await.unwrap());
+        assert!(!is_complete(&store, &other).await.unwrap());
+
+        // The PDF is kept, as sent, and is waiting to be emailed.
+        let saved = c
+            .query_one(
+                "SELECT agreement_pdf, document_sha256, agreement_emailed_at IS NULL
+                   FROM legal_acceptances WHERE tenant_id = $1",
+                &[&first.id],
+            )
+            .await
+            .unwrap();
+        assert!(saved.get::<_, Vec<u8>>(0).starts_with(b"%PDF-"));
+        assert_eq!(saved.get::<_, String>(1), fingerprint(DOCUMENTS[0].text));
+        assert!(saved.get::<_, bool>(2));
 
         // A member who cannot edit learns the state, not the contacts.
         let hidden = read(&store, &first.id, &first.name, &stranger, false).await.unwrap();

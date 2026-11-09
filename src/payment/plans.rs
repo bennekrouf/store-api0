@@ -634,6 +634,7 @@ mod tests {
         assert_eq!(pricing.credits_for("deepseek-chat", 3_500), 1);
         assert_eq!(pricing.credits_for("deepseek-chat", 10_000), 1);
         assert_eq!(pricing.credits_for("deepseek-chat", 10_001), 2);
+        assert_eq!(pricing.credits_for("deepseek-chat", 11_809), 2, "a two-call assistant turn");
         assert_eq!(pricing.credits_for("deepseek-reasoner", 3_500), 2);
         assert_eq!(pricing.credits_for("deepseek-reasoner", 10_000), 3);
     }

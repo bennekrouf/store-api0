@@ -1050,6 +1050,13 @@ pub async fn checkout_handler(
         Ok(_) => {}
         Err(e) => return internal("read the subscription", e),
     }
+    match crate::admin::legal_details::is_complete(&store, &tenant_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return fail(StatusCode::CONFLICT, "Add your company details and accept the terms before subscribing");
+        }
+        Err(e) => return internal("check the legal details", e),
+    }
     let members = match member_count(&store, &tenant_id).await {
         Ok(n) => n,
         Err(e) => return internal("count the members", e),

@@ -9,6 +9,7 @@
 //              (llm_usage, no licence, no credits)
 //   assistant  one Telegram/WhatsApp/Teams bot turn, which may take several
 //              completions; `calls` says how many (api_usage_logs, method LLM)
+//              and charged by the store when it logs them (api/usage_log.rs)
 //
 //   GET /api/admin/llm-calls?q=&kind=&tenant_id=&page=&page_size=
 //       q          matches the email, the model or the app
@@ -51,7 +52,7 @@ const SQL: &str = "
         SELECT id, timestamp, 'assistant', endpoint_path, email, tenant_id,
                COALESCE(metadata->>'provider', ''), COALESCE(model_used, ''),
                COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), COALESCE(total_tokens, 0),
-               COALESCE(usage_estimated, false), NULL::BIGINT, COALESCE(response_status, 0),
+               COALESCE(usage_estimated, false), (metadata->>'credits')::BIGINT, COALESCE(response_status, 0),
                response_time_ms, COALESCE((metadata->>'llm_calls')::INT, 1), NULL::VARCHAR
           FROM api_usage_logs
          WHERE method = 'LLM'
