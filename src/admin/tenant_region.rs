@@ -3,16 +3,16 @@
 // The region a workspace's messaging assistant (WhatsApp, Telegram, Teams)
 // answers from: the same three a desktop app's user chooses between
 // (llm_regions.rs). The region runs its `chat` task's model, and the workspace
-// only ever sees the region. A workspace that picks none stays on the
-// platform's assistant provider (assistant_config.rs), as before.
+// only ever sees the region. A workspace that has picked none gets no answers
+// until it does: nothing chooses where its data goes on its behalf.
 //
 //   GET /api/user/assistant-region?email=…  → { region, live, regions: [{ id, label, flag, available }], can_edit }
 //                                             for the caller's workspace; `live` is
 //                                             false when its region is off offer;
 //                                             `regions` is all of them, `available`
 //                                             false for one not open yet
-//   PUT /api/user/assistant-region          { email, region } — "" or null for the
-//                                             platform's; owners and admins
+//   PUT /api/user/assistant-region          { email, region } — one of the regions;
+//                                             owners and admins
 //
 // Stored in tenants.llm_region. A region taken off offer (no provider behind
 // it, or its key removed) stops the assistant until it is back, and the choice
@@ -45,7 +45,7 @@ pub(crate) async fn tenant_region(store: &EndpointStore, tenant_id: &str) -> Res
 
 /// What a tenant's choice of region means for its assistant now.
 pub(crate) enum AssistantRegion {
-    /// None chosen: the platform's provider answers.
+    /// None chosen: the assistant does not answer.
     NotChosen,
     Live { region: &'static Region, provider: String, model: String },
     /// Chosen but off offer: nothing may answer in its place.
@@ -132,7 +132,7 @@ pub async fn get_my_region_handler(
 pub struct SetRegionBody {
     pub email: String,
     #[serde(default)]
-    pub region: Option<String>,
+    pub region: String,
 }
 
 /// PUT /api/user/assistant-region
@@ -158,37 +158,29 @@ pub async fn set_my_region_handler(
         }
         Err(e) => return failed("read the caller's role", e),
     }
-    let wanted = body.region.as_deref().map(str::trim).filter(|r| !r.is_empty());
-    let region = match wanted {
-        None => None,
-        Some(id) => {
-            let offered = match live_regions(&store).await {
-                Ok(o) => o,
-                Err(e) => return failed("read the regions", e),
-            };
-            match offered.into_iter().find(|r| r.id.eq_ignore_ascii_case(id)) {
-                Some(r) => Some(r),
-                None => {
-                    return HttpResponse::BadRequest().json(serde_json::json!({
-                        "success": false,
-                        "error": format!("'{}' is not a region on offer", id),
-                    }))
-                }
-            }
-        }
+    let wanted = body.region.trim();
+    let offered = match live_regions(&store).await {
+        Ok(o) => o,
+        Err(e) => return failed("read the regions", e),
+    };
+    let Some(region) = offered.into_iter().find(|r| r.id.eq_ignore_ascii_case(wanted)) else {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "error": format!("'{}' is not a region on offer", wanted),
+        }));
     };
     let client = match store.get_admin_conn().await {
         Ok(c) => c,
         Err(e) => return failed("save the region", e.to_string()),
     };
     if let Err(e) = client
-        .execute("UPDATE tenants SET llm_region = $1 WHERE id = $2", &[&region.map(|r| r.id), &tenant.id])
+        .execute("UPDATE tenants SET llm_region = $1 WHERE id = $2", &[&region.id, &tenant.id])
         .await
     {
         return failed("save the region", e.to_string());
     }
-    app_log!(info, tenant_id = %tenant.id, email = %body.email, region = ?region.map(|r| r.id), "Assistant region set");
-    HttpResponse::Ok().json(serde_json::json!({ "success": true, "region": region.map(|r| r.id) }))
+    app_log!(info, tenant_id = %tenant.id, email = %body.email, region = region.id, "Assistant region set");
+    HttpResponse::Ok().json(serde_json::json!({ "success": true, "region": region.id }))
 }
 
 #[cfg(test)]

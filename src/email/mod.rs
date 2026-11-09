@@ -94,6 +94,9 @@ pub enum EmailKind {
     /// An administrator moved a paying subscriber up to `plan_name` as a gift;
     /// they go on paying for `paid_plan_name`. `apps` as in `LicenceIssued`.
     PlanGifted { plan_name: String, paid_plan_name: String, pays_nothing: bool, apps: String, monthly_credits: i64, lang: Lang },
+    /// The super admin moved a workspace to `plan_name`; sent to its owners.
+    /// `paid_plan_name`: a gift, the workspace going on paying for that plan.
+    TenantPlanUpgraded { tenant_name: String, plan_name: String, monthly_credits: i64, included_seats: i32, paid_plan_name: Option<String> },
     /// What a desktop app found for the licence holder, sent to them only, at
     /// their asking (POST /v1/licence/email). Every field is the app's text and
     /// is escaped when rendered.
@@ -143,6 +146,7 @@ impl EmailKind {
             Self::PlanCancelled { .. }     => "plan_cancelled",
             Self::PlanComeBack { .. }      => "plan_come_back",
             Self::PlanGifted { .. }        => "plan_gifted",
+            Self::TenantPlanUpgraded { .. } => "tenant_plan_upgraded",
             Self::AppDigest { .. }         => "app_digest",
         }
     }
@@ -175,6 +179,8 @@ impl EmailKind {
             Self::PlanCancelled { plan_name, ended, lang, .. } => mayorana::cancelled_subject(plan_name, *ended, *lang),
             Self::PlanComeBack { lang, .. }                  => mayorana::come_back_subject(*lang),
             Self::PlanGifted { plan_name, lang, .. }         => mayorana::gift_subject(plan_name, *lang),
+            Self::TenantPlanUpgraded { tenant_name, plan_name, paid_plan_name: Some(_), .. } => format!("🎁 A gift for {tenant_name}: {plan_name}"),
+            Self::TenantPlanUpgraded { tenant_name, plan_name, .. } => format!("🎉 {tenant_name} is now on {plan_name}"),
             Self::AppDigest { app, title, .. }               => format!("{app}: {title}"),
         }
     }
@@ -475,6 +481,27 @@ impl EmailKind {
 <p>{description}</p>
 <p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Try It Now</a></p>"#
             ),
+            Self::TenantPlanUpgraded { tenant_name, plan_name, monthly_credits, included_seats, paid_plan_name } => {
+                let (tenant, plan) = (escape_html(tenant_name), escape_html(plan_name));
+                let (title, gift) = match paid_plan_name {
+                    Some(paid) => (
+                        "A gift for you 🎁",
+                        format!("<p>It is a gift: what you pay today does not change, and stays what your {} plan costs you.</p>", escape_html(paid)),
+                    ),
+                    None => ("Congratulations 🎉", String::new()),
+                };
+                format!(
+                    r#"<h1>{title}</h1>
+<p><strong>{tenant}</strong> is now on the <strong>{plan}</strong> plan. It is active now: there is nothing to set up.</p>
+{gift}
+<table style="border-collapse:collapse;margin:16px 0;background:#F8FAFC;border-radius:6px;overflow:hidden">
+  <tr><td style="padding:8px 16px;font-weight:bold;color:#475569">Credits each month</td><td style="padding:8px 16px">{monthly_credits}</td></tr>
+  <tr><td style="padding:8px 16px;font-weight:bold;color:#475569">Seats included</td><td style="padding:8px 16px">{included_seats}</td></tr>
+</table>
+<p><a href="https://app.api0.ai" style="display:inline-block;padding:10px 20px;background:#6366F1;color:white;text-decoration:none;border-radius:6px">Open your workspace</a></p>"#
+                )
+            }
+
             Self::LicenceIssued { .. }
             | Self::PlanCancelled { .. }
             | Self::PlanComeBack { .. }
@@ -1095,6 +1122,32 @@ mod licence_tests {
         };
         assert_eq!(gift.sender_name(), "Benek from Mayorana");
         assert!(gift.replies_to_founder() && !gift.is_optional() && gift.subject().starts_with("🎁"));
+    }
+
+    #[test]
+    fn a_tenant_plan_upgrade_congratulates_under_the_api0_name() {
+        let email = EmailKind::TenantPlanUpgraded {
+            tenant_name: "<b>Acme</b>".into(),
+            plan_name: "Growth".into(),
+            monthly_credits: 5000,
+            included_seats: 10,
+            paid_plan_name: None,
+        };
+        assert_eq!(email.sender_name(), "api0");
+        assert!(!email.is_optional() && email.subject().contains("Growth"));
+        let body = email.html_body();
+        assert!(body.contains("&lt;b&gt;Acme&lt;/b&gt;") && !body.contains("<b>Acme</b>"));
+        assert!(body.contains("5000") && body.contains("Congratulations"));
+
+        let gift = EmailKind::TenantPlanUpgraded {
+            tenant_name: "Acme".into(),
+            plan_name: "Growth".into(),
+            monthly_credits: 5000,
+            included_seats: 10,
+            paid_plan_name: Some("Starter".into()),
+        };
+        assert!(gift.subject().starts_with("🎁"));
+        assert!(gift.html_body().contains("your Starter plan"));
     }
 
     #[test]

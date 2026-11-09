@@ -1197,7 +1197,7 @@ END $$;
 
 -- The region a tenant's messaging assistant (WhatsApp, Telegram, Teams) answers
 -- from — one of the regions the desktop apps offer (admin/llm_regions.rs).
--- NULL: the platform's assistant provider (admin/assistant_config.rs).
+-- NULL: none chosen yet, and the assistant does not answer until one is.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS llm_region VARCHAR;
 
 -- Where an account came from: the referrer and utm_* tags the dashboard saw on
@@ -1299,6 +1299,9 @@ CREATE TABLE IF NOT EXISTS workspace_subscriptions (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_subscriptions_tenant ON workspace_subscriptions(tenant_id);
+-- Set while the super admin gives a Stripe-paying workspace a dearer plan as a
+-- gift: the plan it goes on paying for (payment::workspace_plans).
+ALTER TABLE workspace_subscriptions ADD COLUMN IF NOT EXISTS gift_paid_plan_id VARCHAR REFERENCES workspace_plans(id);
 
 -- ── Legal details (admin::legal_details) ────────────────────────────────────
 -- The company a workspace contracts through, filled in by its owners or admins.
@@ -1343,3 +1346,11 @@ CREATE TABLE IF NOT EXISTS legal_acceptances (
 ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS document_sha256 VARCHAR;
 ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS agreement_pdf BYTEA;
 ALTER TABLE legal_acceptances ADD COLUMN IF NOT EXISTS agreement_emailed_at TIMESTAMPTZ;
+
+-- The workspace's latest security audit, as shown on its audit page. Replaced by
+-- each run; opening the page reads it instead of testing the applications again.
+CREATE TABLE IF NOT EXISTS tenant_security_audits (
+    tenant_id VARCHAR     PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    report    JSONB       NOT NULL,
+    saved_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

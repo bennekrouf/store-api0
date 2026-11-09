@@ -420,6 +420,40 @@ impl PaymentService {
         Ok(Subscription::update(&self.client, &id, params).await?)
     }
 
+    /// Makes `wanted` a subscription's only items, with nothing billed or
+    /// credited for the rest of this month. `coupon`, when given, replaces its
+    /// discount (a plan given as a gift: payment::workspace_plans).
+    pub async fn replace_subscription_items(
+        &self,
+        subscription_id: &str,
+        wanted: &[(String, u64)],
+        coupon: Option<&str>,
+    ) -> Result<Subscription> {
+        let id: SubscriptionId = subscription_id.parse()?;
+        let current = Subscription::retrieve(&self.client, &id, &[]).await?;
+        let mut items: Vec<UpdateSubscriptionItems> = Vec::new();
+        for item in &current.items.data {
+            let price = item.price.as_ref().map(|p| p.id.to_string()).unwrap_or_default();
+            items.push(match wanted.iter().find(|(p, q)| *p == price && *q > 0) {
+                Some((_, qty)) => UpdateSubscriptionItems { id: Some(item.id.to_string()), quantity: Some(*qty), ..Default::default() },
+                None => UpdateSubscriptionItems { id: Some(item.id.to_string()), deleted: Some(true), ..Default::default() },
+            });
+        }
+        for (price, qty) in wanted {
+            let present = current.items.data.iter().any(|i| i.price.as_ref().map(|p| p.id.as_str()) == Some(price.as_str()));
+            if !present && *qty > 0 {
+                items.push(UpdateSubscriptionItems { price: Some(price.clone()), quantity: Some(*qty), ..Default::default() });
+            }
+        }
+        let params = UpdateSubscription {
+            items: Some(items),
+            proration_behavior: Some(stripe::generated::billing::subscription::SubscriptionProrationBehavior::None),
+            coupon: coupon.map(|c| c.parse()).transpose()?,
+            ..Default::default()
+        };
+        Ok(Subscription::update(&self.client, &id, params).await?)
+    }
+
     /// Adds a line to a draft invoice: a workspace's overage for the month
     /// that just ended. VAT-inclusive, as the plan prices are.
     pub async fn add_invoice_item(
