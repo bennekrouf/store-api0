@@ -62,6 +62,9 @@ struct TenantFacts {
     mcp_client_id: Option<String>,
     google_client_id: Option<String>,
     allow_api0_signin: bool,
+    /// Its own identity provider (Entra, Okta…), complete enough for the gateway
+    /// to send people there.
+    has_idp: bool,
     member_count: i64,
     group_count: i64,
     endpoint_count: i64,
@@ -79,7 +82,7 @@ fn filled(v: &Option<String>) -> bool {
 impl TenantFacts {
     /// Will the gateway mint an OAuth code for this tenant?
     fn can_sign_in(&self) -> bool {
-        filled(&self.google_client_id) || self.allow_api0_signin
+        self.has_idp || filled(&self.google_client_id) || self.allow_api0_signin
     }
 
     /// Meant to be connected to at all. A personal tenant nobody has touched is
@@ -252,16 +255,23 @@ pub async fn tenants_overview(
                  d.per_user_scheme,
                  d.per_user_header,
                  d.per_user_verify_url,
-                 d.bearer_token IS NOT NULL,
-                 d.service_account_json IS NOT NULL,
-                 d.custom_headers IS NOT NULL,
+                 -- Saves write only the sealed columns; the plaintext ones remain
+                 -- for rows that have not been through the legacy migration.
+                 d.bearer_token IS NOT NULL OR d.bearer_token_enc IS NOT NULL,
+                 d.service_account_json IS NOT NULL OR d.service_account_json_enc IS NOT NULL,
+                 d.custom_headers IS NOT NULL OR d.custom_headers_enc IS NOT NULL,
                  d.updated_at,
                  -- Consumers reach this tenant's tools through a connector but
                  -- have no authority over it, so they are counted separately.
                  (SELECT count(*) FROM tenant_users tu4
                    WHERE tu4.tenant_id = t.id AND tu4.role = 'consumer'),
                  -- Who pays for its paid tools (payment::tenant_billing).
-                 t.billing_mode
+                 t.billing_mode,
+                 -- How its people sign in to api0, when it has its own provider.
+                 t.idp_issuer,
+                 t.idp_client_id,
+                 t.idp_client_secret IS NOT NULL,
+                 d.oauth_client_secret_enc IS NOT NULL
              FROM tenants t
              -- The default connection only: a tenant with named connections
              -- would otherwise appear once per connection.
@@ -301,11 +311,21 @@ pub async fn tenants_overview(
         let has_bearer = r.get::<_, Option<bool>>(18).unwrap_or(false);
         let has_sa = r.get::<_, Option<bool>>(19).unwrap_or(false);
         let has_headers = r.get::<_, Option<bool>>(20).unwrap_or(false);
+        let auth_mode = r.get::<_, Option<String>>(14).unwrap_or_else(|| "none".to_string());
+        let idp_issuer: Option<String> = r.get(24);
+        let idp_client_id: Option<String> = r.get(25);
+        let has_oauth_secret = r.get::<_, Option<bool>>(27).unwrap_or(false);
+        // A client-credentials secret is one machine identity for every caller.
+        // A per-user OAuth secret only identifies the app; each person still
+        // needs their own token.
+        let shared_oauth = has_oauth_secret && auth_mode == "client_credentials";
         let facts = TenantFacts {
             name: r.get(1),
             mcp_client_id: r.get(4),
             google_client_id: r.get(5),
             allow_api0_signin: r.get(6),
+            // The same test as the gateway's get_tenant_idp.
+            has_idp: idp_issuer.is_some() && idp_client_id.is_some(),
             member_count: r.get(7),
             group_count: r.get(8),
             endpoint_count: r.get(9),
@@ -313,7 +333,7 @@ pub async fn tenants_overview(
             api_key_count: r.get(11),
             has_downstream_auth: r.get(12),
             consumer_count: r.get(22),
-            has_shared_credential: has_bearer || has_sa || has_headers,
+            has_shared_credential: has_bearer || has_sa || has_headers || shared_oauth,
         };
         let findings = diagnose(&facts, &tenant_leaks);
         empty += facts.is_empty() as i64;
@@ -358,7 +378,11 @@ pub async fn tenants_overview(
             "owners": owners,
             // 'none' when the tenant has no row at all, which is what the
             // gateway falls back to anyway.
-            "auth_mode": r.get::<_, Option<String>>(14).unwrap_or_else(|| "none".to_string()),
+            "auth_mode": auth_mode,
+            "idp_issuer": idp_issuer,
+            "idp_client_id": idp_client_id,
+            "has_idp_client_secret": r.get::<_, bool>(26),
+            "has_oauth_client_secret": has_oauth_secret,
             "per_user_scheme": r.get::<_, Option<String>>(15),
             "per_user_header": r.get::<_, Option<String>>(16),
             "per_user_verify_url": r.get::<_, Option<String>>(17),
@@ -413,9 +437,88 @@ pub async fn tenants_overview(
             }
         }
     }
+
+    // Who acts through each messaging identity. A linked sender runs as this api0
+    // account, so it answers "who is that Teams user here?". The external id is
+    // returned for Teams only: elsewhere it is a phone number or a personal chat
+    // id, which an operator does not need in order to read this row.
+    let mut channel_links: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    if !ids.is_empty() {
+        match client
+            .query(
+                "SELECT tenant_id, channel,
+                        CASE WHEN channel = 'teams' THEN external_id END,
+                        user_email, linked_at
+                   FROM channel_identities
+                  WHERE tenant_id = ANY($1)
+                  ORDER BY channel, user_email",
+                &[&ids],
+            )
+            .await
+        {
+            Ok(rows) => {
+                for r in rows {
+                    channel_links.entry(r.get(0)).or_default().push(serde_json::json!({
+                        "channel": r.get::<_, String>(1),
+                        "external_id": r.get::<_, Option<String>>(2),
+                        "user_email": r.get::<_, String>(3),
+                        "linked_at": r.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
+                    }));
+                }
+            }
+            Err(e) => {
+                app_log!(error, error = %e, "tenants_overview: channel link query failed");
+                return HttpResponse::InternalServerError()
+                    .json(serde_json::json!({"success": false, "error": "DB error"}));
+            }
+        }
+    }
+
+    // Who each api0 account acts as downstream. The refresh token is what makes
+    // a connection real; the access row is rewritten at every renewal, so it is
+    // the freshest source of the name and fills in connections made before names
+    // were recorded. Names only: no secret column is read.
+    let mut connected: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    if !ids.is_empty() {
+        match client
+            .query(
+                "SELECT r.tenant_id, r.user_email,
+                        COALESCE(NULLIF(split_part(r.kind, '@', 2), ''), 'default'),
+                        COALESCE(a.verified_identity, r.verified_identity)
+                   FROM user_downstream_credentials r
+                   LEFT JOIN user_downstream_credentials a
+                          ON a.tenant_id = r.tenant_id
+                         AND a.user_email = r.user_email
+                         AND a.kind = replace(r.kind, 'oauth_refresh', 'oauth_access')
+                  WHERE r.tenant_id = ANY($1)
+                    AND split_part(r.kind, '@', 1) = 'oauth_refresh'
+                  ORDER BY r.user_email, r.kind",
+                &[&ids],
+            )
+            .await
+        {
+            Ok(rows) => {
+                for r in rows {
+                    connected.entry(r.get(0)).or_default().push(serde_json::json!({
+                        "user_email": r.get::<_, String>(1),
+                        "connection": r.get::<_, String>(2),
+                        "account": r.get::<_, Option<String>>(3),
+                    }));
+                }
+            }
+            Err(e) => {
+                app_log!(error, error = %e, "tenants_overview: connected account query failed");
+                return HttpResponse::InternalServerError()
+                    .json(serde_json::json!({"success": false, "error": "DB error"}));
+            }
+        }
+    }
+
     for t in &mut tenants {
         let id = t["id"].as_str().unwrap_or_default().to_string();
         t["members"] = serde_json::Value::Array(members.remove(&id).unwrap_or_default());
+        t["channel_links"] = serde_json::Value::Array(channel_links.remove(&id).unwrap_or_default());
+        t["connected_accounts"] = serde_json::Value::Array(connected.remove(&id).unwrap_or_default());
     }
 
     app_log!(info, total = rows.len(), matching = total, "Served the tenant overview");
@@ -578,6 +681,7 @@ mod identity_leak_tests {
             mcp_client_id: None,
             google_client_id: None,
             allow_api0_signin: false,
+            has_idp: false,
             member_count: 1,
             group_count: 0,
             endpoint_count: 0,
@@ -617,6 +721,14 @@ mod identity_leak_tests {
         assert!(texts.iter().any(|x| x.starts_with("No endpoints")));
         assert!(!has_risk(&f));
         assert!(in_view("attention", &t, &f) && !in_view("risk", &t, &f));
+    }
+
+    #[test]
+    fn a_tenant_with_only_its_own_identity_provider_can_sign_in() {
+        let t = TenantFacts { mcp_client_id: Some("acme".into()), has_idp: true, ..facts() };
+        assert!(t.can_sign_in());
+        let f = diagnose(&t, &[]);
+        assert!(!f.iter().any(|x| x["text"].as_str().unwrap().starts_with("No sign-in method")));
     }
 
     #[test]

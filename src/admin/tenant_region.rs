@@ -6,9 +6,11 @@
 // only ever sees the region. A workspace that picks none stays on the
 // platform's assistant provider (assistant_config.rs), as before.
 //
-//   GET /api/user/assistant-region?email=…  → { region, live, regions: [{ id, label, flag }], can_edit }
+//   GET /api/user/assistant-region?email=…  → { region, live, regions: [{ id, label, flag, available }], can_edit }
 //                                             for the caller's workspace; `live` is
-//                                             false when its region is off offer
+//                                             false when its region is off offer;
+//                                             `regions` is all of them, `available`
+//                                             false for one not open yet
 //   PUT /api/user/assistant-region          { email, region } — "" or null for the
 //                                             platform's; owners and admins
 //
@@ -48,7 +50,7 @@ pub(crate) async fn resolve(store: &EndpointStore, tenant_id: &str) -> Result<Op
         return Ok(None);
     };
     let (regions, keyed) = (
-        llm_regions::read_regions(store).await?,
+        llm_regions::read_offered(store).await?,
         assistant_config::providers_with_key(store).await?,
     );
     Ok(llm_regions::live(&regions, &keyed)
@@ -68,7 +70,7 @@ fn failed(what: &str, e: String) -> HttpResponse {
 /// The regions on offer now, in the order the apps list them.
 async fn live_regions(store: &EndpointStore) -> Result<Vec<&'static Region>, String> {
     let (regions, keyed) = (
-        llm_regions::read_regions(store).await?,
+        llm_regions::read_offered(store).await?,
         assistant_config::providers_with_key(store).await?,
     );
     Ok(llm_regions::live(&regions, &keyed).into_iter().map(|(r, _)| r).collect())
@@ -105,9 +107,14 @@ pub async fn get_my_region_handler(
         "tenant_id": tenant.id,
         "region": chosen.map(|r| r.id),
         "live": chosen.is_none_or(|c| offered.iter().any(|r| r.id == c.id)),
-        "regions": offered
+        "regions": llm_regions::REGIONS
             .iter()
-            .map(|r| serde_json::json!({ "id": r.id, "label": r.label, "flag": r.flag }))
+            .map(|r| serde_json::json!({
+                "id": r.id,
+                "label": r.label,
+                "flag": r.flag,
+                "available": offered.iter().any(|o| o.id == r.id),
+            }))
             .collect::<Vec<_>>(),
         "can_edit": editable,
     }))

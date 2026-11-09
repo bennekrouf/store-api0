@@ -271,6 +271,7 @@ pub async fn start_http_server(
                             .route("/internal/assistant-config", web::get().to(crate::admin::assistant_config::internal_assistant_config))
                             // LLM provider tenant: licence-keyed chat completions (gateway /v1)
                             .route("/internal/llm/authorize", web::post().to(crate::payment::llm_wallet::authorize_handler))
+                            .route("/internal/llm/regions", web::get().to(crate::admin::llm_regions::list_regions))
                             .route("/internal/llm/charge", web::post().to(crate::payment::llm_wallet::charge_handler))
                             // Paid tools: the tenant's balance or the caller's plan, by tenants.billing_mode
                             .route("/internal/billing/charge", web::post().to(crate::payment::tenant_billing::charge_handler))

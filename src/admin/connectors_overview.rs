@@ -186,7 +186,9 @@ SELECT t.id,
        t.name,
        -- claude (MCP)
        t.mcp_client_id,
-       (COALESCE(btrim(t.google_client_id), '') <> '' OR t.allow_api0_signin) AS can_sign_in,
+       ((t.idp_issuer IS NOT NULL AND t.idp_client_id IS NOT NULL)
+        OR COALESCE(btrim(t.google_client_id), '') <> ''
+        OR t.allow_api0_signin) AS can_sign_in,
        tools.tool_count,
        mcp.last_success, mcp.last_failure,
        COALESCE(mcp.calls_24h, 0), COALESCE(mcp.errors_24h, 0),
