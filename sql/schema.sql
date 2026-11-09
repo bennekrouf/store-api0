@@ -557,6 +557,14 @@ CREATE INDEX IF NOT EXISTS idx_user_downstream_credentials_tenant
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_scheme VARCHAR;
 ALTER TABLE tenant_downstream_auth ADD COLUMN IF NOT EXISTS per_user_header VARCHAR;
 
+-- An empty or unknown scheme used to mean basic_pat and now means bearer. Rows
+-- saved under the old meaning keep it. Safe on every start: the store always
+-- writes a known scheme for a per_user row.
+UPDATE tenant_downstream_auth
+   SET per_user_scheme = 'basic_pat'
+ WHERE auth_mode = 'per_user'
+   AND (per_user_scheme IS NULL OR per_user_scheme NOT IN ('basic_pat', 'bearer', 'raw'));
+
 -- ── Encryption of the legacy secret columns ──────────────────────────────────
 -- These columns predate infra::secret_box and hold plaintext. Rather than
 -- change their types in place — which would break any running instance mid

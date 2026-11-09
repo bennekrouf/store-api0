@@ -320,6 +320,14 @@ pub async fn save_downstream_auth(
     let no_plaintext: Option<String> = None;
     let no_plaintext_json: Option<Value> = None;
 
+    // A per-user row always says how its secret becomes a header: schema.sql
+    // reads an empty one as a row from before bearer was the default.
+    let per_user_scheme = match (req.auth_mode.as_str(), req.per_user_scheme.as_deref()) {
+        ("per_user", Some("basic_pat" | "bearer" | "raw")) => req.per_user_scheme.clone(),
+        ("per_user", _) => Some("bearer".to_string()),
+        _ => req.per_user_scheme.clone(),
+    };
+
     let row = client
         .query_one(
             "INSERT INTO tenant_downstream_auth
@@ -371,7 +379,7 @@ pub async fn save_downstream_auth(
                 &req.target_audience as &(dyn tokio_postgres::types::ToSql + Sync),
                 &no_plaintext as &(dyn tokio_postgres::types::ToSql + Sync),
                 &no_plaintext_json as &(dyn tokio_postgres::types::ToSql + Sync),
-                &req.per_user_scheme as &(dyn tokio_postgres::types::ToSql + Sync),
+                &per_user_scheme as &(dyn tokio_postgres::types::ToSql + Sync),
                 &req.per_user_header as &(dyn tokio_postgres::types::ToSql + Sync),
                 &now as &(dyn tokio_postgres::types::ToSql + Sync),
                 &bearer_enc as &(dyn tokio_postgres::types::ToSql + Sync),
