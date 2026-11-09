@@ -364,6 +364,47 @@ mod db_tests {
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL"]
+    async fn a_sync_switches_off_tools_with_no_endpoint_in_this_tenant_only() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let email = format!("sync-{}@example.com", uuid::Uuid::new_v4().simple());
+        let other_email = format!("sync-other-{}@example.com", uuid::Uuid::new_v4().simple());
+        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
+        let other = get_default_tenant(&store, &other_email).await.unwrap().id;
+
+        let c = store.get_admin_conn().await.unwrap();
+        for t in [&tenant, &other] {
+            c.execute(
+                "INSERT INTO mcp_tools (id, tenant_id, tool_name, backend_url, forward_identity, is_active)
+                 VALUES ($1, $2, 'create_work_item', 'https://example.com/old', false, true)",
+                &[&uuid::Uuid::new_v4().to_string(), t],
+            )
+            .await
+            .unwrap();
+        }
+        let active = |t: String, name: &'static str| {
+            let store = &store;
+            async move {
+                store.get_admin_conn().await.unwrap()
+                    .query_one("SELECT is_active FROM mcp_tools WHERE tenant_id = $1 AND tool_name = $2", &[&t, &name])
+                    .await.unwrap()
+                    .get::<_, bool>(0)
+            }
+        };
+
+        store
+            .replace_user_api_groups(&email, doc(&[("Azure DevOps", "create work item")]).api_groups, Some(&tenant))
+            .await
+            .unwrap();
+        resync_tenant_tools(&store, &tenant).await;
+
+        assert!(!active(tenant.clone(), "create_work_item").await, "no endpoint behind it: switched off");
+        assert!(active(tenant.clone(), "azure-devops-create-work-item").await, "the endpoint's tool is on");
+        assert!(active(other.clone(), "create_work_item").await, "another tenant is never touched");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
     async fn response_fields_reach_the_tool_and_come_back_on_export() {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
         let store = EndpointStore::new(&url).await.expect("store");
