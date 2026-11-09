@@ -280,6 +280,8 @@ pub async fn start_http_server(
                             .route("/user/billing-mode", web::put().to(crate::payment::tenant_billing::set_my_billing_mode_handler))
                             // The region a workspace's messaging assistant answers from
                             .route("/user/security-audit", web::get().to(crate::admin::security_audit::run_audit_handler))
+                            .route("/user/legal-details", web::get().to(crate::admin::legal_details::get_handler))
+                            .route("/user/legal-details", web::put().to(crate::admin::legal_details::put_handler))
                             .route("/user/assistant-region", web::get().to(crate::admin::tenant_region::get_my_region_handler))
                             .route("/user/assistant-region", web::put().to(crate::admin::tenant_region::set_my_region_handler))
                             // Email: SMTP config admin + internal send endpoint + broadcast
