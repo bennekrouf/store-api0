@@ -4,6 +4,8 @@
 //
 //   GET /api/user/security-audit?email=…
 //     → { tenant_id, tenant_name, run_by, generated_at, checks: [Check], probes: [Probe] }
+//   GET /api/user/security-audit/latest?email=…  → { report } — null before the first run
+//   PUT /api/user/security-audit/latest          { email, report } — the finished report
 //
 // `evaluate` holds every rule and touches no database, so each rule is tested on
 // its own. `probes` lists one address per application for the gateway, which adds
@@ -488,8 +490,8 @@ fn ai_region(f: &Facts) -> Check {
             "Choose another region, or wait for this one to come back.",
         ),
         RegionState::NotChosen => c.act(
-            Severity::Medium,
-            "Messages, and what your tools return, go to api0's default AI provider.",
+            Severity::High,
+            "No AI region is chosen, so the assistant is not answering.",
             "Choose an AI region in the Channels tab.",
         ),
     }
@@ -697,6 +699,24 @@ pub struct AuditQuery {
     pub email: String,
 }
 
+fn failed(what: &str, e: String) -> HttpResponse {
+    app_log!(error, error = %e, "Security audit: {}", what);
+    HttpResponse::InternalServerError()
+        .json(serde_json::json!({ "success": false, "error": "The audit could not be completed" }))
+}
+
+/// `None` when the caller may use this workspace's audit; otherwise the refusal.
+async fn refuse_non_editor(store: &EndpointStore, tenant_id: &str, email: &str) -> Option<HttpResponse> {
+    match can_edit(store, tenant_id, email).await {
+        Ok(true) => None,
+        Ok(false) => Some(HttpResponse::Forbidden().json(serde_json::json!({
+            "success": false,
+            "error": "Only the workspace's owners and admins can use the security audit",
+        }))),
+        Err(e) => Some(failed("read the caller's role", e)),
+    }
+}
+
 pub async fn run_audit_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
@@ -705,24 +725,12 @@ pub async fn run_audit_handler(
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    let failed = |what: &str, e: String| {
-        app_log!(error, error = %e, "Security audit: {}", what);
-        HttpResponse::InternalServerError()
-            .json(serde_json::json!({ "success": false, "error": "The audit could not be completed" }))
-    };
     let tenant = match get_default_tenant(&store, &query.email).await {
         Ok(t) => t,
         Err(e) => return failed("find the tenant", e.to_string()),
     };
-    match can_edit(&store, &tenant.id, &query.email).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return HttpResponse::Forbidden().json(serde_json::json!({
-                "success": false,
-                "error": "Only the workspace's owners and admins can run a security audit",
-            }))
-        }
-        Err(e) => return failed("read the caller's role", e),
+    if let Some(deny) = refuse_non_editor(&store, &tenant.id, &query.email).await {
+        return deny;
     }
     let facts = match collect(&store, &tenant.id).await {
         Ok(f) => f,
@@ -739,6 +747,80 @@ pub async fn run_audit_handler(
         "checks": checks,
         "probes": probes(&facts.tools, &facts.own_hosts),
     }))
+}
+
+/// GET /api/user/security-audit/latest?email=…
+pub async fn latest_audit_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    query: web::Query<AuditQuery>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let tenant = match get_default_tenant(&store, &query.email).await {
+        Ok(t) => t,
+        Err(e) => return failed("find the tenant", e.to_string()),
+    };
+    if let Some(deny) = refuse_non_editor(&store, &tenant.id, &query.email).await {
+        return deny;
+    }
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => return failed("read the last audit", e.to_string()),
+    };
+    match client
+        .query_opt("SELECT report FROM tenant_security_audits WHERE tenant_id = $1", &[&tenant.id])
+        .await
+    {
+        Ok(row) => {
+            let report = row.map(|r| r.get::<_, serde_json::Value>(0));
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "report": report }))
+        }
+        Err(e) => failed("read the last audit", e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SaveAuditBody {
+    pub email: String,
+    pub report: serde_json::Value,
+}
+
+/// PUT /api/user/security-audit/latest
+///
+/// The workspace comes from the report, not the caller's active one: they may
+/// have switched workspace while the audit ran.
+pub async fn save_audit_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<SaveAuditBody>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let Some(tenant_id) = body.report["tenant_id"].as_str() else {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({ "success": false, "error": "The report names no workspace" }));
+    };
+    if let Some(deny) = refuse_non_editor(&store, tenant_id, &body.email).await {
+        return deny;
+    }
+    let client = match store.get_admin_conn().await {
+        Ok(c) => c,
+        Err(e) => return failed("save the audit", e.to_string()),
+    };
+    match client
+        .execute(
+            "INSERT INTO tenant_security_audits (tenant_id, report) VALUES ($1, $2)
+             ON CONFLICT (tenant_id) DO UPDATE SET report = EXCLUDED.report, saved_at = NOW()",
+            &[&tenant_id, &body.report],
+        )
+        .await
+    {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "success": true })),
+        Err(e) => failed("save the audit", e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -908,7 +990,7 @@ mod tests {
     fn the_ai_region_only_matters_with_a_channel() {
         let mut f = clean();
         f.region = RegionState::NotChosen;
-        assert_eq!(check(&f, "ai_region").severity, Some(Severity::Medium));
+        assert_eq!(check(&f, "ai_region").severity, Some(Severity::High));
         f.region = RegionState::Unavailable(&crate::admin::llm_regions::REGIONS[0]);
         assert_eq!(check(&f, "ai_region").severity, Some(Severity::High));
         f.channels = 0;

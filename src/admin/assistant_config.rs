@@ -1,8 +1,9 @@
 // src/admin/assistant_config.rs
 //
-// The AI provider behind the messaging assistant (Telegram, WhatsApp, Teams):
-// one platform-wide setting the super admin chooses, used for every workspace
-// that has not chosen a region of its own (tenant_region.rs).
+// The super admin's platform-wide AI provider, for a desktop app's call that
+// names no region (llm_wallet.rs). A workspace's messaging assistant (Telegram,
+// WhatsApp, Teams) never runs on it: it runs on the region the workspace chose
+// (tenant_region.rs), and does not answer until one is chosen.
 //
 // The provider API keys kept here are api0's, shared by every AI feature: the
 // YAML import (model_config.rs) reads them too, so a key is entered once, in
@@ -213,7 +214,7 @@ pub async fn get_assistant_config(req: HttpRequest, store: web::Data<Arc<Endpoin
         .collect();
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
-        // null: not configured here — the bridge uses its own built-in key.
+        // null: not configured.
         "provider": choice.as_ref().map(|c| &c.0),
         "model": choice.as_ref().map(|c| &c.1),
         "providers": providers,
@@ -350,13 +351,13 @@ pub async fn delete_assistant_key(
         return deny;
     }
     let id = path.into_inner();
-    // A key in use cannot be removed: that would stop every bot, or every
+    // A key in use cannot be removed: that would stop those calls, or every
     // AI-assisted import.
     if let Ok(Some((active, _))) = read_choice(&store).await {
         if active == id {
             return error(
                 actix_web::http::StatusCode::BAD_REQUEST,
-                "The messaging assistant uses this provider — choose another one there before removing its key",
+                "Calls with no region use this provider — choose another one there before removing its key",
             );
         }
     }
@@ -387,10 +388,10 @@ pub async fn delete_assistant_key(
 
 // ── GET /api/internal/assistant-config ── the bridge ─────────────────────────
 //
-// With `?tenant_id=`, the provider that workspace's assistant answers with: its
-// region's (tenant_region.rs) when it chose one, else the platform's. A chosen
-// region that cannot answer comes back as `region_unavailable`, never as another
-// provider, and a choice that cannot be read is an error for the same reason.
+// With `?tenant_id=`, the provider of the region that workspace chose
+// (tenant_region.rs). No region comes back as not configured, and a chosen region
+// that cannot answer as `region_unavailable`, never as another provider. A choice
+// that cannot be read is an error for the same reason.
 
 #[derive(Debug, Deserialize)]
 pub struct InternalConfigQuery {
@@ -427,6 +428,10 @@ pub async fn internal_assistant_config(
     let (region, choice) = match by_region {
         AssistantRegion::Unavailable(r) => return not_configured(Some(r.id)),
         AssistantRegion::Live { region, provider, model } => (Some(region.id), Some((provider, model))),
+        // Only the platform's own read gets here without a tenant.
+        AssistantRegion::NotChosen if query.tenant_id.as_deref().is_some_and(|t| !t.is_empty()) => {
+            return not_configured(None)
+        }
         AssistantRegion::NotChosen => match read_choice(&store).await {
             Ok(c) => (None, c),
             Err(e) => {

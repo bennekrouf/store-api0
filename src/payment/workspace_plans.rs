@@ -44,13 +44,24 @@
 //   PUT  /api/admin/workspace-plans-rates       { eur, usd } per 1 CHF: the approximate
 //                                               prices a pricing page shows; never charged
 //   PUT  /api/admin/workspace-plans/{id}        create or change a plan
-//   POST /api/admin/workspace-plans/grant       { tenant_id, plan_id } → a custom plan, by hand
+//   POST /api/admin/workspace-plans/grant       { tenant_id, plan_id, notify?, gift? } → a plan by hand, or
+//                                               another one for a workspace already on a grant;
+//                                               notify emails its owners (EmailKind::TenantPlanUpgraded).
+//                                               gift: true gives a Stripe-paying workspace a dearer plan
+//                                               without changing what it pays today: the new prices, nothing
+//                                               prorated, and a coupon taking the difference off every
+//                                               invoice while the gift lasts. Always announced by email.
+//                                               Seats added later follow the new plan's rules. On a gifted
+//                                               workspace, gift: false moves it to the plan named and ends
+//                                               the gift: coupon off, nothing prorated, no email. The
+//                                               workspace changing plan itself ends it the same way.
 //   POST /api/admin/workspace-plans/revoke      { subscription_id } → ends a grant now
 //
 // All require X-Internal-Secret; the gateway restricts the admin routes to the
 // super admin and checkout, change and portal to the workspace's owners and admins.
 
 use crate::app_log;
+use crate::email::{send_async, EmailKind};
 use crate::endpoint_store::tenant_management::{get_default_tenant, MEMBER_ROLES};
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
@@ -217,11 +228,13 @@ pub struct WorkspaceSubscription {
     pub seats_billed: i32,
     /// Bought with Checkout; a grant (Enterprise) is not.
     pub on_stripe: bool,
+    /// The plan it goes on paying for while on a gift.
+    pub gift_paid_plan_id: Option<String>,
 }
 
 const SUB_COLUMNS: &str = "id, tenant_id, plan_id, status, \
      (status = ANY($LIVE) AND period_end > NOW()) AS live, cancel_at_period_end, period_start, period_end, \
-     credits_granted, credits_used, overage_credits, overage_pending, seats_billed, stripe_customer_id";
+     credits_granted, credits_used, overage_credits, overage_pending, seats_billed, stripe_customer_id, gift_paid_plan_id";
 
 fn sub_columns() -> String {
     SUB_COLUMNS.replace("$LIVE", "ARRAY['active','trialing']")
@@ -245,6 +258,7 @@ fn sub_from_row(r: &tokio_postgres::Row) -> WorkspaceSubscription {
         overage_credits: r.get(10),
         overage_pending: r.get(11),
         seats_billed: r.get(12),
+        gift_paid_plan_id: r.get(14),
         on_stripe: !customer.is_empty(),
     }
 }
@@ -444,6 +458,18 @@ pub async fn sync_subscription(store: &Arc<EndpointStore>, sub: &Subscription) -
         )
         .await
         .map_err(|e| e.to_string())?;
+
+    // A gift is its coupon: once the discount is gone (ended here or in
+    // Stripe), the workspace pays for the plan it is on.
+    if sub.discount.is_none() {
+        client
+            .execute(
+                "UPDATE workspace_subscriptions SET gift_paid_plan_id = NULL WHERE id = $1 AND gift_paid_plan_id IS NOT NULL",
+                &[&sub.id.to_string()],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     // The workspace pays now: its keys spend its plan, not each person's.
     if LIVE_STATUSES.contains(&sub.status.as_str()) {
@@ -1121,10 +1147,16 @@ pub async fn change_handler(
         Ok(n) => n,
         Err(e) => return internal("count the members", e),
     };
-    let mut wanted = vec![(new.stripe_price_id.clone().unwrap_or_default(), 1)];
-    if let Some(seat) = new.stripe_seat_price_id.clone() {
-        wanted.push((seat, extra_seats(members, new.included_seats)));
+    if sub.gift_paid_plan_id.is_some() {
+        return match switch_on_stripe(&store, &stripe, &sub, &new, members, None).await {
+            Ok(()) => {
+                app_log!(info, tenant_id = %tenant_id, from = %old.id, to = %new.id, "Tenant plan changed, ending its gift");
+                HttpResponse::Ok().json(serde_json::json!({ "success": true }))
+            }
+            Err(e) => internal("change the plan on Stripe", e),
+        };
     }
+    let wanted = stripe_lines(&new, members);
     let drop: Vec<String> = [old.stripe_price_id.clone(), old.stripe_seat_price_id.clone()].into_iter().flatten().collect();
     match stripe.set_subscription_items(&sub.id, &wanted, &drop).await {
         Ok(updated) => {
@@ -1190,8 +1222,8 @@ pub async fn admin_handler(req: HttpRequest, store: web::Data<Arc<EndpointStore>
             .iter()
             .map(|r| {
                 let mut v = serde_json::to_value(sub_from_row(r)).unwrap_or_default();
-                v["tenant_name"] = serde_json::json!(r.get::<_, Option<String>>(14));
-                v["bought_by"] = serde_json::json!(r.get::<_, String>(15));
+                v["tenant_name"] = serde_json::json!(r.get::<_, Option<String>>(15));
+                v["bought_by"] = serde_json::json!(r.get::<_, String>(16));
                 v
             })
             .collect::<Vec<_>>(),
@@ -1235,13 +1267,193 @@ pub async fn save_handler(
 pub struct GrantRequest {
     pub tenant_id: String,
     pub plan_id: String,
+    /// Congratulate the workspace's owners by email.
+    #[serde(default)]
+    pub notify: bool,
+    /// Give the plan, keeping what a Stripe-paying workspace pays.
+    #[serde(default)]
+    pub gift: bool,
+}
+
+/// What a grant does, given the workspace's live subscription as
+/// (id, plan, on Stripe, gifted).
+#[derive(Debug, PartialEq)]
+enum GrantStep<'a> {
+    New,
+    Move(&'a str),
+    Gift,
+    EndGift,
+    Refused(&'static str),
+}
+
+const GIFT_NEEDS_STRIPE: &str = "A gift keeps what a tenant pays through Stripe: this one has nothing to keep";
+
+fn grant_step<'a>(live: Option<(&'a str, &str, bool, bool)>, plan_id: &str, gift: bool) -> GrantStep<'a> {
+    match live {
+        None if gift => GrantStep::Refused(GIFT_NEEDS_STRIPE),
+        None => GrantStep::New,
+        Some((_, current, _, _)) if current == plan_id => GrantStep::Refused("This tenant is already on that plan"),
+        Some((_, _, true, _)) if gift => GrantStep::Gift,
+        Some((_, _, true, true)) => GrantStep::EndGift,
+        Some((_, _, true, false)) => GrantStep::Refused("This tenant pays through Stripe: give the plan as a gift, or it changes its plan from its billing page"),
+        Some((_, _, false, _)) if gift => GrantStep::Refused(GIFT_NEEDS_STRIPE),
+        Some((id, _, false, _)) => GrantStep::Move(id),
+    }
+}
+
+/// What `plan` bills a month with `members` members, in cents.
+fn monthly_cents(plan: &WorkspacePlan, members: i64) -> i64 {
+    plan.price_cents + extra_seats(members, plan.included_seats) as i64 * plan.seat_price_cents
+}
+
+/// What a gift takes off each invoice so a workspace of `members` goes on
+/// paying what `paid` bills it while on `to`, in cents; an error when `to` is
+/// not an upgrade.
+fn gift_amount_off(paid: &WorkspacePlan, to: &WorkspacePlan, members: i64) -> Result<i64, String> {
+    if !paid.currency.eq_ignore_ascii_case(&to.currency) {
+        return Err(format!("{} and {} are in different currencies: a gift needs the same", paid.name, to.name));
+    }
+    let off = monthly_cents(to, members) - monthly_cents(paid, members);
+    if to.price_cents <= paid.price_cents || off <= 0 {
+        return Err(format!("A gift is an upgrade: pick a plan dearer than {}, which it pays for", paid.name));
+    }
+    Ok(off)
+}
+
+/// The Stripe lines of `plan` for `members` members: its price, and its seat
+/// price for each seat past those included.
+fn stripe_lines(plan: &WorkspacePlan, members: i64) -> Vec<(String, u64)> {
+    let mut lines = vec![(plan.stripe_price_id.clone().unwrap_or_default(), 1)];
+    if let Some(seat) = plan.stripe_seat_price_id.clone() {
+        lines.push((seat, extra_seats(members, plan.included_seats)));
+    }
+    lines
+}
+
+/// Moves a Stripe subscription to `to` with nothing prorated. `gift`, as
+/// (coupon, plan it pays for), starts or keeps a gift; `None` ends one.
+async fn switch_on_stripe(
+    store: &Arc<EndpointStore>,
+    stripe: &PaymentService,
+    sub: &WorkspaceSubscription,
+    to: &WorkspacePlan,
+    members: i64,
+    gift: Option<(&str, &str)>,
+) -> Result<(), String> {
+    let lines = stripe_lines(to, members);
+    let mut updated = stripe
+        .replace_subscription_items(&sub.id, &lines, gift.map(|(coupon, _)| coupon))
+        .await
+        .map_err(|e| e.to_string())?;
+    if gift.is_none() {
+        stripe.remove_subscription_discount(&sub.id).await.map_err(|e| e.to_string())?;
+        updated = stripe.retrieve_subscription(&sub.id).await.map_err(|e| e.to_string())?;
+    }
+    // The webhook will say the same; syncing now shows the change at once.
+    sync_subscription(store, &updated).await?;
+    let paid = gift.map(|(_, paid)| paid.to_string());
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    client
+        .execute("UPDATE workspace_subscriptions SET gift_paid_plan_id = $2 WHERE id = $1", &[&sub.id, &paid])
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Gives `plan` to a Stripe-paying workspace (`gift`), or moves a gifted one
+/// to it and ends the gift.
+async fn gift_on_stripe(
+    store: &Arc<EndpointStore>,
+    stripe: &PaymentService,
+    sub: &WorkspaceSubscription,
+    plan: &WorkspacePlan,
+    gift: bool,
+) -> HttpResponse {
+    if plan.stripe_price_id.is_none() {
+        return fail(StatusCode::BAD_REQUEST, "That plan has no Stripe price yet: put it on sale first");
+    }
+    let paid_id = sub.gift_paid_plan_id.as_deref().unwrap_or(&sub.plan_id);
+    let paid = match get_plan(store, paid_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return internal("read the plan it pays for", "no such plan".into()),
+        Err(e) => return internal("read the plan it pays for", e),
+    };
+    if !paid.currency.eq_ignore_ascii_case(&plan.currency) {
+        return fail(StatusCode::BAD_REQUEST, "That plan is in another currency");
+    }
+    let members = match member_count(store, &sub.tenant_id).await {
+        Ok(n) => n,
+        Err(e) => return internal("count the members", e),
+    };
+    let switched = if gift {
+        let off = match gift_amount_off(&paid, plan, members) {
+            Ok(off) => off,
+            Err(why) => return fail(StatusCode::BAD_REQUEST, &why),
+        };
+        match stripe.gift_coupon(off, &plan.currency).await {
+            Ok(coupon) => switch_on_stripe(store, stripe, sub, plan, members, Some((&coupon, &paid.id))).await,
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        switch_on_stripe(store, stripe, sub, plan, members, None).await
+    };
+    if let Err(e) = switched {
+        return internal("change the plan on Stripe", e);
+    }
+    let emailed = if gift { notify_owners(store, &sub.tenant_id, plan, Some(paid.name.clone())).await } else { 0 };
+    app_log!(warn, tenant_id = %sub.tenant_id, subscription_id = %sub.id, paid = %paid.id, to = %plan.id, gift = gift, emailed = emailed,
+        "Tenant plan gift changed by an administrator");
+    HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription_id": sub.id, "emailed": emailed }))
+}
+
+/// Emails each of the tenant's owners about its new plan. Returns how many
+/// were written to; a failure is logged, the plan having already changed.
+async fn notify_owners(store: &Arc<EndpointStore>, tenant_id: &str, plan: &WorkspacePlan, paid_plan_name: Option<String>) -> usize {
+    let read = async {
+        let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+        let name: String = client
+            .query_one("SELECT name FROM tenants WHERE id = $1", &[&tenant_id])
+            .await
+            .map_err(|e| e.to_string())?
+            .get(0);
+        let owners = client
+            .query("SELECT email FROM tenant_users WHERE tenant_id = $1 AND role = 'owner'", &[&tenant_id])
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>((name, owners.iter().map(|r| r.get::<_, String>(0)).collect::<Vec<_>>()))
+    };
+    let (tenant_name, owners) = match read.await {
+        Ok(r) => r,
+        Err(e) => {
+            app_log!(error, error = %e, tenant_id = %tenant_id, "Could not read who to tell about a tenant plan");
+            return 0;
+        }
+    };
+    for owner in &owners {
+        send_async(
+            Arc::clone(store),
+            owner.clone(),
+            EmailKind::TenantPlanUpgraded {
+                tenant_name: tenant_name.clone(),
+                plan_name: plan.name.clone(),
+                monthly_credits: plan.monthly_credits,
+                included_seats: plan.included_seats,
+                paid_plan_name: paid_plan_name.clone(),
+            },
+        );
+    }
+    owners.len()
 }
 
 /// POST /api/admin/workspace-plans/grant — Enterprise, or any plan given by
-/// hand: a month at a time until revoked, invoiced outside Stripe.
+/// hand: a month at a time until revoked, invoiced outside Stripe. A workspace
+/// already on a grant moves to the new plan and takes its allowance now, in
+/// the same period; what it has used this month stays used. A Stripe-paying
+/// workspace can only be given a gift, or moved off one.
 pub async fn grant_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
+    stripe: web::Data<Arc<PaymentService>>,
     body: web::Json<GrantRequest>,
 ) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
@@ -1252,16 +1464,39 @@ pub async fn grant_handler(
         Ok(None) => return fail(StatusCode::NOT_FOUND, "Unknown plan"),
         Err(e) => return internal("read the plan", e),
     };
-    match current_subscription(&store, &body.tenant_id).await {
-        Ok(Some(s)) if s.live => return fail(StatusCode::CONFLICT, "This tenant already has a live plan"),
-        Ok(_) => {}
+    let live = match current_subscription(&store, &body.tenant_id).await {
+        Ok(s) => s.filter(|s| s.live),
         Err(e) => return internal("read the subscription", e),
+    };
+    let step = grant_step(
+        live.as_ref().map(|s| (s.id.as_str(), s.plan_id.as_str(), s.on_stripe, s.gift_paid_plan_id.is_some())),
+        &plan.id,
+        body.gift,
+    );
+    if let GrantStep::Refused(why) = step {
+        return fail(StatusCode::CONFLICT, why);
     }
-    let now = Utc::now();
-    let end = now.checked_add_months(Months::new(1)).unwrap_or(now);
-    let id = format!("grant_{}", uuid::Uuid::new_v4().simple());
+    if let (GrantStep::Gift | GrantStep::EndGift, Some(sub)) = (&step, &live) {
+        return gift_on_stripe(store.get_ref(), &stripe, sub, &plan, step == GrantStep::Gift).await;
+    }
+    let new_id = format!("grant_{}", uuid::Uuid::new_v4().simple());
+    let id = match step {
+        GrantStep::Move(id) => id,
+        _ => new_id.as_str(),
+    };
     let result = async {
         let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+        if matches!(step, GrantStep::Move(_)) {
+            return client
+                .execute(
+                    "UPDATE workspace_subscriptions SET plan_id = $2, credits_granted = $3, updated_at = NOW() WHERE id = $1",
+                    &[&id, &plan.id, &plan.monthly_credits],
+                )
+                .await
+                .map_err(|e| e.to_string());
+        }
+        let now = Utc::now();
+        let end = now.checked_add_months(Months::new(1)).unwrap_or(now);
         client
             .execute(
                 "INSERT INTO workspace_subscriptions (id, tenant_id, plan_id, status, period_start, period_end, credits_granted) \
@@ -1278,8 +1513,9 @@ pub async fn grant_handler(
     .await;
     match result {
         Ok(_) => {
-            app_log!(info, tenant_id = %body.tenant_id, plan = %plan.id, subscription_id = %id, "Tenant plan granted");
-            HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription_id": id }))
+            let emailed = if body.notify { notify_owners(store.get_ref(), &body.tenant_id, &plan, None).await } else { 0 };
+            app_log!(info, tenant_id = %body.tenant_id, plan = %plan.id, subscription_id = %id, emailed = emailed, "Tenant plan granted");
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription_id": id, "emailed": emailed }))
         }
         Err(e) => internal("grant the plan", e),
     }
@@ -1325,6 +1561,54 @@ pub async fn revoke_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grant_starts_moves_gifts_or_is_refused() {
+        let step = |live, plan, gift| grant_step(live, plan, gift);
+        assert_eq!(step(None, "growth", false), GrantStep::New);
+        assert_eq!(step(Some(("grant_1", "starter", false, false)), "growth", false), GrantStep::Move("grant_1"));
+        assert!(matches!(step(Some(("grant_1", "growth", false, false)), "growth", false), GrantStep::Refused(_)));
+        assert_eq!(step(Some(("sub_1", "starter", true, false)), "growth", true), GrantStep::Gift);
+        assert_eq!(step(Some(("sub_1", "growth", true, true)), "business", true), GrantStep::Gift);
+        assert_eq!(step(Some(("sub_1", "growth", true, true)), "starter", false), GrantStep::EndGift);
+        assert!(matches!(step(Some(("sub_1", "starter", true, false)), "growth", false), GrantStep::Refused(_)));
+        assert!(matches!(step(None, "growth", true), GrantStep::Refused(_)));
+        assert!(matches!(step(Some(("grant_1", "starter", false, false)), "growth", true), GrantStep::Refused(_)));
+    }
+
+    fn priced(name: &str, currency: &str, price_cents: i64, included_seats: i32, seat_price_cents: i64) -> WorkspacePlan {
+        WorkspacePlan {
+            id: name.to_lowercase(),
+            name: name.into(),
+            description: String::new(),
+            currency: currency.into(),
+            price_cents,
+            included_seats,
+            seat_price_cents,
+            monthly_credits: 0,
+            overage_cents_per_1k: 0,
+            custom: false,
+            stripe_product_id: None,
+            stripe_price_id: None,
+            stripe_seat_price_id: None,
+            active: true,
+            sort_order: 0,
+        }
+    }
+
+    #[test]
+    fn a_gift_keeps_todays_bill_seats_included() {
+        let starter = priced("Starter", "chf", 10_000, 3, 1_000);
+        let growth = priced("Growth", "chf", 20_000, 10, 800);
+        // 3 members: 100 against 200, so 100 off.
+        assert_eq!(gift_amount_off(&starter, &growth, 3), Ok(10_000));
+        // 8 members: 150 today, and Growth includes them all: 50 off, still 150.
+        assert_eq!(gift_amount_off(&starter, &growth, 8), Ok(5_000));
+        assert!(gift_amount_off(&growth, &starter, 3).is_err(), "not an upgrade");
+        // Dearer on its own but cheaper at this size: nothing to take off.
+        assert!(gift_amount_off(&starter, &priced("Team", "chf", 12_000, 30, 0), 20).is_err());
+        assert!(gift_amount_off(&starter, &priced("Euro", "eur", 20_000, 3, 0), 3).is_err(), "another currency");
+    }
 
     #[test]
     fn display_rates_are_checked() {
