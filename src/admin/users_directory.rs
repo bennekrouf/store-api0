@@ -1,30 +1,27 @@
 // src/admin/users_directory.rs
 //
-// The super admin's directory of every user, the workspaces they belong to and
-// the licences they hold. Built for thousands: paged and filtered in SQL, never
-// "load everything".
+// The super admin's directory of Mayorana customers and the licences they hold.
+// Built for thousands: paged and filtered in SQL, never "load everything".
 //
-// A person is an api0 account (user_preferences) or an email with a licence
-// (subscriptions): a subscriber needs no account, so licence holders who never
-// signed in to the dashboard are listed too, with has_account false.
-//
-// Which product they use (`products`): api0 when they have an account;
-// mayorana when they hold a licence that is not only their api0 wallet
+// A customer is an email holding a licence that is not only an api0 wallet
 // (subscriptions.origin 'api0': the free allowance of a member of a workspace
-// that bills each person).
+// that bills each person). api0 accounts and tenants without such a licence are
+// not listed: tenants and their plans are in tenant_overview.rs. A subscriber
+// needs no account, so has_account says whether they also have an api0 one.
 //
-//   GET /api/admin/users?q=&tenant_id=&role=&licence=&product=&sort=&page=&page_size=
-//       q          matches the email or the name of any workspace they are in
-//       tenant_id  only members of that workspace (with `role`, only that role)
-//       role       owner | admin | member | consumer
+//   GET /api/admin/users?q=&licence=&account=&sort=&page=&page_size=
+//       q          matches the email
 //       licence    live (any plan that gives access now) | paid | free | none
-//       product    api0 (only) | mayorana (only) | both
+//       account    with | without an api0 account
 //       sort       email (default) | last_active | newest
 //       page       1-based; page_size up to 200
 //       export=1   the whole filtered list (up to 10 000) in one page, for a CSV
 //                  the dashboard builds
 //   GET /api/admin/tenant-names   id, name and member count of every workspace,
-//                                 for the directory's workspace filter
+//                                 for the LLM calls' workspace filter
+//
+// Each row still carries `workspaces`: the delete dialog names what goes with
+// the person.
 //
 // Both need X-Internal-Secret; the gateway restricts them to the super admin.
 
@@ -37,7 +34,6 @@ use std::sync::Arc;
 
 const MAX_PAGE_SIZE: i64 = 200;
 const MAX_EXPORT_ROWS: i64 = 10_000;
-const ROLES: &[&str] = &["owner", "admin", "member", "consumer"];
 
 /// A licence that gives access now: the statuses payment::subscription treats
 /// as live, in their paid month. A free one past its month is still live: the
@@ -46,16 +42,14 @@ const LIVE: &str = "s.licence IS NOT NULL AND s.status IN ('active', 'trialing')
 
 /// Whether the person is a mayorana customer: a licence that is not only an
 /// api0 workspace member's wallet.
-const MAYORANA: &str = "EXISTS (SELECT 1 FROM subscriptions s WHERE s.email = lower(up.email) \
+pub(super) const MAYORANA: &str = "EXISTS (SELECT 1 FROM subscriptions s WHERE s.email = lower(up.email) \
                          AND s.licence IS NOT NULL AND s.origin IS DISTINCT FROM 'api0')";
 
 #[derive(Debug, Deserialize)]
 pub struct DirectoryQuery {
     pub q: Option<String>,
-    pub tenant_id: Option<String>,
-    pub role: Option<String>,
     pub licence: Option<String>,
-    pub product: Option<String>,
+    pub account: Option<String>,
     pub sort: Option<String>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
@@ -76,7 +70,7 @@ fn order_by(sort: Option<&str>) -> &'static str {
 /// too: the value is never interpolated.
 fn licence_filter(licence: &str) -> Option<String> {
     let has = |extra: &str| {
-        format!("EXISTS (SELECT 1 FROM subscriptions s WHERE s.email = lower(up.email) AND {LIVE}{extra})")
+        format!("EXISTS (SELECT 1 FROM subscriptions s WHERE s.email = lower(up.email) AND s.origin IS DISTINCT FROM 'api0' AND {LIVE}{extra})")
     };
     match licence {
         "" => Some("TRUE".into()),
@@ -88,13 +82,12 @@ fn licence_filter(licence: &str) -> Option<String> {
     }
 }
 
-/// The WHERE clause for a product filter, None for an unknown one. A whitelist.
-fn product_filter(product: &str) -> Option<String> {
-    match product {
-        "" => Some("TRUE".into()),
-        "api0" => Some(format!("up.has_account AND NOT {MAYORANA}")),
-        "mayorana" => Some(format!("NOT up.has_account AND {MAYORANA}")),
-        "both" => Some(format!("up.has_account AND {MAYORANA}")),
+/// The WHERE clause for an account filter, None for an unknown one. A whitelist.
+fn account_filter(account: &str) -> Option<&'static str> {
+    match account {
+        "" => Some("TRUE"),
+        "with" => Some("up.has_account"),
+        "without" => Some("NOT up.has_account"),
         _ => None,
     }
 }
@@ -108,19 +101,13 @@ pub async fn list_users(
         return deny;
     }
     let search = query.q.as_deref().map(str::trim).unwrap_or("").to_string();
-    let tenant_id = query.tenant_id.as_deref().map(str::trim).unwrap_or("").to_string();
-    let role = query.role.as_deref().map(str::trim).unwrap_or("").to_string();
-    if !role.is_empty() && !ROLES.contains(&role.as_str()) {
-        return HttpResponse::BadRequest()
-            .json(serde_json::json!({"success": false, "error": format!("Unknown role '{}'", role)}));
-    }
     let Some(licence_where) = licence_filter(query.licence.as_deref().map(str::trim).unwrap_or("")) else {
         return HttpResponse::BadRequest()
             .json(serde_json::json!({"success": false, "error": "Unknown licence filter"}));
     };
-    let Some(product_where) = product_filter(query.product.as_deref().map(str::trim).unwrap_or("")) else {
+    let Some(account_where) = account_filter(query.account.as_deref().map(str::trim).unwrap_or("")) else {
         return HttpResponse::BadRequest()
-            .json(serde_json::json!({"success": false, "error": "Unknown product filter"}));
+            .json(serde_json::json!({"success": false, "error": "Unknown account filter"}));
     };
     let export = query.export == Some(1);
     let page_size = if export {
@@ -149,6 +136,7 @@ pub async fn list_users(
              SELECT s.email, NULL, min(s.created_at), FALSE, NULL::jsonb
                FROM subscriptions s
               WHERE s.licence IS NOT NULL
+                AND s.origin IS DISTINCT FROM 'api0'
                 AND NOT EXISTS (SELECT 1 FROM user_preferences a WHERE lower(a.email) = s.email)
               GROUP BY s.email
          )
@@ -158,18 +146,10 @@ pub async fn list_users(
              up.default_tenant_id,
              up.created_at,
              (SELECT COALESCE(json_agg(json_build_object(
-                        'tenant_id', t.id, 'tenant', t.name, 'role', tu.role,
-                        -- Who pays for its tools, and its live tenant plan.
-                        'billing_mode', t.billing_mode,
-                        'plan', (SELECT wp.name FROM workspace_subscriptions ws
-                                   JOIN workspace_plans wp ON wp.id = ws.plan_id
-                                  WHERE ws.tenant_id = t.id AND ws.status IN ('active', 'trialing')
-                                    AND ws.period_end > NOW()
-                                  ORDER BY ws.period_end DESC LIMIT 1))
+                        'tenant_id', t.id, 'tenant', t.name, 'role', tu.role)
                         ORDER BY t.name), '[]'::json)
                 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
                WHERE tu.email = up.email) AS tenants,
-             (SELECT count(*) FROM api_keys k WHERE k.email = up.email AND k.is_active) AS active_keys,
              -- Every tool call, from Claude or a messaging bot, is logged with
              -- the key owner's email, and with the consumer's when a provider
              -- calls for one. api_keys.last_used is kept in case it is ever written.
@@ -180,10 +160,10 @@ pub async fn list_users(
                  -- The apps' AI calls, made with a licence rather than a key.
                  (SELECT max(u.created_at) FROM llm_usage u WHERE u.email = lower(up.email))
              ) AS last_active,
-             (SELECT count(*) FROM channel_identities ci WHERE ci.user_email = up.email) AS linked_channels,
              up.has_account,
-             -- Every licence the email holds, live ones first. The licence
-             -- number itself stays out: it is what unlocks the apps.
+             -- Every Mayorana licence the email holds, live ones first; an api0
+             -- wallet is not one. The licence number itself stays out: it is
+             -- what unlocks the apps.
              (SELECT COALESCE(json_agg(json_build_object(
                         'id', s.id, 'plan_id', s.plan_id, 'plan', p.name, 'is_free', s.is_free,
                         'origin', s.origin,
@@ -197,28 +177,22 @@ pub async fn list_users(
                         'gift_paid_plan', (SELECT g.name FROM plans g WHERE g.id = s.gift_paid_plan_id))
                         ORDER BY ({LIVE}) DESC, s.is_free, s.created_at DESC), '[]'::json)
                 FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-               WHERE s.email = lower(up.email) AND s.licence IS NOT NULL) AS licences,
+               WHERE s.email = lower(up.email) AND s.licence IS NOT NULL
+                 AND s.origin IS DISTINCT FROM 'api0') AS licences,
              -- Where the account came from (api/signup_source.rs).
-             up.signup_source,
-             {MAYORANA} AS uses_mayorana
+             up.signup_source
          FROM people up
-         WHERE ($1 = '' OR up.email ILIKE '%' || $1 || '%'
-                OR EXISTS (SELECT 1 FROM tenant_users tu JOIN tenants t ON t.id = tu.tenant_id
-                            WHERE tu.email = up.email AND t.name ILIKE '%' || $1 || '%'))
-           AND ($2 = '' OR EXISTS (SELECT 1 FROM tenant_users tu
-                                    WHERE tu.email = up.email AND tu.tenant_id = $2
-                                      AND ($3 = '' OR tu.role = $3)))
-           AND ($3 = '' OR $2 <> '' OR EXISTS (SELECT 1 FROM tenant_users tu
-                                                WHERE tu.email = up.email AND tu.role = $3))
+         WHERE {MAYORANA}
+           AND ($1 = '' OR up.email ILIKE '%' || $1 || '%')
            AND {licence_where}
-           AND {product_where}
+           AND {account_where}
          ORDER BY {}
-         LIMIT $4 OFFSET $5",
+         LIMIT $2 OFFSET $3",
         order_by(query.sort.as_deref())
     );
 
     let rows = match client
-        .query(&sql, &[&search, &tenant_id, &role, &page_size, &offset])
+        .query(&sql, &[&search, &page_size, &offset])
         .await
     {
         Ok(r) => r,
@@ -234,19 +208,16 @@ pub async fn list_users(
         .iter()
         .map(|r| {
             let created: Option<chrono::DateTime<chrono::Utc>> = r.get(3);
-            let last: Option<chrono::DateTime<chrono::Utc>> = r.get(6);
+            let last: Option<chrono::DateTime<chrono::Utc>> = r.get(5);
             serde_json::json!({
                 "email": r.get::<_, String>(1),
                 "default_tenant_id": r.get::<_, Option<String>>(2),
                 "created_at": created.map(|t| t.to_rfc3339()),
                 "workspaces": r.get::<_, serde_json::Value>(4),
-                "active_keys": r.get::<_, i64>(5),
                 "last_active": last.map(|t| t.to_rfc3339()),
-                "linked_channels": r.get::<_, i64>(7),
-                "has_account": r.get::<_, bool>(8),
-                "licences": r.get::<_, serde_json::Value>(9),
-                "signup_source": r.get::<_, Option<serde_json::Value>>(10),
-                "products": products(r.get::<_, bool>(8), r.get::<_, bool>(11)),
+                "has_account": r.get::<_, bool>(6),
+                "licences": r.get::<_, serde_json::Value>(7),
+                "signup_source": r.get::<_, Option<serde_json::Value>>(8),
             })
         })
         .collect();
@@ -259,18 +230,6 @@ pub async fn list_users(
         "page_size": page_size,
         "users": users,
     }))
-}
-
-/// The products a person uses, api0 first.
-fn products(has_account: bool, uses_mayorana: bool) -> Vec<&'static str> {
-    let mut p = Vec::with_capacity(2);
-    if has_account {
-        p.push("api0");
-    }
-    if uses_mayorana {
-        p.push("mayorana");
-    }
-    p
 }
 
 pub async fn tenant_names(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
@@ -327,20 +286,16 @@ mod tests {
     }
 
     #[test]
-    fn product_filter_is_a_whitelist() {
-        assert_eq!(product_filter("").as_deref(), Some("TRUE"));
-        assert!(product_filter("api0").unwrap().starts_with("up.has_account AND NOT EXISTS"));
-        assert!(product_filter("mayorana").unwrap().starts_with("NOT up.has_account AND EXISTS"));
-        assert!(product_filter("both").unwrap().starts_with("up.has_account AND EXISTS"));
-        assert!(product_filter("api0' --").is_none());
+    fn account_filter_is_a_whitelist() {
+        assert_eq!(account_filter(""), Some("TRUE"));
+        assert_eq!(account_filter("with"), Some("up.has_account"));
+        assert_eq!(account_filter("without"), Some("NOT up.has_account"));
+        assert!(account_filter("with' --").is_none());
     }
 
     #[test]
     fn an_api0_wallet_alone_is_not_mayorana() {
         assert!(MAYORANA.contains("origin IS DISTINCT FROM 'api0'"));
-        assert_eq!(products(true, false), vec!["api0"]);
-        assert_eq!(products(true, true), vec!["api0", "mayorana"]);
-        assert_eq!(products(false, true), vec!["mayorana"]);
+        assert!(licence_filter("free").unwrap().contains("origin IS DISTINCT FROM 'api0'"));
     }
-
 }

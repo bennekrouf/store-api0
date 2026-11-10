@@ -73,6 +73,7 @@ struct TenantFacts {
     consumer_count: i64,
     has_downstream_auth: bool,
     has_shared_credential: bool,
+    has_live_plan: bool,
 }
 
 fn filled(v: &Option<String>) -> bool {
@@ -103,6 +104,7 @@ impl TenantFacts {
             && self.api_key_count == 0
             && self.consumer_count == 0
             && !self.has_downstream_auth
+            && !self.has_live_plan
     }
 }
 
@@ -277,12 +279,25 @@ pub async fn tenants_overview(
                  -- WhatsApp keeps its own table; the other chats share one.
                  ARRAY(SELECT 'whatsapp'::varchar FROM whatsapp_channels w WHERE w.tenant_id = t.id
                        UNION ALL
-                       SELECT mc.channel FROM messaging_channels mc WHERE mc.tenant_id = t.id)
+                       SELECT mc.channel FROM messaging_channels mc WHERE mc.tenant_id = t.id),
+                 -- Its live tenant plan, if any.
+                 lp.plan_id,
+                 lp.name,
+                 lp.on_stripe
              FROM tenants t
              -- The default connection only: a tenant with named connections
              -- would otherwise appear once per connection.
              LEFT JOIN tenant_downstream_auth d
                     ON d.tenant_id = t.id AND d.connection_name = 'default'
+             LEFT JOIN LATERAL (
+                 SELECT ws.plan_id, wp.name, ws.stripe_customer_id <> '' AS on_stripe
+                   FROM workspace_subscriptions ws
+                   JOIN workspace_plans wp ON wp.id = ws.plan_id
+                  WHERE ws.tenant_id = t.id AND ws.status IN ('active', 'trialing')
+                    AND ws.period_end > NOW()
+                  ORDER BY ws.period_end DESC
+                  LIMIT 1
+             ) lp ON TRUE
              ORDER BY lower(t.name), t.id",
             &[],
         )
@@ -340,6 +355,7 @@ pub async fn tenants_overview(
             has_downstream_auth: r.get(12),
             consumer_count: r.get(22),
             has_shared_credential: has_bearer || has_sa || has_headers || shared_oauth,
+            has_live_plan: r.get::<_, Option<String>>(30).is_some(),
         };
         let findings = diagnose(&facts, &tenant_leaks);
         empty += facts.is_empty() as i64;
@@ -366,6 +382,12 @@ pub async fn tenants_overview(
             // 'tenant': the balance above pays for every call made with its keys;
             // 'user': each caller pays from their own plan, and the balance is unused.
             "billing_mode": r.get::<_, String>(23),
+            // Its live tenant plan: null when it has none.
+            "plan": r.get::<_, Option<String>>(30).map(|id| serde_json::json!({
+                "id": id,
+                "name": r.get::<_, Option<String>>(31),
+                "on_stripe": r.get::<_, Option<bool>>(32).unwrap_or(false),
+            })),
             "created_at": r.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
             "mcp_client_id": facts.mcp_client_id,
             "google_client_id": facts.google_client_id,
@@ -414,7 +436,7 @@ pub async fn tenants_overview(
     let mut tenants: Vec<serde_json::Value> = matching.drain(start..end).collect();
 
     // Owners, admins and members of the page's tenants. Consumers are only
-    // counted: there can be thousands, and the user directory lists them.
+    // counted: there can be thousands.
     let ids: Vec<String> = tenants
         .iter()
         .filter_map(|t| t["id"].as_str().map(str::to_string))
@@ -733,7 +755,15 @@ mod identity_leak_tests {
             consumer_count: 0,
             has_downstream_auth: false,
             has_shared_credential: false,
+            has_live_plan: false,
         }
+    }
+
+    #[test]
+    fn a_tenant_on_a_plan_is_not_empty() {
+        let t = TenantFacts { has_live_plan: true, ..facts() };
+        assert!(!t.is_empty());
+        assert!(EMPTY_TENANTS.contains("workspace_subscriptions"));
     }
 
     #[test]
@@ -1278,7 +1308,8 @@ fn default_true() -> bool {
 /// anything is imported into it, and deleting it would break that connector.
 ///
 /// Consumer links count as content too: a tenant whose users were attached to a
-/// provider still records a relationship worth keeping.
+/// provider still records a relationship worth keeping. So does a live plan:
+/// someone is paying for this tenant, or was given it.
 const EMPTY_TENANTS: &str = "
     SELECT t.id, t.name, t.credit_balance
       FROM tenants t
@@ -1290,6 +1321,9 @@ const EMPTY_TENANTS: &str = "
        AND NOT EXISTS (SELECT 1 FROM tenant_users tu
                         WHERE tu.tenant_id = t.id AND tu.role = 'consumer')
        AND NOT EXISTS (SELECT 1 FROM tenant_downstream_auth d WHERE d.tenant_id = t.id)
+       AND NOT EXISTS (SELECT 1 FROM workspace_subscriptions ws
+                        WHERE ws.tenant_id = t.id AND ws.status IN ('active', 'trialing')
+                          AND ws.period_end > NOW())
      ORDER BY t.created_at ASC";
 
 /// POST /api/internal/tenants/prune-empty
