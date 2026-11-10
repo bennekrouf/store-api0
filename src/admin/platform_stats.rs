@@ -7,10 +7,11 @@
 //   GET /api/admin/stats
 //   → { users: { total, accounts, new_7d }, workspaces: { total, new_7d, on_plan },
 //       licences: { live, paid, free } }
-//       users       people as the Users tab lists them: an api0 account, or an
-//                   email holding a licence without one
+//       users       people as the Users tab lists them: holders of a Mayorana
+//                   licence; accounts is how many of them also have an api0 account
 //       on_plan     workspaces with a live workspace plan
-//       licences    live ones only: active or trialing, in their paid month
+//       licences    live Mayorana ones only (an api0 wallet is not one): active
+//                   or trialing, in their paid month
 //                   (a free one is live whatever its month, as in users_directory.rs)
 //
 //   GET /api/admin/llm-stats?tz=Europe/Zurich
@@ -30,8 +31,11 @@ use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;
 
-/// A licence that gives access now (users_directory.rs LIVE).
-const LIVE: &str = "s.licence IS NOT NULL AND s.status IN ('active', 'trialing') AND (s.period_end > NOW() OR s.is_free)";
+use super::users_directory::MAYORANA;
+
+/// A Mayorana licence that gives access now (users_directory.rs LIVE).
+const LIVE: &str = "s.licence IS NOT NULL AND s.origin IS DISTINCT FROM 'api0' \
+                    AND s.status IN ('active', 'trialing') AND (s.period_end > NOW() OR s.is_free)";
 
 pub async fn platform_stats(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
     if let Some(deny) = require_internal_secret(&req) {
@@ -47,17 +51,18 @@ pub async fn platform_stats(req: HttpRequest, store: web::Data<Arc<EndpointStore
 
     let sql = format!(
         "WITH people AS (
-             SELECT created_at FROM user_preferences
+             SELECT up.created_at, TRUE AS has_account FROM user_preferences up WHERE {MAYORANA}
              UNION ALL
-             SELECT min(s.created_at)
+             SELECT min(s.created_at), FALSE
                FROM subscriptions s
               WHERE s.licence IS NOT NULL
+                AND s.origin IS DISTINCT FROM 'api0'
                 AND NOT EXISTS (SELECT 1 FROM user_preferences a WHERE lower(a.email) = s.email)
               GROUP BY s.email
          )
          SELECT
              (SELECT count(*) FROM people),
-             (SELECT count(*) FROM user_preferences),
+             (SELECT count(*) FROM people WHERE has_account),
              (SELECT count(*) FROM people WHERE created_at > NOW() - INTERVAL '7 days'),
              (SELECT count(*) FROM tenants),
              (SELECT count(*) FROM tenants WHERE created_at > NOW() - INTERVAL '7 days'),
