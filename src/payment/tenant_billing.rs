@@ -442,11 +442,17 @@ pub async fn get_my_billing_mode_handler(
         Ok(b) => b,
         Err(e) => return failed("read the caller's role", e),
     };
+    // A live plan pays first, so the prepaid balance alone would misstate what
+    // the workspace has left.
+    let balance = match workspace_plans::credits_left_to_show(&store, &tenant.id).await {
+        Ok(with_plan) => with_plan.unwrap_or(tenant.credit_balance),
+        Err(e) => return failed("read the plan's credits", e),
+    };
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "tenant_id": tenant.id,
         "mode": mode.as_str(),
-        "balance": tenant.credit_balance,
+        "balance": balance,
         "can_edit": editable,
     }))
 }

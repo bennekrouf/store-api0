@@ -21,7 +21,7 @@ use std::sync::Arc;
 // DeepSeek is the default; Mistral the alternative.
 const VALID_PROVIDERS: &[&str] = &["deepseek", "mistral"];
 
-const VALID_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"];
+const VALID_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-flash", "deepseek-chat", "deepseek-reasoner"];
 const VALID_MISTRAL_MODELS: &[&str] = &["mistral-medium-latest"];
 
 const DEFAULT_PROVIDER: &str = "deepseek";

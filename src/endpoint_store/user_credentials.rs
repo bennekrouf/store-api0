@@ -121,6 +121,11 @@ pub struct ConnectionCredentialSlot {
     pub oauth: bool,
     /// For `oauth`: whether they have connected yet.
     pub connected: bool,
+    /// For `oauth`: the account that signed in, when its token names one.
+    pub account: Option<String>,
+    /// The hosts this connection's tools call, so a person can see what it is
+    /// a connection *to*. Empty when none of them has a public name.
+    pub apis: Vec<String>,
     /// For `per_user`: the token they pasted, without the token.
     pub credential: Option<CredentialSummary>,
 }
@@ -227,12 +232,27 @@ pub async fn credential_slots(
             .await
             .to_store_error()?;
 
+        // Only worth reading for a tenant that asks for a personal credential.
+        // It labels a row, so failing to read it must not take the row away.
+        let tools = if modes.is_empty() {
+            Vec::new()
+        } else {
+            store.list_mcp_tools(&tenant_id, None).await.unwrap_or_else(|e| {
+                app_log!(warn, tenant_id = %tenant_id, error = %e, "Could not list the tools of a connection");
+                Vec::new()
+            })
+        };
+
         let mut connections = Vec::with_capacity(modes.len());
         for row in modes {
             let connection: String = row.get(0);
             let auth_mode: String = row.get(1);
+            let apis = apis_reached(
+                tools.iter().map(|t| (t.connection.as_deref(), t.backend_url.as_str())),
+                &connection,
+            );
             connections.push(
-                connection_slot(&client, &tenant_id, &email, connection, &auth_mode).await?,
+                connection_slot(&client, &tenant_id, &email, connection, &auth_mode, apis).await?,
             );
         }
 
@@ -251,6 +271,32 @@ pub async fn credential_slots(
     Ok(slots)
 }
 
+/// The host of a tool's URL, when it means something to the person reading it:
+/// a public name, not a template, an address or an internal service name.
+fn api_host(url: &str) -> Option<String> {
+    let rest = url.trim().split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?.split(':').next()?.to_lowercase();
+    let public = host.contains('.') && !host.contains('{') && host.parse::<std::net::IpAddr>().is_err();
+    public.then_some(host)
+}
+
+/// The distinct hosts called by the tools of one connection. A tool that names
+/// no connection uses the default one.
+fn apis_reached<'a>(
+    tools: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+    connection: &str,
+) -> Vec<String> {
+    let mut hosts: Vec<String> = tools
+        .into_iter()
+        .filter(|(tool_connection, _)| tool_connection.unwrap_or(DEFAULT_CONNECTION) == connection)
+        .filter_map(|(_, url)| api_host(url))
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
 /// Where one person stands with one connection.
 async fn connection_slot(
     client: &tokio_postgres::Client,
@@ -258,6 +304,7 @@ async fn connection_slot(
     email: &str,
     connection: String,
     auth_mode: &str,
+    apis: Vec<String>,
 ) -> Result<ConnectionCredentialSlot, StoreError> {
     let pat = for_connection("pat", &connection);
     let refresh = for_connection("oauth_refresh", &connection);
@@ -280,21 +327,22 @@ async fn connection_slot(
     // The refresh token is what makes a connection durable, so its presence
     // is what "connected" means. An access token alone expires within the
     // hour and cannot be renewed.
-    let connected = client
+    let refresh_row = client
         .query_opt(
-            "SELECT 1 FROM user_downstream_credentials
+            "SELECT verified_identity FROM user_downstream_credentials
              WHERE tenant_id = $1 AND user_email = $2 AND kind = $3",
             &[&tenant_id, &email, &refresh],
         )
         .await
-        .to_store_error()?
-        .is_some();
+        .to_store_error()?;
 
     Ok(ConnectionCredentialSlot {
         connection,
         per_user: auth_mode == "per_user",
         oauth: auth_mode == "per_user_oauth",
-        connected,
+        connected: refresh_row.is_some(),
+        account: refresh_row.and_then(|r| r.get(0)),
+        apis,
         credential,
     })
 }
@@ -400,4 +448,35 @@ pub async fn get_secret_with_expiry(
         })?;
 
     Ok(Some((secret, expires_at)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_host_is_shown_only_when_it_is_a_public_name() {
+        assert_eq!(api_host("https://dev.azure.com/acme/_apis").as_deref(), Some("dev.azure.com"));
+        assert_eq!(api_host("https://API.Example.com:8443?a=1").as_deref(), Some("api.example.com"));
+        assert_eq!(api_host("http://localhost:5003/x"), None);
+        assert_eq!(api_host("http://10.0.0.4/x"), None);
+        assert_eq!(api_host("https://{org}.example.com/x"), None);
+        assert_eq!(api_host("{base}/x"), None);
+    }
+
+    #[test]
+    fn each_connection_lists_only_the_hosts_of_its_own_tools() {
+        let tools = [
+            (None, "https://dev.azure.com/a"),
+            (None, "https://dev.azure.com/b"),
+            (Some("default"), "https://api.example.com/c"),
+            (Some("arm"), "https://management.azure.com/d"),
+        ];
+        assert_eq!(
+            apis_reached(tools, DEFAULT_CONNECTION),
+            ["api.example.com", "dev.azure.com"]
+        );
+        assert_eq!(apis_reached(tools, "arm"), ["management.azure.com"]);
+        assert!(apis_reached(tools, "other").is_empty());
+    }
 }
