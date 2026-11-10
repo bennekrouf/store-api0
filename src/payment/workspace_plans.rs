@@ -312,6 +312,20 @@ pub async fn available(store: &EndpointStore, tenant_id: &str) -> Result<Option<
     Ok(Some(sub.credits_left + balance.max(0)))
 }
 
+/// The credits to show a workspace with a live plan: what `available` counts,
+/// without OVERAGE_HEADROOM, which is a limit for the gate and not credits it
+/// holds. `None` when the workspace has no live plan.
+pub async fn credits_left_to_show(store: &EndpointStore, tenant_id: &str) -> Result<Option<i64>, String> {
+    let Some((sub, plan)) = live_plan(store, tenant_id).await? else {
+        return Ok(None);
+    };
+    if plan.overage_cents_per_1k > 0 {
+        return Ok(Some(sub.credits_left));
+    }
+    let balance = store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?;
+    Ok(Some(sub.credits_left + balance.max(0)))
+}
+
 #[derive(Debug, PartialEq)]
 pub struct PlanCharge {
     pub from_plan: i64,
