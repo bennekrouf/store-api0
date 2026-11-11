@@ -18,6 +18,20 @@ pub fn personal_tenant_name(email: &str) -> String {
     }
 }
 
+/// A new tenant's Client ID: the public name of its MCP address
+/// (`/mcp/<client-id>`) and the OAuth client id pasted in Claude. Random rather
+/// than derived from the tenant's name, because a personal tenant is named
+/// after its owner's email address and this ends up in URLs. It never changes
+/// on its own: a renamed tenant keeps it, so connectors already set up keep
+/// working. The owner can replace it with a readable one.
+pub fn new_mcp_client_id() -> String {
+    use rand::Rng;
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
+    let mut rng = rand::rng();
+    let suffix: String = (0..8).map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char).collect();
+    format!("ws-{}", suffix)
+}
+
 /// Whether `email` can own an account: something@something. A blank value is
 /// what an unauthenticated or half-filled request carries, and resolving one
 /// used to create a "Personal workspace" owned by the empty string.
@@ -217,13 +231,33 @@ async fn get_or_create_personal_tenant_locked(
         });
     }
 
-    // Create Tenant
-    client.execute(
-        "INSERT INTO tenants (id, name, credit_balance, created_at) VALUES ($1, $2, 0, $3)",
-        &[&tenant_id, &name, &now],
-    )
-    .await
-    .to_store_error()?;
+    // Create Tenant, with a Client ID from the start: without one, Claude has no
+    // address for this tenant. 32^8 values make a clash all but impossible;
+    // ON CONFLICT turns one into a retry rather than a failed sign-up.
+    let mut created = false;
+    for _ in 0..5 {
+        let inserted = client
+            .execute(
+                "INSERT INTO tenants (id, name, credit_balance, created_at, mcp_client_id)
+                 VALUES ($1, $2, 0, $3, $4) ON CONFLICT (mcp_client_id) DO NOTHING",
+                &[&tenant_id, &name, &now, &new_mcp_client_id()],
+            )
+            .await
+            .to_store_error()?;
+        if inserted == 1 {
+            created = true;
+            break;
+        }
+    }
+    if !created {
+        client
+            .execute(
+                "INSERT INTO tenants (id, name, credit_balance, created_at) VALUES ($1, $2, 0, $3)",
+                &[&tenant_id, &name, &now],
+            )
+            .await
+            .to_store_error()?;
+    }
 
     // Link User to Tenant
     client.execute(
@@ -657,5 +691,18 @@ mod db_tests {
             .query_one("SELECT count(*) FROM tenant_users WHERE email = $1", &[&bob])
             .await.unwrap().get(0);
         assert_eq!(owned, 1, "and no new personal tenant was made");
+    }
+}
+
+#[cfg(test)]
+mod client_id_tests {
+    use super::new_mcp_client_id;
+
+    #[test]
+    fn a_new_client_id_is_url_safe_and_says_nothing_about_its_owner() {
+        let a = new_mcp_client_id();
+        assert!(a.starts_with("ws-") && a.len() == 11, "{}", a);
+        assert!(a.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+        assert_ne!(a, new_mcp_client_id());
     }
 }

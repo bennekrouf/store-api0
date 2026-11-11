@@ -1358,3 +1358,28 @@ CREATE TABLE IF NOT EXISTS tenant_security_audits (
     report    JSONB       NOT NULL,
     saved_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Every tenant has a Client ID, the public name of its MCP address: without one,
+-- Claude has no address for it. New tenants get one at creation
+-- (tenant_management::new_mcp_client_id); this gives one to older tenants that
+-- never had any. Random, never derived from the name, which for a personal
+-- tenant comes from its owner's email address. Existing values are never touched.
+-- One row at a time, so a clash on the UNIQUE column only retries that row
+-- instead of failing the whole schema run at start-up.
+DO $$
+DECLARE
+    t RECORD;
+BEGIN
+    FOR t IN SELECT id FROM tenants WHERE mcp_client_id IS NULL OR btrim(mcp_client_id) = '' LOOP
+        FOR attempt IN 1..5 LOOP
+            BEGIN
+                UPDATE tenants
+                   SET mcp_client_id = 'ws-' || substr(md5(t.id || random()::text || clock_timestamp()::text), 1, 8)
+                 WHERE id = t.id;
+                EXIT;
+            EXCEPTION WHEN unique_violation THEN
+                NULL;
+            END;
+        END LOOP;
+    END LOOP;
+END $$;
