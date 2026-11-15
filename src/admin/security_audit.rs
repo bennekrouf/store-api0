@@ -826,6 +826,7 @@ pub async fn save_audit_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
 
     fn own() -> Vec<String> {
         vec!["api0.ai".to_string()]
@@ -1030,7 +1031,7 @@ mod tests {
         let store = Arc::new(EndpointStore::new(&url).await.expect("store"));
         let run = uuid::Uuid::new_v4().simple().to_string();
         let email = format!("audit-{run}@example.com");
-        let tenant = get_default_tenant(&store, &email).await.unwrap();
+        let tenant = get_or_create_personal_tenant(&store, &email).await.unwrap();
         let t = tenant.id.as_str();
         let c = store.get_admin_conn().await.unwrap();
 

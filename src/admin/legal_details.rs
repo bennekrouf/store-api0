@@ -680,6 +680,7 @@ pub async fn put_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
 
     fn body() -> SaveBody {
         SaveBody {
@@ -814,7 +815,7 @@ mod tests {
         let stranger = format!("stranger-{run}@example.com");
         let c = store.get_admin_conn().await.unwrap();
 
-        let first = get_default_tenant(&store, &owner).await.unwrap();
+        let first = get_or_create_personal_tenant(&store, &owner).await.unwrap();
         let other = format!("second-{run}");
         c.execute("INSERT INTO tenants (id, name) VALUES ($1, $1)", &[&other]).await.unwrap();
         c.execute("INSERT INTO tenant_users (tenant_id, email, role) VALUES ($1, $2, 'owner')", &[&other, &owner])
@@ -876,7 +877,7 @@ mod tests {
         assert_eq!(read(&store, &other, &other, &owner, true).await.unwrap()["complete"], true);
 
         // Somebody who manages no workspace of that company cannot attach to it.
-        let their_own = get_default_tenant(&store, &stranger).await.unwrap();
+        let their_own = get_or_create_personal_tenant(&store, &stranger).await.unwrap();
         let grab = SaveBody { email: stranger.clone(), entity_id: Some(company.clone()), ..as_owner(&their_own.id, None, terms.clone()) };
         let grabbed = save(&store, &their_own.id, &their_own.name, &grab, &details).await;
         assert!(matches!(grabbed, Err(SaveError::NotYourCompany)));

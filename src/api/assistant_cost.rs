@@ -108,7 +108,7 @@ pub async fn assistant_cost(client: &Client, tenant_id: &str, hours: i32) -> Res
 #[cfg(test)]
 mod tests {
     use super::assistant_cost;
-    use crate::endpoint_store::tenant_management::get_default_tenant;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
     use crate::endpoint_store::EndpointStore;
     use serde_json::json;
 
@@ -122,8 +122,8 @@ mod tests {
         let store = EndpointStore::new(&url).await.expect("store");
         let email = format!("cost-{}@example.com", uuid::Uuid::new_v4().simple());
         let other_email = format!("cost-other-{}@example.com", uuid::Uuid::new_v4().simple());
-        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
-        let other = get_default_tenant(&store, &other_email).await.unwrap().id;
+        let tenant = get_or_create_personal_tenant(&store, &email).await.unwrap().id;
+        let other = get_or_create_personal_tenant(&store, &other_email).await.unwrap().id;
 
         let c = store.get_admin_conn().await.unwrap();
         let key = format!("key-{}", uuid::Uuid::new_v4().simple());

@@ -39,7 +39,9 @@ pub async fn replace_user_api_groups(
             requested.to_string()
         }
         None => {
-            crate::endpoint_store::tenant_management::get_default_tenant(store, email)
+            // Importing an API is a step someone took on purpose: it may create
+            // their workspace, unlike a read.
+            crate::endpoint_store::tenant_management::get_or_create_personal_tenant(store, email)
                 .await?
                 .id
         }
@@ -274,7 +276,7 @@ pub async fn replace_user_api_groups(
 #[cfg(test)]
 mod db_tests {
     use crate::endpoint_store::mcp_tools_management::resync_tenant_tools;
-    use crate::endpoint_store::tenant_management::get_default_tenant;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
     use crate::endpoint_store::{ApiStorage, EndpointStore};
 
     /// An import document in the shape the setup wizard sends (JSON, required
@@ -305,7 +307,7 @@ mod db_tests {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
         let store = EndpointStore::new(&url).await.expect("store");
         let email = format!("import-{}@example.com", uuid::Uuid::new_v4().simple());
-        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
+        let tenant = get_or_create_personal_tenant(&store, &email).await.unwrap().id;
 
         // A file with two APIs, then the wizard importing its own.
         store
@@ -369,8 +371,8 @@ mod db_tests {
         let store = EndpointStore::new(&url).await.expect("store");
         let email = format!("sync-{}@example.com", uuid::Uuid::new_v4().simple());
         let other_email = format!("sync-other-{}@example.com", uuid::Uuid::new_v4().simple());
-        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
-        let other = get_default_tenant(&store, &other_email).await.unwrap().id;
+        let tenant = get_or_create_personal_tenant(&store, &email).await.unwrap().id;
+        let other = get_or_create_personal_tenant(&store, &other_email).await.unwrap().id;
 
         let c = store.get_admin_conn().await.unwrap();
         for t in [&tenant, &other] {
@@ -409,7 +411,7 @@ mod db_tests {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
         let store = EndpointStore::new(&url).await.expect("store");
         let email = format!("fields-{}@example.com", uuid::Uuid::new_v4().simple());
-        let tenant = get_default_tenant(&store, &email).await.unwrap().id;
+        let tenant = get_or_create_personal_tenant(&store, &email).await.unwrap().id;
 
         let with_fields: ApiStorage = serde_json::from_value(serde_json::json!({ "api_groups": [{
             "name": "Azure DevOps",

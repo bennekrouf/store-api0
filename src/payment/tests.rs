@@ -51,7 +51,7 @@ async fn test_credit_deduction_logic() {
 
     let store = EndpointStore::new(&database_url).await.expect("Failed to create store");
     let email = format!("test_credit_{}@example.com", Uuid::new_v4());
-    let tenant = crate::endpoint_store::tenant_management::get_default_tenant(&store, &email).await.expect("Failed to get tenant");
+    let tenant = crate::endpoint_store::tenant_management::get_or_create_personal_tenant(&store, &email).await.expect("Failed to get tenant");
     let tenant_id = &tenant.id;
 
     println!("Testing with user: {} and tenant: {}", email, tenant_id);

@@ -21,7 +21,7 @@ use crate::app_log;
 use crate::endpoint_store::api_key_management::{
     extract_key_prefix, generate_secure_key, hash_api_key,
 };
-use crate::endpoint_store::tenant_management::get_default_tenant;
+use crate::endpoint_store::tenant_management::{get_default_tenant, get_or_create_personal_tenant, is_no_workspace};
 use crate::endpoint_store::EndpointStore;
 use crate::infra::auth::FirebaseUser;
 use actix_web::{web, HttpResponse, Responder};
@@ -90,7 +90,7 @@ pub async fn generate_self_service_key(
     drop(client); // release before the tenant resolution calls below
 
     // 2. Ensure the consumer has a personal tenant row
-    let consumer_tenant = match get_default_tenant(&store, &consumer_email).await {
+    let consumer_tenant = match get_or_create_personal_tenant(&store, &consumer_email).await {
         Ok(t) => t,
         Err(e) => {
             app_log!(error, consumer_email = %consumer_email, error = %e,
@@ -184,8 +184,12 @@ pub async fn list_self_service_keys(
     store: web::Data<Arc<EndpointStore>>,
 ) -> impl Responder {
     let consumer_email = user.email.trim().to_lowercase();
+    // Listing is a read: an account with no workspace simply has no keys.
     let consumer_tenant = match get_default_tenant(&store, &consumer_email).await {
         Ok(t) => t,
+        Err(e) if is_no_workspace(&e) => {
+            return HttpResponse::Ok().json(serde_json::json!({"success": true, "keys": []}));
+        }
         Err(e) => {
             app_log!(error, consumer_email = %consumer_email, error = %e, "list_keys: failed to resolve tenant");
             return HttpResponse::InternalServerError().json(serde_json::json!({"success":false,"error":"Failed to resolve account"}));

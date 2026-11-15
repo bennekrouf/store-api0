@@ -1431,7 +1431,7 @@ mod db_tests {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
         let store = EndpointStore::new(&url).await.expect("store");
         let run = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-        let tenant = crate::endpoint_store::tenant_management::get_default_tenant(
+        let tenant = crate::endpoint_store::tenant_management::get_or_create_personal_tenant(
             &store, &format!("leaks-{run}@example.com"),
         ).await.unwrap();
         let t = tenant.id.as_str();

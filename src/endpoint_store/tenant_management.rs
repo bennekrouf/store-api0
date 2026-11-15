@@ -75,6 +75,10 @@ pub const NAME_INDEX: &str = "tenants_name_ci_key";
 /// endpoints into that provider's namespace or read its settings.
 pub const MEMBER_ROLES: &[&str] = &["owner", "member", "admin"];
 
+/// The caller's workspace, creating a personal one when they belong nowhere.
+/// Only an explicit step calls this: the setup's "create my workspace", an
+/// API import, a key someone asks for. Anything that only reads goes through
+/// [`get_default_tenant`], which never creates.
 pub async fn get_or_create_personal_tenant(
     store: &EndpointStore,
     email: &str,
@@ -86,6 +90,24 @@ pub async fn get_or_create_personal_tenant(
 pub async fn get_or_create_personal_tenant_with_conn(
     client: &mut PgConnection,
     email: &str,
+) -> Result<Tenant, StoreError> {
+    resolve_personal_tenant_with_conn(client, email, true).await
+}
+
+/// What a request carries when the account has no workspace yet. Handlers
+/// that the dashboard reads on a first visit answer it as a state, not a
+/// failure (see [`is_no_workspace`]).
+pub const NO_WORKSPACE: &str = "No workspace yet: it is created at the setup step";
+
+/// Whether `e` says the account has no workspace yet.
+pub fn is_no_workspace(e: &StoreError) -> bool {
+    matches!(e, StoreError::NotFound(m) if m == NO_WORKSPACE)
+}
+
+async fn resolve_personal_tenant_with_conn(
+    client: &mut PgConnection,
+    email: &str,
+    create: bool,
 ) -> Result<Tenant, StoreError> {
     let email = email.to_lowercase();
     if !is_account_email(&email) {
@@ -109,14 +131,25 @@ pub async fn get_or_create_personal_tenant_with_conn(
     tx.execute("SELECT pg_advisory_xact_lock(hashtext($1))", &[&email])
         .await
         .to_store_error()?;
-    let tenant = get_or_create_personal_tenant_locked(&tx, &email).await?;
-    tx.commit().await.to_store_error()?;
-    Ok(tenant)
+    match resolve_personal_tenant_locked(&tx, &email, create).await {
+        Ok(tenant) => {
+            tx.commit().await.to_store_error()?;
+            Ok(tenant)
+        }
+        // No workspace is an answer, not a failure: the account row written on
+        // the way is kept.
+        Err(e) if is_no_workspace(&e) => {
+            tx.commit().await.to_store_error()?;
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
-async fn get_or_create_personal_tenant_locked(
+async fn resolve_personal_tenant_locked(
     client: &deadpool_postgres::Transaction<'_>,
     email: &str,
+    create: bool,
 ) -> Result<Tenant, StoreError> {
     let email = email.to_string();
     // 1. Check if user has a default tenant
@@ -139,30 +172,6 @@ async fn get_or_create_personal_tenant_locked(
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
             ..Default::default()
         });
-    }
-
-    app_log!(info, email = %email, "Creating personal tenant for user");
-
-    let tenant_id = Uuid::new_v4().to_string();
-    let now = Utc::now();
-    // A tenant name is a label people read in a connector list and a dashboard
-    // header, so it must not be an email address: seeing "someone@example.com"
-    // where a workspace name belongs makes every screen ambiguous about whether
-    // it is naming a person or a workspace. Derive something readable instead.
-    //
-    // Two people can share a local part (bob@a.com, bob@b.com), and names are
-    // unique, so the second gets "Personal — bob 2".
-    let base = personal_tenant_name(&email);
-    let mut name = base.clone();
-    for n in 2.. {
-        let taken = client
-            .query_opt(NAME_TAKEN_SQL, &[&name, &None::<String>])
-            .await
-            .to_store_error()?;
-        if taken.is_none() {
-            break;
-        }
-        name = format!("{} {}", base, n);
     }
 
     // Note: We are using a client that likely has bypass_rls = true (from get_admin_conn)
@@ -229,6 +238,37 @@ async fn get_or_create_personal_tenant_locked(
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
             ..Default::default()
         });
+    }
+
+    // Nobody creates a workspace by signing in or by looking around: the
+    // account row above is all a first sign-in leaves (enough to follow up by
+    // email). The workspace comes from the setup step, which asks for it.
+    if !create {
+        return Err(StoreError::NotFound(NO_WORKSPACE.to_string()));
+    }
+
+    app_log!(info, email = %email, "Creating personal tenant for user");
+
+    let tenant_id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+    // A tenant name is a label people read in a connector list and a dashboard
+    // header, so it must not be an email address: seeing "someone@example.com"
+    // where a workspace name belongs makes every screen ambiguous about whether
+    // it is naming a person or a workspace. Derive something readable instead.
+    //
+    // Two people can share a local part (bob@a.com, bob@b.com), and names are
+    // unique, so the second gets "Personal — bob 2".
+    let base = personal_tenant_name(&email);
+    let mut name = base.clone();
+    for n in 2.. {
+        let taken = client
+            .query_opt(NAME_TAKEN_SQL, &[&name, &None::<String>])
+            .await
+            .to_store_error()?;
+        if taken.is_none() {
+            break;
+        }
+        name = format!("{} {}", base, n);
     }
 
     // Create Tenant, with a Client ID from the start: without one, Claude has no
@@ -330,12 +370,16 @@ pub async fn find_default_tenant(
     }))
 }
 
+/// The caller's workspace: their default, else one they were invited into or
+/// already belong to. Never creates one: an account that belongs nowhere gets
+/// `NotFound(NO_WORKSPACE)` until the setup step creates it
+/// ([`get_or_create_personal_tenant`]).
 pub async fn get_default_tenant(
     store: &EndpointStore,
     email: &str,
 ) -> Result<Tenant, StoreError> {
-    let email = email.to_lowercase();
-    get_or_create_personal_tenant(store, &email).await
+    let mut client = store.get_admin_conn().await?;
+    resolve_personal_tenant_with_conn(&mut client, email, false).await
 }
 
 /// The tenant behind an OAuth client id, with how its users sign in:
@@ -624,10 +668,36 @@ mod db_tests {
         let c = store.get_admin_conn().await.unwrap();
         let before: i64 = c.query_one("SELECT count(*) FROM tenants", &[]).await.unwrap().get(0);
         for blank in ["", "  ", "not-an-address"] {
-            assert!(matches!(get_default_tenant(&store, blank).await, Err(StoreError::InvalidInput(_))));
+            assert!(matches!(get_or_create_personal_tenant(&store, blank).await, Err(StoreError::InvalidInput(_))));
         }
         let after: i64 = c.query_one("SELECT count(*) FROM tenants", &[]).await.unwrap().get(0);
         assert_eq!(before, after, "nothing was created");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL"]
+    async fn signing_in_keeps_the_account_but_creates_no_workspace() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let store = EndpointStore::new(&url).await.expect("store");
+        let email = format!("curious-{}@example.com", Uuid::new_v4());
+        let c = store.get_admin_conn().await.unwrap();
+
+        // A read, as the dashboard makes on a first visit.
+        let err = get_default_tenant(&store, &email).await.unwrap_err();
+        assert!(is_no_workspace(&err), "{err}");
+        let account: i64 = c
+            .query_one("SELECT count(*) FROM user_preferences WHERE email = $1", &[&email])
+            .await.unwrap().get(0);
+        assert_eq!(account, 1, "the account row is kept: that is the email to follow up");
+        let owned: i64 = c
+            .query_one("SELECT count(*) FROM tenant_users WHERE email = $1", &[&email])
+            .await.unwrap().get(0);
+        assert_eq!(owned, 0, "no workspace until the setup step");
+
+        // The setup step creates it, once; reads then find it.
+        let created = get_or_create_personal_tenant(&store, &email).await.unwrap();
+        assert_eq!(get_or_create_personal_tenant(&store, &email).await.unwrap().id, created.id);
+        assert_eq!(get_default_tenant(&store, &email).await.unwrap().id, created.id);
     }
 
     #[tokio::test]
@@ -640,7 +710,7 @@ mod db_tests {
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 let (store, email) = (store.clone(), email.clone());
-                tokio::spawn(async move { get_default_tenant(&store, &email).await.unwrap().id })
+                tokio::spawn(async move { get_or_create_personal_tenant(&store, &email).await.unwrap().id })
             })
             .collect();
         let mut ids = Vec::new();
@@ -673,8 +743,8 @@ mod db_tests {
         let run = Uuid::new_v4().simple().to_string();
         let (alice, bob) = (format!("alice-{run}@example.com"), format!("bob-{run}@example.com"));
 
-        let shared = get_default_tenant(&store, &alice).await.unwrap();
-        let bob_personal = get_default_tenant(&store, &bob).await.unwrap();
+        let shared = get_or_create_personal_tenant(&store, &alice).await.unwrap();
+        let bob_personal = get_or_create_personal_tenant(&store, &bob).await.unwrap();
         crate::endpoint_store::tenant_members::invite(&store, &alice, &bob, "owner").await.unwrap();
 
         // Bob's own workspace is deleted, as the admin panel does it.
@@ -685,7 +755,7 @@ mod db_tests {
         c.execute("DELETE FROM api_keys WHERE tenant_id = $1", &[&bob_personal.id]).await.unwrap();
         c.execute("DELETE FROM tenants WHERE id = $1", &[&bob_personal.id]).await.unwrap();
 
-        let now = get_default_tenant(&store, &bob).await.unwrap();
+        let now = get_or_create_personal_tenant(&store, &bob).await.unwrap();
         assert_eq!(now.id, shared.id, "bob lands in the tenant he still belongs to");
         let owned: i64 = c
             .query_one("SELECT count(*) FROM tenant_users WHERE email = $1", &[&bob])

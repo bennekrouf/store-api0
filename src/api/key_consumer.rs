@@ -28,7 +28,7 @@ use crate::app_log;
 use crate::endpoint_store::api_key_management::{
     extract_key_prefix, generate_secure_key, hash_api_key,
 };
-use crate::endpoint_store::tenant_management::get_default_tenant;
+use crate::endpoint_store::tenant_management::{get_default_tenant, get_or_create_personal_tenant};
 use crate::endpoint_store::EndpointStore;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use chrono::Utc;
@@ -97,7 +97,7 @@ pub async fn generate_consumer_key_handler(
 
     // 2. Ensure consumer user_preferences row exists (creates it if absent)
     //    Also ensure a personal tenant for the consumer so their credit balance can be tracked.
-    let consumer_tenant = match get_default_tenant(&store, &consumer_email).await {
+    let consumer_tenant = match get_or_create_personal_tenant(&store, &consumer_email).await {
         Ok(t) => t,
         Err(e) => {
             app_log!(error, consumer_email = %consumer_email, error = %e, "Failed to resolve consumer tenant");

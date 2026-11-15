@@ -186,6 +186,7 @@ pub async fn set_my_region_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL"]
@@ -193,7 +194,7 @@ mod tests {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
         let store = Arc::new(EndpointStore::new(&url).await.expect("store"));
         let run = uuid::Uuid::new_v4().simple().to_string();
-        let tenant = get_default_tenant(&store, &format!("region-{run}@example.com")).await.unwrap();
+        let tenant = get_or_create_personal_tenant(&store, &format!("region-{run}@example.com")).await.unwrap();
         let t = tenant.id.as_str();
 
         assert!(matches!(resolve(&store, t).await.unwrap(), AssistantRegion::NotChosen));

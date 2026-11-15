@@ -109,3 +109,43 @@ pub async fn set_active_tenant(
         }
     }
 }
+
+#[derive(Deserialize)]
+pub struct CreateWorkspaceRequest {
+    pub email: String,
+}
+
+/// POST /user/workspace — `{ email }`. The setup step's "create my workspace":
+/// the one place a first-time account gets its workspace. Signing in and
+/// reading never create one, so curious visitors leave an account row (their
+/// email) and no tenant. Idempotent: an account that already has a workspace,
+/// or was invited into one, gets that one back. Behind X-Internal-Secret.
+pub async fn create_workspace(
+    req: actix_web::HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<CreateWorkspaceRequest>,
+) -> impl Responder {
+    if let Some(deny) = crate::middleware::internal_secret::require_internal_secret(&req) {
+        return deny;
+    }
+    use crate::endpoint_store::tenant_management as tm;
+    match tm::get_or_create_personal_tenant(&store, &body.email).await {
+        Ok(t) => {
+            app_log!(info, email = %body.email, tenant_id = %t.id, "Workspace ready from the setup step");
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "tenant": { "id": t.id, "name": t.name },
+            }))
+        }
+        Err(crate::endpoint_store::StoreError::InvalidInput(m)) => {
+            HttpResponse::BadRequest().json(serde_json::json!({ "success": false, "message": m }))
+        }
+        Err(e) => {
+            app_log!(error, email = %body.email, error = %e, "Workspace not created");
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": "The workspace could not be created",
+            }))
+        }
+    }
+}
