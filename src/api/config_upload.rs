@@ -1,6 +1,6 @@
 use crate::app_log;
 use crate::endpoint_store::mcp_tools_management::resync_tenant_tools;
-use crate::endpoint_store::tenant_management::get_default_tenant;
+use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
 use crate::endpoint_store::{generate_id_from_text, ApiGroupWithEndpoints, ApiStorage};
 use crate::infra::models::UploadRequest;
 use crate::{endpoint_store::EndpointStore, infra::formatter::YamlFormatter, infra::models::UploadResponse};
@@ -394,7 +394,7 @@ pub async fn upload_api_config(
                 // Membership was already verified by replace_user_api_groups above,
                 // which refuses a tenant the caller does not belong to.
                 Some(explicit) => Ok(explicit),
-                None => get_default_tenant(&store, &upload_data.email)
+                None => get_or_create_personal_tenant(&store, &upload_data.email)
                     .await
                     .map(|tenant| tenant.id),
             };

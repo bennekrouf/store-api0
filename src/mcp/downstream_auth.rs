@@ -92,6 +92,11 @@ pub async fn get_downstream_auth_handler(
 
     let tenant = match get_default_tenant(&store, &query.email).await {
         Ok(t) => t,
+        // A first sign-in, before the setup step: the dashboard reads this to
+        // open the setup, which creates the workspace.
+        Err(e) if crate::endpoint_store::tenant_management::is_no_workspace(&e) => {
+            return HttpResponse::Ok().json(serde_json::json!({"success": true, "no_workspace": true}));
+        }
         Err(e) => {
             app_log!(error, error = %e, "get_downstream_auth: tenant lookup failed");
             return HttpResponse::InternalServerError()

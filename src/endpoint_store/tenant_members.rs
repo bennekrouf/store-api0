@@ -611,6 +611,7 @@ mod tests {
 ///     cargo test --bin store -- --ignored membership_lifecycle
 #[cfg(test)]
 mod db_tests {
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
     use super::*;
     use crate::endpoint_store::tenant_management::{
         list_user_tenants_with_conn, set_active_tenant, update_tenant_name, NAME_TAKEN,
@@ -643,11 +644,11 @@ mod db_tests {
         );
 
         // ── an owner and their workspace ─────────────────────────────────────
-        let ws = get_default_tenant(&store, &owner).await.unwrap();
+        let ws = get_or_create_personal_tenant(&store, &owner).await.unwrap();
         let ws_id = ws.id.clone();
 
         // ── existing account: added at once ──────────────────────────────────
-        let bob_personal = get_default_tenant(&store, &bob).await.unwrap();
+        let bob_personal = get_or_create_personal_tenant(&store, &bob).await.unwrap();
         assert_eq!(invite(&store, &owner, &bob, "member").await.unwrap(), InviteOutcome::Added);
         assert!(matches!(invite(&store, &owner, &bob, "member").await, Err(MemberError::Conflict(_))),
             "inviting an existing member is a conflict");
@@ -671,7 +672,7 @@ mod db_tests {
         assert_eq!(listed["invites"].as_array().unwrap().len(), 1);
         assert_eq!(listed["can_manage"], true);
 
-        let carol_ws = get_default_tenant(&store, &carol).await.unwrap();
+        let carol_ws = get_or_create_personal_tenant(&store, &carol).await.unwrap();
         assert_eq!(carol_ws.id, ws_id, "carol lands in the tenant she was invited to");
         {
             let c = store.get_admin_conn().await.unwrap();
@@ -702,7 +703,7 @@ mod db_tests {
         change_role(&store, &owner, &carol, "owner").await.unwrap();
         leave(&store, &owner).await.unwrap();
         assert_eq!(default_of(&store, &owner).await, None, "owner belongs nowhere now");
-        let owner_new = get_default_tenant(&store, &owner).await.unwrap();
+        let owner_new = get_or_create_personal_tenant(&store, &owner).await.unwrap();
         assert_ne!(owner_new.id, ws_id, "and gets a fresh personal tenant");
 
         // ── removal deactivates keys and moves the default ───────────────────
@@ -730,7 +731,7 @@ mod db_tests {
         assert!(matches!(remove_member(&store, &carol, &carol).await, Err(MemberError::Conflict(_))));
 
         // ── platform admin ───────────────────────────────────────────────────
-        get_default_tenant(&store, &eve).await.unwrap();
+        get_or_create_personal_tenant(&store, &eve).await.unwrap();
         assert_eq!(
             admin_add_member(&store, &ws_id, &eve, "owner", "root@example.com").await.unwrap(),
             InviteOutcome::Added

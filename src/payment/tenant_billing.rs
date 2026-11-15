@@ -510,6 +510,7 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
 
     async fn origins(store: &EndpointStore, email: &str) -> Vec<String> {
         let client = store.get_admin_conn().await.unwrap();
@@ -541,13 +542,13 @@ mod db_tests {
         let store = EndpointStore::new(&url).await.expect("store");
         let id = uuid::Uuid::new_v4().simple().to_string();
         let owner = format!("owner_{id}@example.com");
-        let app = get_default_tenant(&store, &owner).await.expect("app tenant");
+        let app = get_or_create_personal_tenant(&store, &owner).await.expect("app tenant");
         let client = store.get_admin_conn().await.unwrap();
         client.execute("UPDATE tenants SET billing_mode = 'user' WHERE id = $1", &[&app.id]).await.unwrap();
 
         // Someone with an api0 account elsewhere, and no plan yet.
         let user = format!("user_{id}@example.com");
-        let own = get_default_tenant(&store, &user).await.expect("own tenant");
+        let own = get_or_create_personal_tenant(&store, &user).await.expect("own tenant");
         assert_ne!(own.id, app.id);
         assert!(origins(&store, &user).await.is_empty(), "an account alone holds no licence");
 

@@ -298,6 +298,7 @@ pub async fn lookup_channel_by_tenant_internal(
 #[cfg(test)]
 mod db_tests {
     use super::*;
+    use crate::endpoint_store::tenant_management::get_or_create_personal_tenant;
     use crate::endpoint_store::channel_identities::{create_link_code, redeem_link_code};
     use crate::endpoint_store::encrypt_legacy::encrypt_legacy_secrets;
     use crate::endpoint_store::messaging_channels::{channel_for_bridge, register_channel as register_bot, RegisterChannel};
@@ -310,7 +311,7 @@ mod db_tests {
         EndpointStore::new(&url).await.expect("the schema applies twice");
         let run = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
         let email = format!("channels-{run}@example.com");
-        let tenant = get_default_tenant(&store, &email).await.unwrap();
+        let tenant = get_or_create_personal_tenant(&store, &email).await.unwrap();
         let t = tenant.id.as_str();
         let c = store.get_admin_conn().await.unwrap();
         let phone = format!("p-{run}");

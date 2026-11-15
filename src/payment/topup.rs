@@ -235,7 +235,7 @@ mod topup_db {
         EndpointStore::new(&url).await.expect("schema re-applied");
 
         let email = format!("topup_{}@example.com", uuid::Uuid::new_v4().simple());
-        let tenant = crate::endpoint_store::tenant_management::get_default_tenant(&store, &email)
+        let tenant = crate::endpoint_store::tenant_management::get_or_create_personal_tenant(&store, &email)
             .await
             .expect("tenant");
         let before = store.get_credit_balance(&tenant.id).await.unwrap();

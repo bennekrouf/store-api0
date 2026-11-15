@@ -10,7 +10,7 @@ pub async fn add_user_api_group(
     use crate::endpoint_store::tenant_management;
 
     // Resolve tenant
-    let tenant = tenant_management::get_default_tenant(store, email).await?;
+    let tenant = tenant_management::get_or_create_personal_tenant(store, email).await?;
     let tenant_id = tenant.id.clone();
 
     let mut client = store.get_admin_conn().await?;
