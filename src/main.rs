@@ -10,6 +10,7 @@ mod api;
 mod whatsapp;
 mod email;
 mod error_mail;
+mod gateway_watch;
 mod infra;
 mod mcp;
 mod payment;
@@ -255,6 +256,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_host = config.http_host().to_string();
     let http_port = config.http_port();
     error_mail::start("store", &format!("http://127.0.0.1:{}", http_port));
+    gateway_watch::start(&format!("http://127.0.0.1:{}", http_port));
 
     // Clone for the HTTP server
     let http_formatter = Arc::clone(&formatter);
