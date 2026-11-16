@@ -57,20 +57,48 @@ pub async fn assistant_cost(client: &Client, tenant_id: &str, hours: i32) -> Res
         )
         .await?;
 
+    // Per failing endpoint: failures, messages hit, what those messages cost,
+    // and when it last happened.
     let failing = client
         .query(
             &format!(
-                "SELECT f.tool, count(*)::BIGINT
-                   FROM api_usage_logs l,
-                        jsonb_array_elements_text({FAILED_TOOLS}) AS f(tool)
-                  WHERE {SCOPE}
-                  GROUP BY f.tool
+                "WITH hit AS (
+                     SELECT l.id, l.timestamp, COALESCE(l.total_tokens, 0)::BIGINT AS tokens,
+                            f.tool, count(*)::BIGINT AS n
+                       FROM api_usage_logs l,
+                            jsonb_array_elements_text({FAILED_TOOLS}) AS f(tool)
+                      WHERE {SCOPE}
+                      GROUP BY l.id, l.timestamp, l.total_tokens, f.tool
+                 )
+                 SELECT tool, sum(n)::BIGINT, count(*)::BIGINT, sum(tokens)::BIGINT, max(timestamp)
+                   FROM hit
+                  GROUP BY tool
                   ORDER BY 2 DESC, 1
                   LIMIT {MOST_FAILED}"
             ),
             &params,
         )
         .await?;
+
+    // The same endpoints' calls through the MCP gateway (logged as `tools/<name>`):
+    // which statuses came back. Tells a wrong value (4xx) from a broken backend (5xx).
+    let paths: Vec<String> = failing.iter().map(|r| format!("tools/{}", r.get::<_, String>(0))).collect();
+    let statuses = if paths.is_empty() {
+        Vec::new()
+    } else {
+        client
+            .query(
+                "SELECT substring(l.endpoint_path FROM 7), l.response_status, count(*)::BIGINT
+                   FROM api_usage_logs l
+                  WHERE (l.tenant_id = $1 OR l.key_id IN (SELECT k.id FROM api_keys k WHERE k.tenant_id = $1))
+                    AND ($2::INT = 0 OR l.timestamp >= NOW() - make_interval(hours => $2::INT))
+                    AND l.endpoint_path = ANY($3)
+                  GROUP BY 1, 2
+                  ORDER BY 3 DESC",
+                &[&tenant_id, &hours, &paths],
+            )
+            .await?
+    };
 
     let messages: Vec<Value> = messages
         .iter()
@@ -91,7 +119,23 @@ pub async fn assistant_cost(client: &Client, tenant_id: &str, hours: i32) -> Res
 
     let failing: Vec<Value> = failing
         .iter()
-        .map(|row| json!({ "tool": row.get::<_, String>(0), "failures": row.get::<_, i64>(1) }))
+        .map(|row| {
+            let tool: String = row.get(0);
+            let last: chrono::DateTime<chrono::Utc> = row.get(4);
+            let status_codes: Vec<Value> = statuses
+                .iter()
+                .filter(|s| s.get::<_, Option<String>>(0).as_deref() == Some(tool.as_str()))
+                .map(|s| json!({ "status": s.get::<_, Option<i32>>(1), "count": s.get::<_, i64>(2) }))
+                .collect();
+            json!({
+                "tool": tool,
+                "failures": row.get::<_, i64>(1),
+                "messages": row.get::<_, i64>(2),
+                "tokens": row.get::<_, i64>(3),
+                "last_failed_at": last.to_rfc3339(),
+                "status_codes": status_codes,
+            })
+        })
         .collect();
 
     Ok(json!({
@@ -170,6 +214,11 @@ mod tests {
         assert_eq!(cost["most_expensive"][0]["tokens"], 95_000);
         assert_eq!(cost["most_expensive"][0]["channel"], "teams");
         assert_eq!(cost["most_expensive"][2]["failed_tools"], json!([]));
-        assert_eq!(cost["failing_endpoints"], json!([{ "tool": "update", "failures": 3 }]));
+        let failing = &cost["failing_endpoints"];
+        assert_eq!(failing.as_array().unwrap().len(), 1);
+        assert_eq!(failing[0]["tool"], "update");
+        assert_eq!(failing[0]["failures"], 3);
+        assert_eq!(failing[0]["messages"], 1);
+        assert_eq!(failing[0]["tokens"], 95_000);
     }
 }
