@@ -6,6 +6,14 @@
 // subscription, and calls are paid from that subscription's monthly credits
 // (payment::subscription).
 //
+// A workspace on an api0.ai plan (billing_mode 'tenant') may send one of its
+// own API keys instead (sk_live_…, not a consumer key of another workspace's
+// MCP server): its calls are then paid like its tool calls, from the plan's
+// allowance, then overage when priced, else its balance
+// (tenant_billing::charge_workspace), scaled by the same model multipliers.
+// Its subscription_id is WORKSPACE_PAYER + the tenant id, which the gateway
+// hands back on the charge unread.
+//
 //   POST /api/internal/llm/authorize  { licence, model?, app?, task? }
 //        → whose licence it is, the credits left, the regions on offer (with
 //          what a credit buys on each) and, when one matches, the upstream
@@ -39,6 +47,8 @@ use crate::app_log;
 use crate::endpoint_store::EndpointStore;
 use crate::middleware::internal_secret::require_internal_secret;
 use crate::payment::subscription::{self, SpendError};
+use crate::payment::tenant_billing::{self, BillingMode};
+use crate::payment::workspace_plans;
 use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -96,6 +106,83 @@ fn provider_tenant() -> Result<String, HttpResponse> {
     }
 }
 
+// ── Who pays ─────────────────────────────────────────────────────────────────
+
+/// The subscription_id prefix of a call a workspace pays for.
+pub const WORKSPACE_PAYER: &str = "workspace:";
+
+/// Whoever a bearer names, as the gateway is told it.
+#[derive(Debug, PartialEq)]
+struct Payer {
+    /// A plan subscription's id, or WORKSPACE_PAYER + a tenant id.
+    subscription_id: String,
+    email: String,
+    plan_name: String,
+    active: bool,
+    credits_left: i64,
+}
+
+/// The workspace a charge's subscription_id names, if it is one.
+fn workspace_of(subscription_id: &str) -> Option<&str> {
+    subscription_id.strip_prefix(WORKSPACE_PAYER).filter(|t| !t.is_empty())
+}
+
+enum Refusal {
+    Unknown,
+    Forbidden(&'static str),
+    Store(String),
+}
+
+/// A licence first; anything that cannot be one is tried as a workspace's own
+/// API key.
+async fn payer_of(store: &EndpointStore, bearer: &str) -> Result<Payer, Refusal> {
+    if subscription::normalise_licence(bearer).is_some() {
+        return match subscription::licence_status(store, bearer).await.map_err(Refusal::Store)? {
+            Some(l) => Ok(Payer {
+                subscription_id: l.subscription_id,
+                email: l.email,
+                plan_name: l.plan_name,
+                active: l.active,
+                credits_left: l.credits_left,
+            }),
+            None => Err(Refusal::Unknown),
+        };
+    }
+    let Some((email, _key_id, tenant_id, provider_tenant_id)) =
+        store.validate_api_key(bearer, None).await.map_err(|e| Refusal::Store(e.to_string()))?
+    else {
+        return Err(Refusal::Unknown);
+    };
+    // A consumer key spends on another workspace's server, not on its own plan.
+    if provider_tenant_id.is_some() {
+        return Err(Refusal::Forbidden("This key is for another workspace's MCP server: use a key of your own workspace"));
+    }
+    // A key with no tenant belongs to the owner's personal workspace, named
+    // after their email (as the gateway reads it).
+    let tenant_id = if tenant_id.is_empty() { email.clone() } else { tenant_id };
+    match tenant_billing::billing_mode(store, &tenant_id).await.map_err(Refusal::Store)? {
+        BillingMode::Tenant => {}
+        BillingMode::User => {
+            return Err(Refusal::Forbidden(
+                "This workspace bills each member's own plan: call with your licence instead",
+            ))
+        }
+    }
+    let credits_left = tenant_billing::workspace_available(store, &tenant_id).await.map_err(Refusal::Store)?;
+    let plan_name = workspace_plans::live_plan(store, &tenant_id)
+        .await
+        .map_err(Refusal::Store)?
+        .map(|(_, plan)| plan.name)
+        .unwrap_or_else(|| "Workspace credits".to_string());
+    Ok(Payer {
+        subscription_id: format!("{WORKSPACE_PAYER}{tenant_id}"),
+        email,
+        plan_name,
+        active: true,
+        credits_left,
+    })
+}
+
 // ── POST /api/internal/llm/authorize ─────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -136,11 +223,12 @@ pub async fn authorize_handler(
         Ok(t) => t,
         Err(r) => return r,
     };
-    let who = match subscription::licence_status(&store, &body.licence).await {
-        Ok(Some(l)) => l,
-        Ok(None) => return fail(StatusCode::UNAUTHORIZED, "Unknown licence"),
-        Err(e) => {
-            app_log!(error, error = %e, "Could not read a licence");
+    let who = match payer_of(&store, body.licence.trim()).await {
+        Ok(p) => p,
+        Err(Refusal::Unknown) => return fail(StatusCode::UNAUTHORIZED, "Unknown licence or API key"),
+        Err(Refusal::Forbidden(why)) => return fail(StatusCode::UNAUTHORIZED, why),
+        Err(Refusal::Store(e)) => {
+            app_log!(error, error = %e, "Could not read a licence or API key");
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not check the licence");
         }
     };
@@ -297,6 +385,14 @@ pub async fn charge_handler(
     // recorded even when nothing could be charged, so it can be reconciled.
     let (credits, balance) = if total == 0 {
         (0, None)
+    } else if let Some(workspace) = workspace_of(&b.subscription_id) {
+        match charge_workspace_call(&store, workspace, &b, total).await {
+            Ok((credits, left)) => (credits, Some(left)),
+            Err(e) => {
+                app_log!(error, error = %e, tenant_id = %workspace, tokens = total, "LLM call not charged to its workspace");
+                (0, None)
+            }
+        }
     } else {
         match subscription::spend_credits(&store, &b.subscription_id, &b.model, total).await {
             Ok(s) => (s.credits, Some(s.credits_left)),
@@ -336,6 +432,16 @@ pub async fn charge_handler(
     app_log!(info, subscription_id = %b.subscription_id, app = %b.app, model = %b.model,
         tokens = total, credits = credits, balance = ?balance, "LLM call charged");
     HttpResponse::Ok().json(serde_json::json!({ "success": true, "credits": credits, "balance": balance }))
+}
+
+/// One call charged to a workspace, priced as a licence's would be (the
+/// model's multiplier included). Returns the credits and what it has left.
+async fn charge_workspace_call(store: &EndpointStore, tenant_id: &str, b: &ChargeRequest, tokens: i64) -> Result<(i64, i64), String> {
+    let pricing = crate::payment::plans::effective_pricing(store).await?;
+    let cost = pricing.credits_for(&b.model, tokens);
+    let what = format!("AI call ({}, {})", b.app, b.region.as_deref().unwrap_or("default"));
+    let left = tenant_billing::charge_workspace(store, tenant_id, &b.email, cost, "llm_call", Some(&what)).await?;
+    Ok((cost, left))
 }
 
 // ── api0's own AI calls ─────────────────────────────────────────────────────
@@ -401,10 +507,14 @@ pub struct UsageEntry {
 /// The columns USAGE_SQL selects, in order.
 type UsageCols = (String, DateTime<Utc>, String, String, i64, i64, i64, i64, i32);
 
+// A call a workspace paid for (license_id WORKSPACE_PAYER…) is the workspace's,
+// not the key owner's: it stays out of their plan's history.
 const USAGE_SQL: &str = "SELECT id, created_at, product, COALESCE(region, model), input_tokens, output_tokens, total_tokens, credits, status_code \
-     FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL ORDER BY created_at DESC LIMIT $2 OFFSET $3";
+     FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL AND license_id NOT LIKE 'workspace:%' \
+     ORDER BY created_at DESC LIMIT $2 OFFSET $3";
 
-const USAGE_COUNT_SQL: &str = "SELECT COUNT(*) FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL";
+const USAGE_COUNT_SQL: &str =
+    "SELECT COUNT(*) FROM llm_usage WHERE email = $1 AND license_id IS NOT NULL AND license_id NOT LIKE 'workspace:%'";
 
 fn usage_entry((id, created_at, app, model, input_tokens, output_tokens, tokens, credits, status): UsageCols) -> UsageEntry {
     UsageEntry {
@@ -483,6 +593,21 @@ pub async fn usage_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workspace_payer_is_told_apart_from_a_plan_subscription() {
+        assert_eq!(workspace_of("workspace:acme"), Some("acme"));
+        assert_eq!(workspace_of("workspace:"), None);
+        assert_eq!(workspace_of("sub_1Abc"), None);
+        assert_eq!(workspace_of("free_0123"), None);
+    }
+
+    #[test]
+    fn the_usage_history_leaves_out_what_a_workspace_paid() {
+        let filter = format!("license_id NOT LIKE '{WORKSPACE_PAYER}%'");
+        assert!(USAGE_SQL.contains(&filter));
+        assert!(USAGE_COUNT_SQL.contains(&filter));
+    }
 
     #[test]
     fn the_calling_app_is_logged_as_a_plain_id() {

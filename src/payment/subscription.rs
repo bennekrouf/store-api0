@@ -9,7 +9,8 @@
 //
 //   POST /api/plans/checkout                { email, plan_id } → { url } of a Stripe Checkout page
 //   POST /api/plans/free                    { email } → { emailed: true }: the free allowance's
-//                                           licence, sent to that email only, which proves it
+//                                           licence, sent to that email only, which proves it;
+//                                           an email on a paid plan gets that plan's licence again
 //   GET  /api/plans/session/{id}            the licence a finished Checkout session bought
 //   GET  /api/plans/subscription/{email}    the current subscription and its credits, or null;
 //                                           gives the free allowance first if the email has no plan
@@ -813,8 +814,9 @@ pub struct FreeRequest {
     pub email: String,
 }
 
-/// POST /api/plans/free — the free allowance, for an app to offer. Answers the
-/// same whether the licence is new or sent again, and never contains it. A
+/// POST /api/plans/free — the free allowance, for an app to offer, or the
+/// licence of the email's paid plan when it has one. Answers the same whether
+/// the licence is new or sent again, and never contains it. A
 /// partner whose workspace bills each person's plan starts it for a new user
 /// (service key with credits.write).
 pub async fn free_handler(
@@ -830,8 +832,18 @@ pub async fn free_handler(
     if !plausible_email(&email) {
         return fail(StatusCode::BAD_REQUEST, "Enter the email the licence should go to");
     }
+    // An email that already pays gets its own licence again: the email sent
+    // when the plan went live is the only other copy, and it can be lost.
     match has_live_paid_plan(&store, &email).await {
-        Ok(true) => return fail(StatusCode::CONFLICT, "This email already has a plan: use its licence"),
+        Ok(true) => {
+            return match resend_paid_licence(&store, &email).await {
+                Ok(()) => licence_on_its_way(),
+                Err(e) => {
+                    app_log!(error, error = %e, "Could not send a paid licence again");
+                    fail(StatusCode::INTERNAL_SERVER_ERROR, "The licence could not be sent")
+                }
+            };
+        }
         Ok(false) => {}
         Err(e) => {
             app_log!(error, error = %e, "Could not read subscriptions for a free licence");
@@ -849,16 +861,52 @@ pub async fn free_handler(
         return fail(StatusCode::NOT_FOUND, "There are no free credits right now");
     };
     match give_free_plan(&store, &plan, &email).await {
-        Ok(()) => HttpResponse::Ok().json(serde_json::json!({
-            "success": true,
-            "emailed": true,
-            "message": "Your licence number is on its way to that email.",
-        })),
+        Ok(()) => licence_on_its_way(),
         Err(e) => {
             app_log!(error, error = %e, "Could not give a free licence");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "The free licence could not be sent")
         }
     }
+}
+
+/// The one answer of POST /api/plans/free, whether a licence was made, sent
+/// again, or held back by the hourly limit: it never says which, nor holds it.
+fn licence_on_its_way() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "emailed": true,
+        "message": "Your licence number is on its way to that email.",
+    }))
+}
+
+/// The licence of the email's live paid plan, emailed again to that email
+/// only, at most once an hour (FREE_RESEND_AFTER) so the form cannot flood an
+/// inbox. A plan whose first licence email has not gone out yet is left to
+/// sync_subscription: marking it sent here would stop a free licence moving
+/// onto it.
+async fn resend_paid_licence(store: &Arc<EndpointStore>, email: &str) -> Result<(), String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let sql = format!(
+        "UPDATE subscriptions SET licence_emailed_at = NOW() \
+         WHERE id = (SELECT id FROM subscriptions \
+                      WHERE email = $1 AND NOT is_free AND licence IS NOT NULL \
+                        AND status IN {live} AND period_end > NOW() \
+                      ORDER BY (stripe_customer_id <> '') DESC, period_end DESC LIMIT 1) \
+           AND licence_emailed_at IS NOT NULL \
+           AND licence_emailed_at < NOW() - INTERVAL '{FREE_RESEND_AFTER}' \
+         RETURNING licence, plan_id, period_end, locale",
+        live = LIVE_STATUSES
+    );
+    let Some(row) = client.query_opt(sql.as_str(), &[&email]).await.map_err(|e| e.to_string())? else {
+        app_log!(info, email = %email, "Paid licence asked for again within the hour, or not sent yet; not resent");
+        return Ok(());
+    };
+    let plan_id: String = row.get(1);
+    let plan = plans::get_plan(store, &plan_id).await?.ok_or_else(|| format!("Plan {plan_id} is gone"))?;
+    let lang = Lang::from_tag(row.get::<_, Option<String>>(3).as_deref());
+    app_log!(info, email = %email, plan = %plan.id, "Paid licence sent again");
+    send_async(Arc::clone(store), email.to_string(), licence_email(&plan, row.get(0), Some(row.get(2)), lang));
+    Ok(())
 }
 
 /// GET /api/plans/session/{id} — for the page Checkout returns to. The id is
