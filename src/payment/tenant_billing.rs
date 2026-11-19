@@ -102,10 +102,7 @@ async fn give_member_wallet(store: &EndpointStore, email: &str, origin: Origin) 
 pub async fn available(store: &EndpointStore, tenant_id: &str, email: &str) -> Result<(BillingMode, i64), String> {
     let mode = billing_mode(store, tenant_id).await?;
     let credits = match mode {
-        BillingMode::Tenant => match workspace_plans::available(store, tenant_id).await? {
-            Some(with_plan) => with_plan,
-            None => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?,
-        },
+        BillingMode::Tenant => workspace_available(store, tenant_id).await?,
         BillingMode::User => {
             give_member_wallet(store, email, Origin::Api0).await;
             spend::plan_credits_left_for(store, email).await?
@@ -127,24 +124,7 @@ pub async fn charge(
     let mode = billing_mode(store, tenant_id).await?;
     match mode {
         BillingMode::Tenant => {
-            // A workspace plan pays first: its allowance, then overage when priced.
-            let rest = match workspace_plans::take(store, tenant_id, amount).await? {
-                Some(taken) => {
-                    app_log!(info, tenant_id = %tenant_id, email = %email, action = %action_type,
-                        from_plan = taken.from_plan, overage = taken.overage, rest = taken.rest, "Tenant plan charged");
-                    taken.rest
-                }
-                None => amount,
-            };
-            let after = if rest > 0 {
-                store
-                    .update_credit_balance(tenant_id, email, -rest, action_type, description)
-                    .await
-                    .map_err(|e| e.to_string())?
-            } else {
-                store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?
-            };
-            let left = workspace_plans::available(store, tenant_id).await?.unwrap_or(after);
+            let left = charge_workspace(store, tenant_id, email, amount, action_type, description).await?;
             Ok((mode, amount, left))
         }
         BillingMode::User => {
@@ -173,6 +153,45 @@ pub async fn charge(
             let left = spend::plan_credits_left_for(store, &email).await?;
             Ok((mode, charged, left))
         }
+    }
+}
+
+/// Charges `amount` to the workspace itself, whatever its mode: its plan's
+/// allowance first, then overage when the plan prices it, else its balance.
+/// Returns what it has left, as `available` counts it.
+pub async fn charge_workspace(
+    store: &EndpointStore,
+    tenant_id: &str,
+    email: &str,
+    amount: i64,
+    action_type: &str,
+    description: Option<&str>,
+) -> Result<i64, String> {
+    let rest = match workspace_plans::take(store, tenant_id, amount).await? {
+        Some(taken) => {
+            app_log!(info, tenant_id = %tenant_id, email = %email, action = %action_type,
+                from_plan = taken.from_plan, overage = taken.overage, rest = taken.rest, "Tenant plan charged");
+            taken.rest
+        }
+        None => amount,
+    };
+    let after = if rest > 0 {
+        store
+            .update_credit_balance(tenant_id, email, -rest, action_type, description)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string())?
+    };
+    Ok(workspace_plans::available(store, tenant_id).await?.unwrap_or(after))
+}
+
+/// What the workspace itself can spend now: its plan's allowance (and overage
+/// headroom), else its balance.
+pub async fn workspace_available(store: &EndpointStore, tenant_id: &str) -> Result<i64, String> {
+    match workspace_plans::available(store, tenant_id).await? {
+        Some(with_plan) => Ok(with_plan),
+        None => store.get_credit_balance(tenant_id).await.map_err(|e| e.to_string()),
     }
 }
 
