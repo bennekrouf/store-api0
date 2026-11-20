@@ -49,6 +49,9 @@ fn form_with(llm: &UploaderLlm, part: Part) -> Form {
     if let Some(key) = &llm.api_key {
         form = form.text("api_key", key.clone());
     }
+    if let Some(url) = &llm.chat_url {
+        form = form.text("chat_url", url.clone());
+    }
     form.part("file", part)
 }
 

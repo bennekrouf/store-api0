@@ -1,7 +1,8 @@
 // src/admin/assistant_config.rs
 //
-// The super admin's platform-wide AI provider, for a desktop app's call that
-// names no region (llm_wallet.rs). A workspace's messaging assistant (Telegram,
+// The super admin's older platform-wide AI provider, for a desktop app's call
+// that names no region (llm_wallet.rs), until a default region replaces it
+// (llm_regions.rs, Admin → AI models); the dashboard no longer sets it. A workspace's messaging assistant (Telegram,
 // WhatsApp, Teams) never runs on it: it runs on the region the workspace chose
 // (tenant_region.rs), and does not answer until one is chosen.
 //
@@ -353,11 +354,13 @@ pub async fn delete_assistant_key(
     let id = path.into_inner();
     // A key in use cannot be removed: that would stop those calls, or every
     // AI-assisted import.
-    if let Ok(Some((active, _))) = read_choice(&store).await {
+    // The older choice for calls with no region counts only while no default region replaces it.
+    let replaced = matches!(crate::admin::llm_regions::read_default(&store).await, Ok(Some(_)));
+    if let (false, Ok(Some((active, _)))) = (replaced, read_choice(&store).await) {
         if active == id {
             return error(
                 actix_web::http::StatusCode::BAD_REQUEST,
-                "Calls with no region use this provider — choose another one there before removing its key",
+                "Calls with no region use this provider — choose a default region in Admin → AI models before removing its key",
             );
         }
     }
@@ -370,7 +373,7 @@ pub async fn delete_assistant_key(
     if crate::admin::model_config::read_ai_config(&store).await.0 == id {
         return error(
             actix_web::http::StatusCode::BAD_REQUEST,
-            "The YAML import uses this provider — choose another one there before removing its key",
+            "The YAML import uses this provider — choose another model for it in Admin → AI models before removing its key",
         );
     }
     let client = match store.get_admin_conn().await {
