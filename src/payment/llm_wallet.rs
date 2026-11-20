@@ -24,7 +24,8 @@
 //
 // An app names a region ("europe", admin/llm_regions.rs) and is only ever told
 // the region back, whichever model its task runs on (llm_regions::task_of).
-// "default" (or the tenant's name) is the platform's choice;
+// "default" (or the tenant's name) runs on the default region the super admin
+// chose (llm_regions::read_default), else on the older platform choice;
 // a model named directly still works for older apps, but is never listed.
 //   POST /api/internal/llm/charge     one completion's tokens
 //        → { credits, balance }: spends the subscription's credits and records
@@ -38,7 +39,7 @@
 // record_platform_call, with no licence and no credits.
 //
 // All need X-Internal-Secret. The upstream keys are the platform ones the
-// super admin sets in Admin → Platform (assistant_config).
+// super admin sets in Admin → AI models (assistant_config).
 
 use crate::admin::assistant_config::{self, PROVIDERS};
 use crate::admin::llm_models::{self, SPEECH};
@@ -56,6 +57,12 @@ use std::sync::Arc;
 
 /// The (provider, model) a request names, among those on offer. An empty name,
 /// "default", or the provider tenant's own name means the platform's choice.
+/// Whether a call names no region of its own: nothing, "default", or the tenant.
+fn names_default(requested: &str, tenant_name: &str) -> bool {
+    let r = requested.trim();
+    r.is_empty() || r.eq_ignore_ascii_case("default") || r.eq_ignore_ascii_case(tenant_name.trim())
+}
+
 pub fn pick_model<'a>(
     requested: &str,
     tenant_name: &str,
@@ -63,7 +70,7 @@ pub fn pick_model<'a>(
     offered: &[(&'a str, &'a str)],
 ) -> Option<(&'a str, &'a str)> {
     let r = requested.trim();
-    if r.is_empty() || r.eq_ignore_ascii_case("default") || r.eq_ignore_ascii_case(tenant_name.trim()) {
+    if names_default(r, tenant_name) {
         return default
             .filter(|(p, _)| offered.iter().any(|(op, _)| op == p))
             .or_else(|| offered.first().copied());
@@ -85,9 +92,7 @@ fn public_name(requested: &str, region: Option<&Region>, tenant_name: &str) -> S
     let r = requested.trim();
     match region {
         Some(region) => region.id.to_string(),
-        None if r.is_empty() || r.eq_ignore_ascii_case("default") || r.eq_ignore_ascii_case(tenant_name.trim()) => {
-            "default".to_string()
-        }
+        None if names_default(r, tenant_name) => "default".to_string(),
         None => r.to_string(),
     }
 }
@@ -270,7 +275,17 @@ pub async fn authorize_handler(
     let app = app_label(body.app.as_deref());
     let task = llm_regions::task_of(body.task.as_deref(), &app);
     let requested = body.model.as_deref().unwrap_or_default();
-    let region = pick_region(requested, &live);
+    let named = pick_region(requested, &live);
+    // A call naming no region runs on the default region, when one is chosen
+    // and live; else on the older platform choice.
+    let region = match named {
+        Some(_) => named,
+        None if names_default(requested, &tenant_name) => match llm_regions::read_default(&store).await {
+            Ok(Some(d)) => pick_region(d.id, &live),
+            _ => None,
+        },
+        None => None,
+    };
     let choice = match region {
         Some(_) => None,
         None => assistant_config::read_choice(&store).await.ok().flatten(),
@@ -295,7 +310,8 @@ pub async fn authorize_handler(
                 "model": model, "api_key": key,
                 "region": region.map(|(r, _)| r.id),
                 "task": task,
-                "public_model": public_name(requested, region.map(|(r, _)| r), &tenant_name),
+                // The app is told what it named: "default" stays "default".
+                "public_model": public_name(requested, named.map(|(r, _)| r), &tenant_name),
                 "sampling": llm_models::sampling(model),
             }),
             Ok(None) => serde_json::Value::Null,

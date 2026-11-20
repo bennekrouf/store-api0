@@ -18,7 +18,10 @@ use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::Deserialize;
 use std::sync::Arc;
 
-// DeepSeek is the default; Mistral the alternative.
+// The legacy picker (GET/PUT /api/admin/config/models) offers DeepSeek and
+// Mistral only. The dashboard now picks the import's model in Admin → AI models
+// (llm_regions.rs), from the whole model list, on any provider with a key: the
+// store sends the uploader the provider's chat URL with every request.
 const VALID_PROVIDERS: &[&str] = &["deepseek", "mistral"];
 
 const VALID_DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-flash", "deepseek-chat", "deepseek-reasoner"];
@@ -70,9 +73,9 @@ pub(crate) async fn read_ai_config(store: &EndpointStore) -> (String, String) {
             _ => {}
         }
     }
-    // A provider saved before Cohere and Claude were dropped falls back to the
-    // default rather than handing the uploader a model nobody serves.
-    if !VALID_PROVIDERS.contains(&provider.as_str()) {
+    // A provider no longer known (Cohere, saved before it was dropped) falls
+    // back to the default rather than handing the uploader a model nobody serves.
+    if crate::admin::assistant_config::provider(&provider).is_none() {
         return default_ai_config();
     }
     (provider, model)
@@ -93,6 +96,9 @@ pub struct UploaderLlm {
     pub provider: String,
     pub model: String,
     pub api_key: Option<String>,
+    /// Where the provider's chat completions are; an uploader from before this
+    /// field knew DeepSeek and Mistral only, by id.
+    pub chat_url: Option<String>,
 }
 
 pub async fn uploader_llm(store: &EndpointStore) -> UploaderLlm {
@@ -104,7 +110,8 @@ pub async fn uploader_llm(store: &EndpointStore) -> UploaderLlm {
             None
         }
     };
-    UploaderLlm { provider, model, api_key }
+    let chat_url = crate::admin::assistant_config::provider(&provider).map(|p| p.chat_url());
+    UploaderLlm { provider, model, api_key, chat_url }
 }
 
 pub async fn get_model_config(
