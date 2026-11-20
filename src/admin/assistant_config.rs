@@ -1,21 +1,16 @@
 // src/admin/assistant_config.rs
 //
-// The super admin's older platform-wide AI provider, for a desktop app's call
-// that names no region (llm_wallet.rs), until a default region replaces it
-// (llm_regions.rs, Admin → AI models); the dashboard no longer sets it. A workspace's messaging assistant (Telegram,
-// WhatsApp, Teams) never runs on it: it runs on the region the workspace chose
-// (tenant_region.rs), and does not answer until one is chosen.
+// api0's AI provider API keys, shared by every AI feature: the regions the
+// desktop apps and the messaging assistant answer from (llm_regions.rs,
+// tenant_region.rs) and the YAML import (model_config.rs). A key is entered
+// once, in the dashboard (Admin → AI models), and never in a server's
+// environment. Which provider and model answer is chosen per region there.
 //
-// The provider API keys kept here are api0's, shared by every AI feature: the
-// YAML import (model_config.rs) reads them too, so a key is entered once, in
-// the dashboard, and never in a server's environment.
-//
-//   GET    /api/admin/config/assistant               provider, model, which keys are set
-//   PUT    /api/admin/config/assistant               { provider?, model? }
 //   PUT    /api/admin/config/assistant/keys/{prov}   { api_key }
 //   DELETE /api/admin/config/assistant/keys/{prov}
-//   GET    /api/internal/assistant-config            the active provider with its key — the bridge;
-//                                                    ?tenant_id= for a workspace's region (tenant_region.rs)
+//   GET    /api/internal/assistant-config            the provider of the region the messaging
+//                                                    assistant answers from, with its key — the bridge;
+//                                                    ?tenant_id= for a workspace (tenant_region.rs)
 //
 // All require X-Internal-Secret; the gateway restricts the admin routes to the
 // super admin. A key is sealed with secret_box on the way in and is never
@@ -138,27 +133,6 @@ pub(crate) fn provider(id: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
-/// The current choice, or `None` when the super admin has not set one (the
-/// bridge then keeps using the key in its own configuration).
-pub(crate) async fn read_choice(store: &EndpointStore) -> Result<Option<(String, String)>, String> {
-    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
-    let rows = client
-        .query("SELECT key, value FROM system_config WHERE key IN ('assistant.provider', 'assistant.model')", &[])
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut prov = None;
-    let mut model = None;
-    for row in rows {
-        let (k, v): (&str, &str) = (row.get(0), row.get(1));
-        match k {
-            "assistant.provider" => prov = Some(v.to_string()),
-            "assistant.model" => model = Some(v.to_string()),
-            _ => {}
-        }
-    }
-    Ok(prov.zip(model))
-}
-
 pub(crate) async fn providers_with_key(store: &EndpointStore) -> Result<Vec<String>, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     Ok(client
@@ -187,106 +161,6 @@ pub(crate) async fn api_key(store: &EndpointStore, provider: &str) -> Result<Opt
 
 fn error(status: actix_web::http::StatusCode, msg: impl Into<String>) -> HttpResponse {
     HttpResponse::build(status).json(serde_json::json!({ "success": false, "error": msg.into() }))
-}
-
-// ── GET /api/admin/config/assistant ──────────────────────────────────────────
-
-pub async fn get_assistant_config(req: HttpRequest, store: web::Data<Arc<EndpointStore>>) -> impl Responder {
-    if let Some(deny) = require_internal_secret(&req) {
-        return deny;
-    }
-    let (choice, keys) = match (read_choice(&store).await, providers_with_key(&store).await) {
-        (Ok(c), Ok(k)) => (c, k),
-        (Err(e), _) | (_, Err(e)) => {
-            app_log!(error, error = %e, "Could not read the assistant configuration");
-            return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the configuration");
-        }
-    };
-    let providers: Vec<serde_json::Value> = PROVIDERS
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "id": p.id,
-                "label": p.label,
-                "models": p.models,
-                "key_set": keys.iter().any(|k| k == p.id),
-            })
-        })
-        .collect();
-    HttpResponse::Ok().json(serde_json::json!({
-        "success": true,
-        // null: not configured.
-        "provider": choice.as_ref().map(|c| &c.0),
-        "model": choice.as_ref().map(|c| &c.1),
-        "providers": providers,
-    }))
-}
-
-// ── PUT /api/admin/config/assistant ──────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct ChoiceRequest {
-    pub provider: String,
-    pub model: String,
-}
-
-pub async fn update_assistant_config(
-    req: HttpRequest,
-    store: web::Data<Arc<EndpointStore>>,
-    body: web::Json<ChoiceRequest>,
-) -> impl Responder {
-    if let Some(deny) = require_internal_secret(&req) {
-        return deny;
-    }
-    let Some(p) = provider(&body.provider) else {
-        return error(actix_web::http::StatusCode::BAD_REQUEST, format!("Unknown provider '{}'", body.provider));
-    };
-    if p.models.is_empty() {
-        return error(
-            actix_web::http::StatusCode::BAD_REQUEST,
-            format!("{} only backs the apps' regions, not the messaging assistant", p.label),
-        );
-    }
-    if !p.models.contains(&body.model.as_str()) {
-        return error(
-            actix_web::http::StatusCode::BAD_REQUEST,
-            format!("'{}' is not a {} model: {}", body.model, p.label, p.models.join(", ")),
-        );
-    }
-    // Switching to a provider with no key would take every bot offline.
-    match providers_with_key(&store).await {
-        Ok(keys) if !keys.iter().any(|k| k == p.id) => {
-            return error(
-                actix_web::http::StatusCode::BAD_REQUEST,
-                format!("Add a {} API key before choosing it", p.label),
-            )
-        }
-        Err(e) => {
-            app_log!(error, error = %e, "Could not read assistant keys");
-            return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the configuration");
-        }
-        _ => {}
-    }
-
-    let client = match store.get_admin_conn().await {
-        Ok(c) => c,
-        Err(_) => return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Database unavailable"),
-    };
-    for (key, value) in [("assistant.provider", p.id), ("assistant.model", body.model.as_str())] {
-        if let Err(e) = client
-            .execute(
-                "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
-                &[&key, &value],
-            )
-            .await
-        {
-            app_log!(error, error = %e, "Could not save the assistant configuration");
-            return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not save the configuration");
-        }
-    }
-    app_log!(info, provider = %p.id, model = %body.model, "Messaging assistant provider changed");
-    HttpResponse::Ok().json(serde_json::json!({ "success": true, "provider": p.id, "model": body.model }))
 }
 
 // ── PUT / DELETE /api/admin/config/assistant/keys/{provider} ─────────────────
@@ -352,18 +226,8 @@ pub async fn delete_assistant_key(
         return deny;
     }
     let id = path.into_inner();
-    // A key in use cannot be removed: that would stop those calls, or every
+    // A key in use cannot be removed: that would stop a region, or every
     // AI-assisted import.
-    // The older choice for calls with no region counts only while no default region replaces it.
-    let replaced = matches!(crate::admin::llm_regions::read_default(&store).await, Ok(Some(_)));
-    if let (false, Ok(Some((active, _)))) = (replaced, read_choice(&store).await) {
-        if active == id {
-            return error(
-                actix_web::http::StatusCode::BAD_REQUEST,
-                "Calls with no region use this provider — choose a default region in Admin → AI models before removing its key",
-            );
-        }
-    }
     if let Some(region) = crate::admin::llm_regions::uses_provider(&store, &id).await {
         return error(
             actix_web::http::StatusCode::BAD_REQUEST,
@@ -391,10 +255,10 @@ pub async fn delete_assistant_key(
 
 // ── GET /api/internal/assistant-config ── the bridge ─────────────────────────
 //
-// With `?tenant_id=`, the provider of the region that workspace chose
-// (tenant_region.rs). No region comes back as not configured, and a chosen region
-// that cannot answer as `region_unavailable`, never as another provider. A choice
-// that cannot be read is an error for the same reason.
+// The provider of the region the workspace (`?tenant_id=`) chose, else of the
+// default region (tenant_region.rs). A region that cannot answer comes back as
+// `region_unavailable`, never as another provider. A region that cannot be read
+// is an error for the same reason.
 
 #[derive(Debug, Deserialize)]
 pub struct InternalConfigQuery {
@@ -418,30 +282,14 @@ pub async fn internal_assistant_config(
     if let Some(deny) = require_internal_secret(&req) {
         return deny;
     }
-    let by_region = match query.tenant_id.as_deref().filter(|t| !t.is_empty()) {
-        Some(t) => match crate::admin::tenant_region::resolve(&store, t).await {
-            Ok(r) => r,
-            Err(e) => {
-                app_log!(error, error = %e, tenant_id = %t, "Could not read the tenant's region");
-                return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the region");
-            }
-        },
-        None => AssistantRegion::NotChosen,
-    };
-    let (region, choice) = match by_region {
-        AssistantRegion::Unavailable(r) => return not_configured(Some(r.id)),
-        AssistantRegion::Live { region, provider, model } => (Some(region.id), Some((provider, model))),
-        // Only the platform's own read gets here without a tenant.
-        AssistantRegion::NotChosen if query.tenant_id.as_deref().is_some_and(|t| !t.is_empty()) => {
-            return not_configured(None)
+    let tenant = query.tenant_id.as_deref().filter(|t| !t.is_empty());
+    let (region, choice) = match crate::admin::tenant_region::resolve(&store, tenant).await {
+        Ok(AssistantRegion::Live { region, provider, model }) => (Some(region.id), Some((provider, model))),
+        Ok(AssistantRegion::Unavailable(r)) => return not_configured(Some(r.id)),
+        Err(e) => {
+            app_log!(error, error = %e, tenant_id = ?tenant, "Could not read the assistant's region");
+            return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the region");
         }
-        AssistantRegion::NotChosen => match read_choice(&store).await {
-            Ok(c) => (None, c),
-            Err(e) => {
-                app_log!(error, error = %e, "Could not read the assistant configuration");
-                return error(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "Could not read the configuration");
-            }
-        },
     };
     let Some((id, model)) = choice else {
         return not_configured(region);

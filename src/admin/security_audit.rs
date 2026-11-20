@@ -118,7 +118,8 @@ struct Connection {
 }
 
 enum RegionState {
-    NotChosen,
+    /// None chosen: the assistant answers from the platform's default region.
+    Default(&'static Region),
     Live(&'static Region),
     Unavailable(&'static Region),
 }
@@ -489,10 +490,10 @@ fn ai_region(f: &Facts) -> Check {
             format!("{} is not on offer right now, so the assistant is not answering.", r.label),
             "Choose another region, or wait for this one to come back.",
         ),
-        RegionState::NotChosen => c.act(
-            Severity::High,
-            "No AI region is chosen, so the assistant is not answering.",
-            "Choose an AI region in the Channels tab.",
+        RegionState::Default(r) => c.act(
+            Severity::Medium,
+            format!("No AI region is chosen, so the assistant answers from the platform's default region: {}.", r.label),
+            "Choose an AI region in the Channels tab to decide where your messages are processed.",
         ),
     }
 }
@@ -666,8 +667,9 @@ async fn collect(store: &EndpointStore, tenant: &str) -> Result<Facts, String> {
 
     let tools = tools_of(&client, Some(tenant)).await.map_err(e)?;
 
-    let region = match resolve(store, tenant).await? {
-        AssistantRegion::NotChosen => RegionState::NotChosen,
+    let chosen = crate::admin::tenant_region::tenant_region(store, tenant).await?;
+    let region = match resolve(store, Some(tenant)).await? {
+        AssistantRegion::Live { region, .. } if chosen.is_none() => RegionState::Default(region),
         AssistantRegion::Live { region, .. } => RegionState::Live(region),
         AssistantRegion::Unavailable(region) => RegionState::Unavailable(region),
     };
@@ -885,7 +887,7 @@ mod tests {
         let mut f = clean();
         f.open_sign_in = true;
         f.editors = 1;
-        f.region = RegionState::NotChosen;
+        f.region = RegionState::Default(&crate::admin::llm_regions::REGIONS[0]);
         f.unencrypted_secrets = 2;
         for c in evaluate(&f).into_iter().filter(|c| c.status == Status::Action) {
             assert!(c.action.is_some() && c.severity.is_some(), "{}", c.id);
@@ -990,8 +992,8 @@ mod tests {
     #[test]
     fn the_ai_region_only_matters_with_a_channel() {
         let mut f = clean();
-        f.region = RegionState::NotChosen;
-        assert_eq!(check(&f, "ai_region").severity, Some(Severity::High));
+        f.region = RegionState::Default(&crate::admin::llm_regions::REGIONS[0]);
+        assert_eq!(check(&f, "ai_region").severity, Some(Severity::Medium));
         f.region = RegionState::Unavailable(&crate::admin::llm_regions::REGIONS[0]);
         assert_eq!(check(&f, "ai_region").severity, Some(Severity::High));
         f.channels = 0;
