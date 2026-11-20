@@ -3,12 +3,14 @@
 // The region a workspace's messaging assistant (WhatsApp, Telegram, Teams)
 // answers from: the same three a desktop app's user chooses between
 // (llm_regions.rs). The region runs its `chat` task's model, and the workspace
-// only ever sees the region. A workspace that has picked none gets no answers
-// until it does: nothing chooses where its data goes on its behalf.
+// only ever sees the region. A workspace that has picked none answers from the
+// platform's default region (llm_regions::read_default) until it picks one.
 //
-//   GET /api/user/assistant-region?email=…  → { region, live, regions: [{ id, label, flag, available }], can_edit }
-//                                             for the caller's workspace; `live` is
-//                                             false when its region is off offer;
+//   GET /api/user/assistant-region?email=…  → { region, default_region, live, regions: [{ id, label, flag, available }], can_edit }
+//                                             for the caller's workspace; `region` is
+//                                             null when none is chosen, and
+//                                             `default_region` answers then; `live` is
+//                                             false when the region it answers from is off offer;
 //                                             `regions` is all of them, `available`
 //                                             false for one not open yet
 //   PUT /api/user/assistant-region          { email, region } — one of the regions;
@@ -45,16 +47,21 @@ pub(crate) async fn tenant_region(store: &EndpointStore, tenant_id: &str) -> Res
 
 /// What a tenant's choice of region means for its assistant now.
 pub(crate) enum AssistantRegion {
-    /// None chosen: the assistant does not answer.
-    NotChosen,
     Live { region: &'static Region, provider: String, model: String },
     /// Chosen but off offer: nothing may answer in its place.
     Unavailable(&'static Region),
 }
 
-pub(crate) async fn resolve(store: &EndpointStore, tenant_id: &str) -> Result<AssistantRegion, String> {
-    let Some(region) = tenant_region(store, tenant_id).await? else {
-        return Ok(AssistantRegion::NotChosen);
+/// The region a tenant's assistant answers from: its own, else the default
+/// one. With no tenant (the platform's own read), the default one.
+pub(crate) async fn resolve(store: &EndpointStore, tenant_id: Option<&str>) -> Result<AssistantRegion, String> {
+    let chosen = match tenant_id {
+        Some(t) => tenant_region(store, t).await?,
+        None => None,
+    };
+    let region = match chosen {
+        Some(r) => r,
+        None => llm_regions::read_default(store).await?,
     };
     let (regions, keyed) = (
         llm_regions::read_offered(store).await?,
@@ -102,19 +109,22 @@ pub async fn get_my_region_handler(
         Ok(t) => t,
         Err(e) => return failed("find the tenant", e.to_string()),
     };
-    let (chosen, offered, editable) = match (
+    let (chosen, default_region, offered, editable) = match (
         tenant_region(&store, &tenant.id).await,
+        llm_regions::read_default(&store).await,
         live_regions(&store).await,
         can_edit(&store, &tenant.id, &query.email).await,
     ) {
-        (Ok(c), Ok(o), Ok(e)) => (c, o, e),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return failed("read the region", e),
+        (Ok(c), Ok(d), Ok(o), Ok(e)) => (c, d, o, e),
+        (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => return failed("read the region", e),
     };
+    let answers_from = chosen.unwrap_or(default_region);
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "tenant_id": tenant.id,
         "region": chosen.map(|r| r.id),
-        "live": chosen.is_none_or(|c| offered.iter().any(|r| r.id == c.id)),
+        "default_region": default_region.id,
+        "live": offered.iter().any(|r| r.id == answers_from.id),
         "regions": llm_regions::REGIONS
             .iter()
             .map(|r| serde_json::json!({
@@ -190,19 +200,23 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL"]
-    async fn a_region_off_offer_is_unavailable_and_no_choice_is_not() {
+    async fn a_region_off_offer_is_unavailable_and_no_choice_takes_the_default() {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
         let store = Arc::new(EndpointStore::new(&url).await.expect("store"));
         let run = uuid::Uuid::new_v4().simple().to_string();
         let tenant = get_or_create_personal_tenant(&store, &format!("region-{run}@example.com")).await.unwrap();
         let t = tenant.id.as_str();
 
-        assert!(matches!(resolve(&store, t).await.unwrap(), AssistantRegion::NotChosen));
+        // No provider has a key on a fresh database: the default region is off offer too.
+        match resolve(&store, Some(t)).await.unwrap() {
+            AssistantRegion::Unavailable(r) => assert_eq!(r.id, "china", "the default region answers"),
+            _ => panic!("a region off offer must not resolve to a provider"),
+        }
 
         // No provider has a key on a fresh database, so no region is on offer.
         let c = store.get_admin_conn().await.unwrap();
         c.execute("UPDATE tenants SET llm_region = 'europe' WHERE id = $1", &[&t]).await.unwrap();
-        match resolve(&store, t).await.unwrap() {
+        match resolve(&store, Some(t)).await.unwrap() {
             AssistantRegion::Unavailable(r) => assert_eq!(r.id, "europe"),
             _ => panic!("a region off offer must not resolve to a provider"),
         }

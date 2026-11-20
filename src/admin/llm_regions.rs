@@ -33,8 +33,10 @@
 // holds the open ids, DEFAULT_OPEN until it is saved. A closed region keeps its
 // models, so it can be tuned before it opens; everyone else sees its flag
 // greyed, "Coming soon", and a call naming it is refused.
-// Two platform-wide choices are made in the same table: the region that answers
-// a call naming none (`llm.regions.default`, llm_wallet), and the model of the
+// Two platform-wide choices are made in the same table: the default region
+// (`llm.regions.default`, DEFAULT_REGION until saved), which answers a desktop
+// app call naming none (llm_wallet) and the messaging assistant of a workspace
+// that chose none (tenant_region), and the model of the
 // YAML import (model_config, `ai_uploader.*`), picked from the same model list.
 // The keys are the platform ones set in Admin → AI models (assistant_config).
 // Both need X-Internal-Secret; the gateway restricts them to the super admin.
@@ -51,9 +53,10 @@ use std::sync::Arc;
 
 const CONFIG_KEY: &str = "llm.regions";
 const OPEN_KEY: &str = "llm.regions.open";
-/// The region that answers a call naming none; unset, the older platform
-/// choice (assistant_config::read_choice) still does.
+/// The default region, always set: DEFAULT_REGION until the super admin
+/// saves another. It must have a model and be open (save_regions).
 const DEFAULT_KEY: &str = "llm.regions.default";
+const DEFAULT_REGION: &str = "china";
 
 /// The regions open before the super admin saves a choice.
 const DEFAULT_OPEN: &[&str] = &["china"];
@@ -217,14 +220,19 @@ pub(crate) async fn read_open(store: &EndpointStore) -> Result<Vec<String>, Stri
     Ok(parse_open(row.as_ref().map(|r| r.get::<_, &str>(0))))
 }
 
-/// The region that answers a call naming none, if the super admin chose one.
-pub(crate) async fn read_default(store: &EndpointStore) -> Result<Option<&'static Region>, String> {
+/// The default region: as saved, else DEFAULT_REGION. Never none.
+pub(crate) async fn read_default(store: &EndpointStore) -> Result<&'static Region, String> {
     let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
     let row = client
         .query_opt("SELECT value FROM system_config WHERE key = $1", &[&DEFAULT_KEY])
         .await
         .map_err(|e| e.to_string())?;
-    Ok(row.and_then(|r| region(r.get::<_, &str>(0))))
+    Ok(default_of(row.as_ref().map(|r| r.get::<_, &str>(0))))
+}
+
+/// A saved default, or DEFAULT_REGION for none or one that no longer exists.
+fn default_of(saved: Option<&str>) -> &'static Region {
+    saved.and_then(region).or_else(|| region(DEFAULT_REGION)).unwrap_or(&REGIONS[0])
 }
 
 /// read_regions without the closed ones: what anyone but the super admin may
@@ -308,8 +316,7 @@ pub async fn get_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>)
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "regions": list,
-        // null: calls naming no region still run on the older platform choice.
-        "default_region": default_region.map(|r| r.id),
+        "default_region": default_region.id,
         "import": Pick { provider: import.0, model: import.1 },
         "providers": providers,
         "models": catalog,
@@ -375,7 +382,7 @@ fn checked_pick(
 #[derive(Debug, Deserialize)]
 pub struct SaveRegionsRequest {
     pub regions: Vec<RegionChoice>,
-    /// The region for calls naming none: "" clears it, left out keeps it.
+    /// The default region; left out keeps it.
     #[serde(default)]
     pub default_region: Option<String>,
     /// The YAML import's model; left out keeps it.
@@ -383,15 +390,12 @@ pub struct SaveRegionsRequest {
     pub import: Option<PickChoice>,
 }
 
-/// The default region as asked: None to keep it, Some(None) to clear it.
-fn checked_default(asked: Option<&str>) -> Result<Option<Option<&'static Region>>, String> {
+/// The default region as asked: None to keep it. It cannot be cleared.
+fn checked_default(asked: Option<&str>) -> Result<Option<&'static Region>, String> {
     let Some(id) = asked.map(str::trim) else { return Ok(None) };
-    if id.is_empty() {
-        return Ok(Some(None));
-    }
     region(id)
-        .map(|r| Some(Some(r)))
-        .ok_or_else(|| format!("Unknown region '{}' for calls with no region", id))
+        .map(Some)
+        .ok_or_else(|| format!("'{}' is not a region: there is always a default region", id))
 }
 
 /// The regions as saved, or what is wrong with the request.
@@ -465,16 +469,17 @@ pub async fn save_regions(
     // The default, as asked or as kept, must have a model and be open.
     let kept = match default_region {
         Some(d) => d,
-        None => read_default(&store).await.ok().flatten(),
+        None => match read_default(&store).await {
+            Ok(d) => d,
+            Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, e),
+        },
     };
     let open_ids = opened(&body.regions, &regions);
-    if let Some(r) = kept {
-        if !regions.contains_key(r.id) || !open_ids.contains(&r.id) {
-            return fail(
-                StatusCode::BAD_REQUEST,
-                format!("{} answers calls with no region, so it needs a model and to be open to users", r.label),
-            );
-        }
+    if !regions.contains_key(kept.id) || !open_ids.contains(&kept.id) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            format!("{} is the default region, so it needs a model and to be open to users — or choose another default", kept.label),
+        );
     }
     let import = match &body.import {
         None => None,
@@ -501,15 +506,8 @@ pub async fn save_regions(
         return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the regions");
     }
     let mut platform: Vec<(&str, String)> = Vec::new();
-    match default_region {
-        Some(Some(r)) => platform.push((DEFAULT_KEY, r.id.to_string())),
-        Some(None) => {
-            if let Err(e) = client.execute("DELETE FROM system_config WHERE key = $1", &[&DEFAULT_KEY]).await {
-                app_log!(error, error = %e, "Could not clear the default region");
-                return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the default region");
-            }
-        }
-        None => {}
+    if let Some(r) = default_region {
+        platform.push((DEFAULT_KEY, r.id.to_string()));
     }
     if let Some(p) = &import {
         platform.push(("ai_uploader.provider", p.provider.clone()));
@@ -566,11 +564,13 @@ pub async fn list_regions(req: HttpRequest, store: web::Data<Arc<EndpointStore>>
 mod tests {
     #[test]
     fn the_default_region_is_kept_cleared_or_checked() {
-        let id = |d: Option<Option<&Region>>| d.map(|r| r.map(|r| r.id));
-        assert_eq!(id(checked_default(None).unwrap()), None, "left out: kept");
-        assert_eq!(id(checked_default(Some(" ")).unwrap()), Some(None), "empty: cleared");
-        assert_eq!(id(checked_default(Some("Europe")).unwrap()), Some(Some("europe")));
+        assert!(checked_default(None).unwrap().is_none(), "left out: kept");
+        assert!(checked_default(Some(" ")).is_err(), "never cleared");
+        assert_eq!(checked_default(Some("Europe")).unwrap().map(|r| r.id), Some("europe"));
         assert!(checked_default(Some("mars")).is_err());
+        assert_eq!(default_of(None).id, "china", "always one, before any is saved");
+        assert_eq!(default_of(Some("atlantis")).id, "china");
+        assert_eq!(default_of(Some("usa")).id, "usa");
     }
 
     use super::*;

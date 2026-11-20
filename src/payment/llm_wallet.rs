@@ -24,8 +24,8 @@
 //
 // An app names a region ("europe", admin/llm_regions.rs) and is only ever told
 // the region back, whichever model its task runs on (llm_regions::task_of).
-// "default" (or the tenant's name) runs on the default region the super admin
-// chose (llm_regions::read_default), else on the older platform choice;
+// "default" (or the tenant's name) runs on the default region
+// (llm_regions::read_default), and nothing answers while it is off offer;
 // a model named directly still works for older apps, but is never listed.
 //   POST /api/internal/llm/charge     one completion's tokens
 //        → { credits, balance }: spends the subscription's credits and records
@@ -276,19 +276,18 @@ pub async fn authorize_handler(
     let task = llm_regions::task_of(body.task.as_deref(), &app);
     let requested = body.model.as_deref().unwrap_or_default();
     let named = pick_region(requested, &live);
-    // A call naming no region runs on the default region, when one is chosen
-    // and live; else on the older platform choice.
+    // A call naming no region runs on the default region, and only there.
+    let no_region = names_default(requested, &tenant_name);
     let region = match named {
         Some(_) => named,
-        None if names_default(requested, &tenant_name) => match llm_regions::read_default(&store).await {
-            Ok(Some(d)) => pick_region(d.id, &live),
-            _ => None,
+        None if no_region => match llm_regions::read_default(&store).await {
+            Ok(d) => pick_region(d.id, &live),
+            Err(e) => {
+                app_log!(error, error = %e, "Could not read the default region");
+                return fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not read the regions");
+            }
         },
         None => None,
-    };
-    let choice = match region {
-        Some(_) => None,
-        None => assistant_config::read_choice(&store).await.ok().flatten(),
     };
     let speech = task == Some(SPEECH);
     let picked: Option<(&str, &str)> = match region {
@@ -296,10 +295,10 @@ pub async fn authorize_handler(
         Some((_, b)) => Some(b.for_task(task, &keyed)),
         // Only a region's speech model transcribes.
         None if speech => None,
-        None => {
-            let default = choice.as_ref().map(|(p, m)| (p.as_str(), m.as_str()));
-            pick_model(requested, &tenant_name, default, &offered)
-        }
+        // The default region is off offer: nothing answers in its place.
+        None if no_region => None,
+        // A model an older app names itself.
+        None => pick_model(requested, &tenant_name, None, &offered),
     };
 
     let upstream = match picked.and_then(|(p, m)| assistant_config::provider(p).map(|prov| (prov, m))) {

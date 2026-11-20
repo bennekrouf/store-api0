@@ -263,8 +263,6 @@ pub async fn start_http_server(
                             .route("/admin/llm-regions", web::put().to(crate::admin::llm_regions::save_regions))
                             .route("/admin/llm-models", web::put().to(crate::admin::llm_models::save_models))
                             .route("/admin/llm-models/test", web::post().to(crate::admin::llm_models::test_model))
-                            .route("/admin/config/assistant", web::get().to(crate::admin::assistant_config::get_assistant_config))
-                            .route("/admin/config/assistant", web::put().to(crate::admin::assistant_config::update_assistant_config))
                             .route("/admin/config/assistant/keys/{provider}", web::put().to(crate::admin::assistant_config::set_assistant_key))
                             .route("/admin/config/assistant/keys/{provider}", web::delete().to(crate::admin::assistant_config::delete_assistant_key))
                             .route("/internal/assistant-config", web::get().to(crate::admin::assistant_config::internal_assistant_config))
