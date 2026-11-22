@@ -234,6 +234,69 @@ pub async fn licence_status(store: &EndpointStore, typed: &str) -> Result<Option
     licence_where(store, "s.licence = $1", &licence).await
 }
 
+/// A paid plan Stripe should have renewed by now: Stripe still had it live,
+/// but its month is over here. Stripe moves a renewed subscription into its
+/// next month at once and says so by webhook; a notice that was lost, or keeps
+/// failing, leaves it like this. Free ones start their month themselves
+/// ([`start_free_month`]).
+fn renewal_overdue(l: &LicenceStatus, now: DateTime<Utc>) -> bool {
+    !l.active
+        && l.subscription_id.starts_with("sub_")
+        && ["active", "trialing"].contains(&l.status.as_str())
+        && l.period_end <= now
+}
+
+/// How often one overdue plan is re-read from Stripe, however often its
+/// licence is checked.
+const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Whether `subscription_id` may be re-read from Stripe at `now`; if so, the
+/// time is noted.
+fn may_refresh(subscription_id: &str, now: std::time::Instant) -> bool {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static LAST: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let last = last.get_or_insert_with(HashMap::new);
+    last.retain(|_, at| now.saturating_duration_since(*at) < REFRESH_EVERY);
+    if last.contains_key(subscription_id) {
+        return false;
+    }
+    last.insert(subscription_id.to_string(), now);
+    true
+}
+
+/// `l`, after re-reading its plan from Stripe when the renewal looks overdue:
+/// a lost webhook then mends itself the next time the licence is checked,
+/// instead of cutting off someone who has paid. Anything that goes wrong
+/// leaves `l` as it was.
+async fn refresh_if_overdue(store: &Arc<EndpointStore>, stripe: &PaymentService, l: LicenceStatus) -> LicenceStatus {
+    if !renewal_overdue(&l, Utc::now()) || !may_refresh(&l.subscription_id, std::time::Instant::now()) {
+        return l;
+    }
+    app_log!(warn, subscription_id = %l.subscription_id, period_end = %l.period_end,
+        "Licence checked after its plan's month ended: re-reading the plan from Stripe");
+    let sub = match stripe.retrieve_subscription(&l.subscription_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            app_log!(error, error = %e, subscription_id = %l.subscription_id, "Could not fetch an overdue plan from Stripe");
+            return l;
+        }
+    };
+    if let Err(e) = sync_subscription(store, &sub).await {
+        app_log!(error, error = %e, subscription_id = %l.subscription_id, "Could not sync an overdue plan");
+        return l;
+    }
+    match licence_where(store, "s.licence = $1", &l.licence).await {
+        Ok(Some(fresh)) => {
+            app_log!(info, subscription_id = %fresh.subscription_id, active = fresh.active, period_end = %fresh.period_end,
+                "Overdue plan re-read from Stripe");
+            fresh
+        }
+        _ => l,
+    }
+}
+
 /// A free licence whose month is over starts the next one, with the plan's
 /// credits as they are now. Paid ones are renewed by Stripe instead.
 async fn start_free_month(store: &EndpointStore, licence: &str) -> Result<(), String> {
@@ -958,6 +1021,7 @@ pub struct LicenceRequest {
 pub async fn licence_status_handler(
     req: HttpRequest,
     store: web::Data<Arc<EndpointStore>>,
+    payment_service: web::Data<Arc<PaymentService>>,
     body: web::Json<LicenceRequest>,
 ) -> impl Responder {
     use actix_web::http::StatusCode;
@@ -965,7 +1029,10 @@ pub async fn licence_status_handler(
         return deny;
     }
     match licence_status(&store, &body.licence).await {
-        Ok(Some(l)) => HttpResponse::Ok().json(serde_json::json!({ "success": true, "licence": l })),
+        Ok(Some(l)) => {
+            let l = refresh_if_overdue(&store, &payment_service, l).await;
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "licence": l }))
+        }
         Ok(None) => fail(StatusCode::NOT_FOUND, "Unknown licence"),
         Err(e) => {
             app_log!(error, error = %e, "Could not read a licence");
@@ -995,6 +1062,8 @@ pub async fn licence_portal_handler(
         }
     };
     let Some(customer) = earlier_customer(&store, &licence.email).await else {
+        // The gateway tells this apart from an unknown licence by this exact
+        // text (gateway-api0 `licence_failure`): keep the two the same.
         return fail(StatusCode::NOT_FOUND, "No subscription to manage");
     };
     let return_url = crate::email::plans_page();
@@ -1281,6 +1350,48 @@ pub async fn portal_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn licence_row(id: &str, status: &str, active: bool, period_end: DateTime<Utc>) -> LicenceStatus {
+        LicenceStatus {
+            licence: "ABCDE-FGHJK-LMNPQ-RSTUV".into(),
+            subscription_id: id.into(),
+            email: "dev@example.ch".into(),
+            plan_id: "pro".into(),
+            plan_name: "Pro".into(),
+            products: vec!["*".into()],
+            status: status.into(),
+            active,
+            cancel_at_period_end: false,
+            period_end,
+            credits_granted: 2000,
+            credits_used: 2000,
+            credits_left: 0,
+        }
+    }
+
+    #[test]
+    fn only_a_live_paid_plan_past_its_month_is_re_read_from_stripe() {
+        let now = Utc::now();
+        let ended = now - chrono::Duration::hours(10);
+        assert!(renewal_overdue(&licence_row("sub_1", "active", false, ended), now));
+        assert!(renewal_overdue(&licence_row("sub_1", "trialing", false, ended), now));
+        // Stripe has said it is over or unpaid: nothing to catch up on.
+        assert!(!renewal_overdue(&licence_row("sub_1", "canceled", false, ended), now));
+        assert!(!renewal_overdue(&licence_row("sub_1", "past_due", false, ended), now));
+        // Free ones start their own month; a live month needs nothing.
+        assert!(!renewal_overdue(&licence_row("free_1", "active", false, ended), now));
+        assert!(!renewal_overdue(&licence_row("sub_1", "active", true, now + chrono::Duration::days(3)), now));
+    }
+
+    #[test]
+    fn an_overdue_plan_is_re_read_at_most_every_few_minutes() {
+        let t = std::time::Instant::now();
+        let id = format!("sub_test_{}", uuid::Uuid::new_v4().simple());
+        assert!(may_refresh(&id, t));
+        assert!(!may_refresh(&id, t + std::time::Duration::from_secs(60)));
+        assert!(may_refresh(&id, t + REFRESH_EVERY));
+        assert!(may_refresh(&format!("{id}_other"), t), "each plan has its own wait");
+    }
 
     #[test]
     fn a_licence_is_four_groups_of_five_unambiguous_characters() {
