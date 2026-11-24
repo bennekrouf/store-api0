@@ -123,6 +123,8 @@ pub(crate) fn defaults() -> Vec<CatalogModel> {
             "Made for code: a good default for reviews."),
         entry("mistral", "mistral-medium-latest", "Mistral Medium", "europe", &["code", "chat", "text"], Some((1.50, 7.50)), None,
             "Strongest here, about 10× Small."),
+        entry("mistral", "devstral-2512", "Devstral 2512", "europe", &["code"], Some((0.40, 2.00)), None,
+            "Made for code; answers GitAgent's reviews without running out of room. Price from OpenRouter's listing."),
         // China
         entry("deepseek", "deepseek-flash", "DeepSeek Flash", "china", &["code", "chat", "text"], Some((0.30, 1.20)), Some(0.003),
             "Peak price shown; half at other hours and weekends. Good for reviews and comments."),
@@ -445,6 +447,7 @@ mod tests {
         assert_eq!(d["claude-haiku-5-5"], 1.0);
         assert_eq!(d["deepseek-flash"], 2.8);
         assert_eq!(d["deepseek-v4-pro"], 11.3);
+        assert_eq!(d["devstral-2512"], 4.0, "China's code task");
         assert_eq!(d["mistral-medium-latest"], 15.0);
         assert_eq!(d["claude-sonnet-5-5"], 20.0);
         assert!(!d.contains_key("claude-opus-5-5"), "not run by any region");

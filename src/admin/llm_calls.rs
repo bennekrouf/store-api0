@@ -12,8 +12,11 @@
 //              and charged by the store when it logs them (api/usage_log.rs)
 //
 //   GET /api/admin/llm-calls?q=&kind=&tenant_id=&page=&page_size=
-//       q          matches the email, the model or the app
+//       q          matches the email, the model, the app or the feature
 //       kind       licence | platform | assistant
+//   Each call carries `task` (the kind of work its model was picked for) and
+//   `feature` (the app's tool or step, X-Feature); an assistant turn has its
+//   endpoint as app and neither.
 //   → { calls: [...], total, input_tokens, output_tokens } — the sums cover
 //     the whole filtered set, not just the page.
 //
@@ -46,25 +49,26 @@ const SQL: &str = "
                CASE WHEN license_id IS NULL THEN 'platform' ELSE 'licence' END AS kind,
                product AS app, email, tenant_id, provider, model,
                input_tokens, output_tokens, total_tokens, estimated,
-               credits, status_code, response_time_ms, 1 AS calls, region
+               credits, status_code, response_time_ms, 1 AS calls, region, task, feature
           FROM llm_usage
         UNION ALL
         SELECT id, timestamp, 'assistant', endpoint_path, email, tenant_id,
                COALESCE(metadata->>'provider', ''), COALESCE(model_used, ''),
                COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), COALESCE(total_tokens, 0),
                COALESCE(usage_estimated, false), (metadata->>'credits')::BIGINT, COALESCE(response_status, 0),
-               response_time_ms, COALESCE((metadata->>'llm_calls')::INT, 1), NULL::VARCHAR
+               response_time_ms, COALESCE((metadata->>'llm_calls')::INT, 1), NULL::VARCHAR,
+               NULL::VARCHAR, NULL::VARCHAR
           FROM api_usage_logs
          WHERE method = 'LLM'
     )
     SELECT count(*) OVER (), (sum(c.input_tokens) OVER ())::BIGINT, (sum(c.output_tokens) OVER ())::BIGINT,
            c.id, c.at, c.kind, c.app, c.email, c.tenant_id, t.name, c.provider, c.model,
            c.input_tokens, c.output_tokens, c.total_tokens, c.estimated, c.credits,
-           c.status_code, c.response_time_ms, c.calls, c.region
+           c.status_code, c.response_time_ms, c.calls, c.region, c.task, c.feature
       FROM calls c
       LEFT JOIN tenants t ON t.id = c.tenant_id
      WHERE ($1 = '' OR c.email ILIKE '%' || $1 || '%' OR c.model ILIKE '%' || $1 || '%'
-                    OR c.app ILIKE '%' || $1 || '%')
+                    OR c.app ILIKE '%' || $1 || '%' OR c.feature ILIKE '%' || $1 || '%')
        AND ($2 = '' OR c.kind = $2)
        AND ($3 = '' OR c.tenant_id = $3)
      ORDER BY c.at DESC
@@ -134,6 +138,8 @@ pub async fn list_llm_calls(
                 "calls": r.get::<_, i32>(19),
                 // The region a licence call chose: what its user saw instead of the model.
                 "region": r.get::<_, Option<String>>(20),
+                "task": r.get::<_, Option<String>>(21),
+                "feature": r.get::<_, Option<String>>(22),
             })
         })
         .collect();

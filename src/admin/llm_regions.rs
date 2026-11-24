@@ -165,10 +165,12 @@ pub(crate) fn defaults() -> HashMap<String, Backing> {
         ("europe".to_string(), backing("mistral", "mistral-medium-latest", &[
             ("transcribe", "mistral", "voxtral-mini-latest"),
         ])),
-        // V4 Pro for code and text: Flash ran out of room on GitAgent's
-        // reviews. Qwen3 Coder Next looped on them; GLM's id is unconfirmed.
+        // V4 Pro for text. Code (GitAgent's reviews) runs on Mistral's
+        // Devstral, so it leaves China: Flash and GLM-5.3 Flash ran out of
+        // room on those reviews, and Qwen3 Coder Next looped on them.
         ("china".to_string(), backing("deepseek", "deepseek-v4-pro", &[
             ("chat", "deepseek", "deepseek-flash"),
+            ("code", "mistral", "devstral-2512"),
         ])),
         // Sonnet for code and text; Haiku answers the bots.
         ("usa".to_string(), backing("anthropic", "claude-sonnet-5-5", &[
@@ -725,7 +727,8 @@ mod tests {
         assert_eq!(validate(&choices, &keyed, &llm_models::defaults()).unwrap(), d);
         assert_eq!(d["usa"].for_task(Some("code"), &keyed), ("anthropic", "claude-sonnet-5-5"));
         assert_eq!(d["usa"].for_task(Some("chat"), &keyed), ("anthropic", "claude-haiku-5-5"));
-        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("deepseek", "deepseek-v4-pro"));
+        assert_eq!(d["china"].for_task(Some("code"), &keyed), ("mistral", "devstral-2512"));
+        assert_eq!(d["china"].for_task(Some("text"), &keyed), ("deepseek", "deepseek-v4-pro"));
         assert_eq!(d["china"].for_task(Some("chat"), &keyed), ("deepseek", "deepseek-flash"));
         assert_eq!(d["europe"].for_task(Some("code"), &keyed), ("mistral", "mistral-medium-latest"));
     }
