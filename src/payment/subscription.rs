@@ -930,6 +930,10 @@ fn plausible_email(email: &str) -> bool {
 #[derive(Deserialize)]
 pub struct FreeRequest {
     pub email: String,
+    /// The app asking, as the gateway read it from X-Client-App. A service
+    /// with a store key is named by its key instead.
+    #[serde(default)]
+    pub app: Option<String>,
 }
 
 /// POST /api/plans/free — the free allowance, for an app to offer, or the
@@ -943,19 +947,36 @@ pub async fn free_handler(
     body: web::Json<FreeRequest>,
 ) -> impl Responder {
     use actix_web::http::StatusCode;
-    if let Err(deny) = crate::middleware::service_key::require_scope(&req, crate::middleware::service_key::Scope::CreditsWrite) {
-        return deny;
-    }
+    use crate::middleware::service_key::{require_scope, Caller, Scope};
+    let caller = match require_scope(&req, Scope::CreditsWrite) {
+        Ok(caller) => caller,
+        Err(deny) => return deny,
+    };
     let email = body.email.trim().to_lowercase();
     if !plausible_email(&email) {
         return fail(StatusCode::BAD_REQUEST, "Enter the email the licence should go to");
     }
+    // Asking for the licence is how a person starts on an app: where they
+    // signed in (api/signup_source.rs). Recorded once the licence is on its way.
+    let via = match &caller {
+        Caller::Service { name, .. } => Some(name.as_str()),
+        Caller::Internal => body.app.as_deref(),
+    }
+    .and_then(crate::api::signup_source::clean_via);
+    let seen = || async {
+        if let Some(via) = &via {
+            crate::api::signup_source::record_quietly(&store, &email, via, None).await;
+        }
+    };
     // An email that already pays gets its own licence again: the email sent
     // when the plan went live is the only other copy, and it can be lost.
     match has_live_paid_plan(&store, &email).await {
         Ok(true) => {
             return match resend_paid_licence(&store, &email).await {
-                Ok(()) => licence_on_its_way(),
+                Ok(()) => {
+                    seen().await;
+                    licence_on_its_way()
+                }
                 Err(e) => {
                     app_log!(error, error = %e, "Could not send a paid licence again");
                     fail(StatusCode::INTERNAL_SERVER_ERROR, "The licence could not be sent")
@@ -979,7 +1000,10 @@ pub async fn free_handler(
         return fail(StatusCode::NOT_FOUND, "There are no free credits right now");
     };
     match give_free_plan(&store, &plan, &email).await {
-        Ok(()) => licence_on_its_way(),
+        Ok(()) => {
+            seen().await;
+            licence_on_its_way()
+        }
         Err(e) => {
             app_log!(error, error = %e, "Could not give a free licence");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "The free licence could not be sent")

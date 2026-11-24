@@ -131,9 +131,9 @@ pub async fn list_users(
     // lower case; accounts may not, hence lower(up.email) on that side.
     let sql = format!(
         "WITH people AS (
-             SELECT email, default_tenant_id, created_at, TRUE AS has_account, signup_source FROM user_preferences
+             SELECT email, default_tenant_id, created_at, TRUE AS has_account FROM user_preferences
              UNION ALL
-             SELECT s.email, NULL, min(s.created_at), FALSE, NULL::jsonb
+             SELECT s.email, NULL, min(s.created_at), FALSE
                FROM subscriptions s
               WHERE s.licence IS NOT NULL
                 AND s.origin IS DISTINCT FROM 'api0'
@@ -179,9 +179,14 @@ pub async fn list_users(
                 FROM subscriptions s JOIN plans p ON p.id = s.plan_id
                WHERE s.email = lower(up.email) AND s.licence IS NOT NULL
                  AND s.origin IS DISTINCT FROM 'api0') AS licences,
-             -- Where the account came from (api/signup_source.rs).
-             up.signup_source
+             -- Where they came from and where they sign in (api/signup_source.rs).
+             ps.first_source AS signup_source,
+             COALESCE(ps.seen, '{{}}'::jsonb) AS seen,
+             -- The apps whose AI they used, by the id each sends (X-Client-App).
+             (SELECT COALESCE(json_agg(DISTINCT u.product ORDER BY u.product), '[]'::json)
+                FROM llm_usage u WHERE u.email = lower(up.email) AND u.license_id IS NOT NULL) AS apps
          FROM people up
+         LEFT JOIN person_sources ps ON ps.email = lower(up.email)
          WHERE {MAYORANA}
            AND ($1 = '' OR up.email ILIKE '%' || $1 || '%')
            AND {licence_where}
@@ -218,6 +223,8 @@ pub async fn list_users(
                 "has_account": r.get::<_, bool>(6),
                 "licences": r.get::<_, serde_json::Value>(7),
                 "signup_source": r.get::<_, Option<serde_json::Value>>(8),
+                "seen": r.get::<_, serde_json::Value>(9),
+                "apps": r.get::<_, serde_json::Value>(10),
             })
         })
         .collect();

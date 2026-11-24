@@ -1214,6 +1214,35 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS llm_region VARCHAR;
 -- accounts from before this column, or when nothing was recorded.
 ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS signup_source JSONB;
 
+-- Where a person came from and where they sign in, whatever front-end they
+-- use: api0's dashboard, a site that signs people in through the gateway, a
+-- partner service, or a desktop app (api/signup_source.rs). One row per
+-- email, lower case, with or without an api0 account.
+--   first_source  the first front-end to report them, with the referrer and
+--                 tags it saw: { via, referrer, landing, utm_*, ref }. Written
+--                 once, and only for a person new that day, so someone known
+--                 for longer is never relabelled. NULL: known from before.
+--   seen          { <via>: <last time they signed in there> }.
+-- Replaces user_preferences.signup_source, which is copied in once (without
+-- the Microsoft sign-in page, recorded as a referrer by mistake) and no
+-- longer written.
+CREATE TABLE IF NOT EXISTS person_sources (
+    email        VARCHAR     PRIMARY KEY,
+    first_source JSONB,
+    seen         JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO person_sources (email, first_source, created_at)
+SELECT DISTINCT ON (lower(p.email)) lower(p.email),
+       jsonb_build_object('via', 'api0') ||
+       CASE WHEN p.signup_source->>'referrer' ~ '://(login\.microsoftonline\.com|login\.live\.com)'
+            THEN p.signup_source - 'referrer' ELSE p.signup_source END,
+       p.created_at
+  FROM user_preferences p
+ WHERE p.signup_source IS NOT NULL
+ ORDER BY lower(p.email), p.created_at
+ON CONFLICT (email) DO NOTHING;
+
 -- ── Named downstream connections ────────────────────────────────────────────
 -- A tenant used to have exactly one downstream auth profile, so one customer
 -- whose tools reach two backends with different credentials — Azure Resource

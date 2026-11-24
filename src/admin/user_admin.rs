@@ -288,6 +288,7 @@ const PERSON_STEPS: &[(&str, &str)] = &[
     ("email_opt_ins", "DELETE FROM email_opt_ins WHERE lower(email) = $1"),
     ("subscriptions", "DELETE FROM subscriptions WHERE email = $1"),
     ("user_preferences", "DELETE FROM user_preferences WHERE lower(email) = $1"),
+    ("person_sources", "DELETE FROM person_sources WHERE email = $1"),
 ];
 
 pub async fn delete_user(
