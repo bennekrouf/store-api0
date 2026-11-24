@@ -1388,3 +1388,10 @@ BEGIN
         END LOOP;
     END LOOP;
 END $$;
+
+-- Low-credit alerts for a licence (payment::subscription::alert_if_low): when
+-- one was last emailed that its credits are nearly gone (10% or less left) and
+-- that they are gone. One of each per period: an email sent before the current
+-- period_start no longer counts. A top-up of a granted licence clears both.
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS credits_low_emailed_at TIMESTAMPTZ;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS credits_empty_emailed_at TIMESTAMPTZ;

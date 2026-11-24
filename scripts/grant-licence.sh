@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # scripts/grant-licence.sh — give someone a licence by hand, without Stripe.
 #
+# Superseded by the dashboard: Admin → Users → Grant licence (and "+ credits"
+# on a granted licence's row), POST /api/admin/licences/grant and /topup.
+# Kept for a database with no gateway in front of it.
+#
 # For the owner, a reviewer, a partner, a refund made good: asks for the email,
 # which plan (or every app), for how long and how many AI credits, then makes
 # the subscription and prints its licence number. Nothing is emailed: send the

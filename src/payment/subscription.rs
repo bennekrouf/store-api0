@@ -17,6 +17,8 @@
 //   POST /api/plans/portal                  { email } → { url } of Stripe's customer portal
 //   POST /api/plans/cancel                  { email, cancel } → cancels the email's paid plan at
 //                                           the end of its month (cancel: true), or resumes it
+//   POST /api/plans/licence/rotate          { email } → { subscription }: a new number for the
+//                                           licence that email sees; the old one stops at once
 //   POST /api/internal/licence/status       { licence } → what it unlocks, and its credits
 //   POST /api/internal/licence/portal       { licence } → { url } of Stripe's customer portal
 //   POST /api/internal/licence/email        { licence, app, title, intro, items } → emails
@@ -378,6 +380,59 @@ pub async fn spend_credits(store: &EndpointStore, subscription_id: &str, model: 
         .map_err(|e| SpendError::Store(e.to_string()))?
         .ok_or(SpendError::NoPlan)?;
     Ok(Spent { credits: cost, credits_left: row.get(0) })
+}
+
+/// The share of a period's credits at or below which the licence holder is
+/// told they are running low, in percent.
+const LOW_CREDITS_PERCENT: i64 = 10;
+
+/// After a charge: emails the licence's owner, once a period, when 10% or less
+/// of its credits are left, and once when none are, so an app or a server on
+/// it doesn't stop without a word. Each email is claimed by the UPDATE that
+/// sends it, so two calls finishing together send one. Not for the wallet of a
+/// member of a workspace that bills each person (origin 'api0'), which is api0's
+/// to tell, not mayorana's.
+pub async fn alert_if_low(store: &Arc<EndpointStore>, subscription_id: &str) -> Result<(), String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let sql = format!(
+        "UPDATE subscriptions s SET \
+            credits_empty_emailed_at = CASE WHEN s.credits_used >= s.credits_granted THEN NOW() ELSE s.credits_empty_emailed_at END, \
+            credits_low_emailed_at = NOW() \
+         FROM plans p \
+         WHERE s.id = $1 AND p.id = s.plan_id AND s.licence IS NOT NULL \
+           AND s.credits_granted > 0 AND COALESCE(s.origin, '') <> 'api0' \
+           AND s.status IN {live} AND s.period_end > NOW() \
+           AND ( (s.credits_used >= s.credits_granted \
+                  AND (s.credits_empty_emailed_at IS NULL OR s.credits_empty_emailed_at < s.period_start)) \
+              OR ((s.credits_granted - s.credits_used) * 100 <= s.credits_granted * {pct} \
+                  AND (s.credits_low_emailed_at IS NULL OR s.credits_low_emailed_at < s.period_start)) ) \
+         RETURNING s.email, p.name, s.credits_granted, s.credits_used, s.period_end, s.locale, \
+                   (s.stripe_customer_id <> '' OR s.is_free) AS refills",
+        live = LIVE_STATUSES,
+        pct = LOW_CREDITS_PERCENT,
+    );
+    let Some(row) = client.query_opt(sql.as_str(), &[&subscription_id]).await.map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let email: String = row.get(0);
+    let (granted, used): (i64, i64) = (row.get(2), row.get(3));
+    let lang = Lang::from_tag(row.get::<_, Option<String>>(5).as_deref());
+    let refills: bool = row.get(6);
+    let empty = used >= granted;
+    app_log!(info, email = %email, subscription_id = %subscription_id, empty = empty, "Low-credit email sent");
+    send_async(
+        Arc::clone(store),
+        email,
+        EmailKind::LicenceCreditsLow {
+            plan_name: row.get(1),
+            credits_left: (granted - used).max(0),
+            credits_granted: granted,
+            empty,
+            refills_on: refills.then(|| format_date(row.get(4), lang)),
+            lang,
+        },
+    );
+    Ok(())
 }
 
 // ── Keeping in step with Stripe ──────────────────────────────────────────────
@@ -1345,6 +1400,158 @@ pub async fn portal_handler(
             fail(StatusCode::INTERNAL_SERVER_ERROR, "The subscription page could not be opened")
         }
     }
+}
+
+// ── Rotating and granting a licence ──────────────────────────────────────────
+
+/// Gives the subscription `id` a new licence number; the old one stops working
+/// at once (nothing else keys on it: AI calls are logged by subscription id).
+/// Tries again on the rare clash with a number already taken.
+async fn renumber<C: GenericClient>(client: &C, id: &str) -> Result<Option<String>, String> {
+    for _ in 0..3 {
+        match client
+            .query_opt(
+                "UPDATE subscriptions SET licence = $2, updated_at = NOW() \
+                 WHERE id = $1 AND licence IS NOT NULL RETURNING licence",
+                &[&id, &new_licence()],
+            )
+            .await
+        {
+            Ok(row) => return Ok(row.map(|r| r.get(0))),
+            Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("Could not make a licence number that is not taken".into())
+}
+
+/// A new number for the licence `email` sees (current_subscription), without
+/// touching the plan, its credits or Stripe. `None` when it has no licence.
+pub async fn rotate_licence(store: &EndpointStore, email: &str) -> Result<Option<SubscriptionView>, String> {
+    let Some(sub) = current_subscription(store, email).await? else {
+        return Ok(None);
+    };
+    if sub.licence.is_none() {
+        return Ok(None);
+    }
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    if renumber(&client, &sub.id).await?.is_none() {
+        return Ok(None);
+    }
+    current_subscription(store, email).await
+}
+
+#[derive(Deserialize)]
+pub struct RotateRequest {
+    pub email: String,
+}
+
+/// POST /api/plans/licence/rotate
+pub async fn rotate_licence_handler(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<RotateRequest>,
+) -> impl Responder {
+    use actix_web::http::StatusCode;
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let email = body.email.trim().to_lowercase();
+    match rotate_licence(&store, &email).await {
+        Ok(Some(sub)) => {
+            app_log!(warn, email = %email, subscription_id = %sub.id, "Licence rotated");
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "subscription": sub }))
+        }
+        Ok(None) => fail(StatusCode::NOT_FOUND, "No licence to rotate"),
+        Err(e) => {
+            app_log!(error, error = %e, email = %email, "Could not rotate a licence");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "The licence could not be rotated")
+        }
+    }
+}
+
+/// A licence given by hand, without Stripe (what scripts/grant-licence.sh did).
+pub struct Grant<'a> {
+    pub email: &'a str,
+    /// Any plan, on sale or not; "owner" (every app, never on sale) is made if missing.
+    pub plan_id: &'a str,
+    /// How many months it lasts; `None` is for good.
+    pub months: Option<i32>,
+    /// AI credits for the whole period: a granted licence never refills.
+    pub credits: i64,
+    /// Email the licence to them, as a paid one is.
+    pub send_email: bool,
+}
+
+pub struct Granted {
+    pub subscription_id: String,
+    pub licence: String,
+    pub period_end: DateTime<Utc>,
+}
+
+pub async fn grant_licence(store: &Arc<EndpointStore>, g: Grant<'_>) -> Result<Granted, String> {
+    let email = g.email.trim().to_lowercase();
+    if !plausible_email(&email) {
+        return Err("That doesn't look like an email address".into());
+    }
+    let mut client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let tx = client.transaction().await.map_err(|e| e.to_string())?;
+    if g.plan_id == "owner" {
+        tx.execute(
+            "INSERT INTO plans (id, name, description, price_cents, currency, monthly_credits, products, active, sort_order) \
+             VALUES ('owner', 'Owner', 'Not for sale: every app in Pro, granted by hand.', 0, 'eur', 0, '{*}', FALSE, 99) \
+             ON CONFLICT (id) DO NOTHING",
+            &[],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    let licence = new_licence();
+    let id = format!("grant_{}", uuid::Uuid::new_v4().simple());
+    let row = tx
+        .query_opt(
+            "INSERT INTO subscriptions (id, email, plan_id, stripe_customer_id, status, cancel_at_period_end, \
+                                        period_start, period_end, credits_granted, credits_used, \
+                                        licence, licence_emailed_at, is_free, origin) \
+             SELECT $1, $2, p.id, '', 'active', FALSE, NOW(), \
+                    CASE WHEN $4::int IS NULL THEN TIMESTAMPTZ '2100-01-01' ELSE NOW() + make_interval(months => $4::int) END, \
+                    $5, 0, $6, NOW(), FALSE, 'granted' \
+             FROM plans p WHERE p.id = $3 \
+             RETURNING period_end",
+            &[&id, &email, &g.plan_id, &g.months, &g.credits, &licence],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(row) = row else {
+        return Err("No such plan".into());
+    };
+    tx.commit().await.map_err(|e| e.to_string())?;
+    let period_end: DateTime<Utc> = row.get(0);
+    app_log!(warn, email = %email, plan = %g.plan_id, credits = g.credits, "Licence granted by hand");
+    if g.send_email {
+        if let Ok(Some(plan)) = plans::get_plan(store, g.plan_id).await {
+            send_async(Arc::clone(store), email.clone(), licence_email(&plan, licence.clone(), None, Lang::En));
+        }
+    }
+    Ok(Granted { subscription_id: id, licence, period_end })
+}
+
+/// Adds `credits` to a licence granted by hand (never refilled otherwise).
+/// `None` when the subscription is not one: a Stripe plan and the free
+/// allowance refill each month on their own.
+pub async fn top_up_granted(store: &EndpointStore, subscription_id: &str, credits: i64) -> Result<Option<(i64, i64)>, String> {
+    let client = store.get_admin_conn().await.map_err(|e| e.to_string())?;
+    let row = client
+        .query_opt(
+            "UPDATE subscriptions SET credits_granted = credits_granted + $2, updated_at = NOW(), \
+                credits_low_emailed_at = NULL, credits_empty_emailed_at = NULL \
+             WHERE id = $1 AND licence IS NOT NULL AND NOT is_free AND stripe_customer_id = '' \
+             RETURNING credits_granted, credits_used",
+            &[&subscription_id, &credits],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(row.map(|r| (r.get(0), r.get(1))))
 }
 
 #[cfg(test)]

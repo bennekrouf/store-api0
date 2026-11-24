@@ -22,8 +22,17 @@
 //        only they belong to, and their licences. Refused while they pay
 //        through Stripe (cancel first) or are the only owner of a workspace
 //        others use (hand it over first).
+//   POST /api/admin/licences/grant  { email, plan_id, months?, credits?, send_email? }
+//        Gives a licence by hand, without Stripe (what scripts/grant-licence.sh
+//        did) → { licence, subscription_id, period_end }. months: 0 or absent is
+//        for good. credits: for the whole period, since a granted licence never
+//        refills; by default the plan's monthly credits for each month (120
+//        months when for good). plan_id "owner" (every app, never on sale) is
+//        made if missing. send_email: the licence is emailed to them.
+//   POST /api/admin/licences/topup  { subscription_id, credits }
+//        Adds AI credits to a licence granted by hand → { credits_granted, credits_used }.
 //
-// Both need X-Internal-Secret; the gateway restricts them to the super admin.
+// All need X-Internal-Secret; the gateway restricts them to the super admin.
 
 use crate::admin::tenant_overview::cascade_steps;
 use crate::app_log;
@@ -436,5 +445,122 @@ mod tests {
         assert!(gift_amount_off(&plan("pro", 1900, "eur"), &plan("basic", 900, "eur")).is_err());
         assert!(gift_amount_off(&plan("pro", 1900, "eur"), &plan("pro2", 1900, "eur")).is_err());
         assert!(gift_amount_off(&plan("basic", 900, "eur"), &plan("pro", 1900, "chf")).is_err());
+    }
+}
+
+// ── Granting a licence by hand ───────────────────────────────────────────────
+
+/// Most months a grant may run, and most credits one call may give.
+const MAX_GRANT_MONTHS: i32 = 1200;
+const MAX_GRANT_CREDITS: i64 = 100_000_000;
+
+#[derive(Debug, Deserialize)]
+pub struct GrantBody {
+    pub email: String,
+    pub plan_id: String,
+    #[serde(default)]
+    pub months: Option<i32>,
+    #[serde(default)]
+    pub credits: Option<i64>,
+    #[serde(default)]
+    pub send_email: bool,
+}
+
+/// Credits for a grant of `months` (None: for good) on a plan giving
+/// `monthly` a month, when the admin names none. The owner plan gives 0 a
+/// month, so it gets the script's 100 000.
+fn default_grant_credits(monthly: i64, months: Option<i32>) -> i64 {
+    if monthly <= 0 {
+        return 100_000;
+    }
+    (monthly * i64::from(months.unwrap_or(120))).min(MAX_GRANT_CREDITS)
+}
+
+pub async fn grant_licence(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<GrantBody>,
+) -> impl Responder {
+    use crate::payment::subscription::{self, Grant};
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    let months = body.months.filter(|m| *m != 0);
+    if months.is_some_and(|m| !(1..=MAX_GRANT_MONTHS).contains(&m)) {
+        return bad_request("Months: a whole number from 1 to 1200, or 0 for good");
+    }
+    let monthly = if body.plan_id == "owner" {
+        0
+    } else {
+        match plans::get_plan(&store, &body.plan_id).await {
+            Ok(Some(p)) => p.monthly_credits,
+            Ok(None) => return bad_request("No such plan"),
+            Err(e) => {
+                app_log!(error, error = %e, "Plan lookup failed");
+                return server_error("Query failed");
+            }
+        }
+    };
+    let credits = body.credits.unwrap_or_else(|| default_grant_credits(monthly, months));
+    if !(0..=MAX_GRANT_CREDITS).contains(&credits) {
+        return bad_request("Credits: a whole number from 0 to 100 000 000");
+    }
+    let grant = Grant { email: &body.email, plan_id: &body.plan_id, months, credits, send_email: body.send_email };
+    match subscription::grant_licence(&store, grant).await {
+        Ok(g) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "licence": g.licence,
+            "subscription_id": g.subscription_id,
+            "period_end": g.period_end,
+            "credits": credits,
+        })),
+        Err(e) if e == "No such plan" || e.starts_with("That doesn't look") => bad_request(&e),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not grant a licence");
+            server_error("The licence could not be granted")
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TopUpBody {
+    pub subscription_id: String,
+    pub credits: i64,
+}
+
+pub async fn top_up_licence(
+    req: HttpRequest,
+    store: web::Data<Arc<EndpointStore>>,
+    body: web::Json<TopUpBody>,
+) -> impl Responder {
+    if let Some(deny) = require_internal_secret(&req) {
+        return deny;
+    }
+    if !(1..=MAX_GRANT_CREDITS).contains(&body.credits) {
+        return bad_request("Credits: a whole number from 1 to 100 000 000");
+    }
+    match crate::payment::subscription::top_up_granted(&store, &body.subscription_id, body.credits).await {
+        Ok(Some((granted, used))) => {
+            app_log!(warn, subscription_id = %body.subscription_id, credits = body.credits, "Granted licence topped up");
+            HttpResponse::Ok().json(serde_json::json!({ "success": true, "credits_granted": granted, "credits_used": used }))
+        }
+        Ok(None) => bad_request("Only a licence granted by hand can be topped up: a paid plan and the free allowance refill each month"),
+        Err(e) => {
+            app_log!(error, error = %e, "Could not top up a licence");
+            server_error("Query failed")
+        }
+    }
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+
+    #[test]
+    fn a_grant_gets_the_monthly_credits_for_each_month() {
+        assert_eq!(default_grant_credits(5_000, Some(12)), 60_000);
+        assert_eq!(default_grant_credits(5_000, None), 600_000, "for good counts ten years");
+        assert_eq!(default_grant_credits(0, Some(3)), 100_000, "the owner plan gives no monthly credits");
+        assert_eq!(default_grant_credits(10_000_000, Some(1200)), MAX_GRANT_CREDITS);
     }
 }

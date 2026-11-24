@@ -373,6 +373,56 @@ fn gift_button(url: &str, text: &str) -> String {
 
 /// mayorana.ch's plain layout, for subscribers who may never have heard of
 /// api0. The postal address and opt-out link are only on optional emails.
+pub fn credits_low_subject(plan_name: &str, empty: bool, lang: Lang) -> String {
+    match (empty, lang) {
+        (false, Lang::En) => format!("Your {plan_name} AI credits are running low"),
+        (false, Lang::Fr) => format!("Vos crédits IA {plan_name} arrivent à leur fin"),
+        (true, Lang::En) => format!("Your {plan_name} AI credits are used up"),
+        (true, Lang::Fr) => format!("Vos crédits IA {plan_name} sont épuisés"),
+    }
+}
+
+/// Sent once when 10% or less of a period's credits are left, and once when
+/// none are: an app or a server on the licence then has its AI calls refused.
+/// `refills_on`: None for a licence granted by hand, which never refills.
+pub fn credits_low_body(plan_name: &str, credits_left: i64, credits_granted: i64, empty: bool, refills_on: Option<&str>, lang: Lang) -> String {
+    let page = plans_page();
+    let plan_name = escape_html(plan_name);
+    let content = match lang {
+        Lang::En => {
+            let state = if empty {
+                format!("<p>Your {plan_name} licence has used all of its {credits_granted} AI credits. AI calls made with it, from the desktop apps or from a server, are refused until it has credits again.</p>")
+            } else {
+                format!("<p>Your {plan_name} licence has <strong>{credits_left}</strong> of its {credits_granted} AI credits left. When they run out, AI calls made with it, from the desktop apps or from a server, are refused.</p>")
+            };
+            let next = match refills_on {
+                Some(d) => format!("<p>They refill on <strong>{d}</strong>. If you need more before then, a bigger plan raises them at once.</p>"),
+                None => "<p>This licence's credits don't refill on their own: reply to this email and I'll top them up.</p>".into(),
+            };
+            format!(
+                "<p>Hi,</p>\n{state}\n{next}\n{button}\n<p>Benek<br><span style=\"color:#64748B\">Founder, Mayorana</span></p>",
+                button = button(&page, "See my plan"),
+            )
+        }
+        Lang::Fr => {
+            let state = if empty {
+                format!("<p>Votre licence {plan_name} a utilisé ses {credits_granted} crédits IA. Les appels IA faits avec elle, depuis les apps ou depuis un serveur, sont refusés jusqu'à ce qu'elle ait de nouveau des crédits.</p>")
+            } else {
+                format!("<p>Il reste <strong>{credits_left}</strong> crédits IA sur les {credits_granted} de votre licence {plan_name}. Une fois épuisés, les appels IA faits avec elle, depuis les apps ou depuis un serveur, sont refusés.</p>")
+            };
+            let next = match refills_on {
+                Some(d) => format!("<p>Ils se rechargent le <strong>{d}</strong>. S'il vous en faut plus d'ici là, une formule plus grande les augmente aussitôt.</p>"),
+                None => "<p>Les crédits de cette licence ne se rechargent pas d'eux-mêmes : répondez à cet e-mail et je les complète.</p>".into(),
+            };
+            format!(
+                "<p>Bonjour,</p>\n{state}\n{next}\n{button}\n<p>Benek<br><span style=\"color:#64748B\">Fondateur, Mayorana</span></p>",
+                button = button(&page, "Voir ma formule"),
+            )
+        }
+    };
+    layout(&content, None, lang)
+}
+
 pub fn layout(content: &str, unsubscribe: Option<&str>, lang: Lang) -> String {
     layout_with_hero("", content, unsubscribe, lang)
 }
@@ -484,5 +534,14 @@ mod tests {
     fn the_come_back_reminder_carries_its_opt_out_in_the_readers_language() {
         let fr = come_back_body("Pro", Some("https://gateway.api0.ai/api/email/unsubscribe?e=a&t=b"), Lang::Fr);
         assert!(fr.contains("Votre formule Pro a pris fin") && fr.contains("Se désabonner de ces e-mails"));
+    }
+
+    #[test]
+    fn a_low_credit_email_says_what_stops_and_when_it_refills() {
+        let low = credits_low_body("Pro", 150, 2000, false, Some("1 December 2026"), Lang::En);
+        assert!(low.contains("<strong>150</strong> of its 2000") && low.contains("1 December 2026"), "{low}");
+        let granted = credits_low_body("Owner", 0, 100000, true, None, Lang::Fr);
+        assert!(granted.contains("a utilisé ses 100000") && granted.contains("répondez à cet e-mail"), "{granted}");
+        assert_eq!(credits_low_subject("Pro", true, Lang::En), "Your Pro AI credits are used up");
     }
 }
