@@ -338,6 +338,12 @@ pub struct ChargeRequest {
     /// The answer stopped at max_tokens.
     #[serde(default)]
     pub cut_off: bool,
+    /// The kind of work the model was picked for (code, chat, text, transcribe).
+    #[serde(default)]
+    pub task: Option<String>,
+    /// The app's own tool or step behind the call (`X-Feature`).
+    #[serde(default)]
+    pub feature: Option<String>,
 }
 
 pub async fn charge_handler(
@@ -381,12 +387,13 @@ pub async fn charge_handler(
     let result = client
         .execute(
             "INSERT INTO llm_usage (id, tenant_id, license_id, email, product, provider, model,
-                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms, region, cut_off)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+                input_tokens, output_tokens, total_tokens, estimated, credits, status_code, response_time_ms, region, cut_off,
+                task, feature)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
             &[
                 &usage_id, &tenant_id, &b.subscription_id, &b.email, &b.app, &b.provider, &b.model,
                 &b.input_tokens, &b.output_tokens, &total, &b.estimated, &credits, &b.status_code,
-                &b.response_time_ms, &b.region, &b.cut_off,
+                &b.response_time_ms, &b.region, &b.cut_off, &b.task, &b.feature,
             ],
         )
         .await;

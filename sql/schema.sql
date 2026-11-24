@@ -1155,6 +1155,11 @@ ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS region VARCHAR;
 -- The answer stopped at max_tokens (finish_reason "length"): a model that
 -- starts looping shows as a rising share of these per region and model.
 ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS cut_off BOOLEAN NOT NULL DEFAULT FALSE;
+-- What a licence call was for: `task` the kind of work its model was picked
+-- for (code, chat, text, transcribe), `feature` the app's own tool or step
+-- (X-Feature: "commit-message", "pr-review"). NULL: an app that names none.
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS task VARCHAR;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS feature VARCHAR;
 
 -- Where a licence came from (payment::subscription::Origin), so a mayorana
 -- customer is told apart from an api0 user whose workspace bills each person:
