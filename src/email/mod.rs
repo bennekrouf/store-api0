@@ -94,6 +94,10 @@ pub enum EmailKind {
     /// An administrator moved a paying subscriber up to `plan_name` as a gift;
     /// they go on paying for `paid_plan_name`. `apps` as in `LicenceIssued`.
     PlanGifted { plan_name: String, paid_plan_name: String, pays_nothing: bool, apps: String, monthly_credits: i64, lang: Lang },
+    /// A licence's AI credits are nearly gone (`empty`: gone), so whatever runs
+    /// on it, an app or a server, is about to stop. `refills_on`: when they
+    /// refill, as shown; None for a licence granted by hand, which never refills.
+    LicenceCreditsLow { plan_name: String, credits_left: i64, credits_granted: i64, empty: bool, refills_on: Option<String>, lang: Lang },
     /// The super admin moved a workspace to `plan_name`; sent to its owners.
     /// `paid_plan_name`: a gift, the workspace going on paying for that plan.
     TenantPlanUpgraded { tenant_name: String, plan_name: String, monthly_credits: i64, included_seats: i32, paid_plan_name: Option<String> },
@@ -146,6 +150,7 @@ impl EmailKind {
             Self::PlanCancelled { .. }     => "plan_cancelled",
             Self::PlanComeBack { .. }      => "plan_come_back",
             Self::PlanGifted { .. }        => "plan_gifted",
+            Self::LicenceCreditsLow { .. } => "licence_credits_low",
             Self::TenantPlanUpgraded { .. } => "tenant_plan_upgraded",
             Self::AppDigest { .. }         => "app_digest",
         }
@@ -179,6 +184,7 @@ impl EmailKind {
             Self::PlanCancelled { plan_name, ended, lang, .. } => mayorana::cancelled_subject(plan_name, *ended, *lang),
             Self::PlanComeBack { lang, .. }                  => mayorana::come_back_subject(*lang),
             Self::PlanGifted { plan_name, lang, .. }         => mayorana::gift_subject(plan_name, *lang),
+            Self::LicenceCreditsLow { plan_name, empty, lang, .. } => mayorana::credits_low_subject(plan_name, *empty, *lang),
             Self::TenantPlanUpgraded { tenant_name, plan_name, paid_plan_name: Some(_), .. } => format!("🎁 A gift for {tenant_name}: {plan_name}"),
             Self::TenantPlanUpgraded { tenant_name, plan_name, .. } => format!("🎉 {tenant_name} is now on {plan_name}"),
             Self::AppDigest { app, title, .. }               => format!("{app}: {title}"),
@@ -206,6 +212,7 @@ impl EmailKind {
             | Self::PlanCancelled { .. }
             | Self::PlanComeBack { .. }
             | Self::PlanGifted { .. }
+            | Self::LicenceCreditsLow { .. }
             | Self::AppDigest { .. } => unsubscribe::Brand::Mayorana,
             _ => unsubscribe::Brand::Api0,
         }
@@ -219,7 +226,8 @@ impl EmailKind {
             Self::LicenceIssued { lang, .. }
             | Self::PlanCancelled { lang, .. }
             | Self::PlanComeBack { lang, .. }
-            | Self::PlanGifted { lang, .. } => lang.sender_name(),
+            | Self::PlanGifted { lang, .. }
+            | Self::LicenceCreditsLow { lang, .. } => lang.sender_name(),
             Self::AppDigest { .. } => "mayorana",
             Self::NudgeFollowUp => "Benek from api0",
             _ => "api0",
@@ -231,7 +239,7 @@ impl EmailKind {
         matches!(
             self,
             Self::LicenceIssued { .. } | Self::PlanCancelled { .. } | Self::PlanComeBack { .. } | Self::PlanGifted { .. }
-                | Self::NudgeFollowUp
+                | Self::LicenceCreditsLow { .. } | Self::NudgeFollowUp
         )
     }
 
@@ -277,6 +285,9 @@ impl EmailKind {
         }
         if let Self::PlanComeBack { plan_name, lang } = self {
             return mayorana::come_back_body(plan_name, unsubscribe, *lang);
+        }
+        if let Self::LicenceCreditsLow { plan_name, credits_left, credits_granted, empty, refills_on, lang } = self {
+            return mayorana::credits_low_body(plan_name, *credits_left, *credits_granted, *empty, refills_on.as_deref(), *lang);
         }
         if let Self::PlanGifted { plan_name, paid_plan_name, pays_nothing, apps, monthly_credits, lang } = self {
             return mayorana::gift_body(plan_name, paid_plan_name, *pays_nothing, apps, *monthly_credits, *lang);
@@ -506,6 +517,7 @@ impl EmailKind {
             | Self::PlanCancelled { .. }
             | Self::PlanComeBack { .. }
             | Self::PlanGifted { .. }
+            | Self::LicenceCreditsLow { .. }
             | Self::AppDigest { .. } => {
                 unreachable!("rendered above")
             }

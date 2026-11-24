@@ -220,6 +220,7 @@ pub async fn start_http_server(
                             .route("/plans/subscription/{email}", web::get().to(crate::payment::subscription::subscription_handler))
                             .route("/plans/portal", web::post().to(crate::payment::subscription::portal_handler))
                             .route("/plans/cancel", web::post().to(crate::payment::subscription::cancel_handler))
+                            .route("/plans/licence/rotate", web::post().to(crate::payment::subscription::rotate_licence_handler))
                             .route("/plans/session/{session_id}", web::get().to(crate::payment::subscription::session_handler))
                             .route("/plans/free", web::post().to(crate::payment::subscription::free_handler))
                             .route("/internal/licence/status", web::post().to(crate::payment::subscription::licence_status_handler))
@@ -252,6 +253,8 @@ pub async fn start_http_server(
                             .route("/admin/tenant-names", web::get().to(crate::admin::users_directory::tenant_names))
                             // Super admin: move a licence to another plan, delete a user
                             .route("/admin/licences/plan", web::post().to(crate::admin::user_admin::change_licence_plan))
+                            .route("/admin/licences/grant", web::post().to(crate::admin::user_admin::grant_licence))
+                            .route("/admin/licences/topup", web::post().to(crate::admin::user_admin::top_up_licence))
                             .route("/admin/users/delete", web::post().to(crate::admin::user_admin::delete_user))
                             // Super admin: every AI call, its model and tokens, paged
                             .route("/admin/llm-calls", web::get().to(crate::admin::llm_calls::list_llm_calls))

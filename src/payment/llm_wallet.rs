@@ -367,7 +367,16 @@ pub async fn charge_handler(
         (0, None)
     } else {
         match subscription::spend_credits(&store, &b.subscription_id, &b.model, total).await {
-            Ok(s) => (s.credits, Some(s.credits_left)),
+            Ok(s) => {
+                // Told in the background: the charge's answer doesn't wait on an email.
+                let (store, id) = (Arc::clone(&store), b.subscription_id.clone());
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = subscription::alert_if_low(&store, &id).await {
+                        app_log!(error, error = %e, subscription_id = %id, "Could not check for a low-credit email");
+                    }
+                });
+                (s.credits, Some(s.credits_left))
+            }
             Err(SpendError::NoPlan) => {
                 app_log!(warn, email = %b.email, tokens = total, "LLM call ended after the plan did; not charged");
                 (0, None)
