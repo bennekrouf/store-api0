@@ -38,6 +38,18 @@ pub struct GenerateSelfServiceKeyRequest {
     pub key_name: Option<String>,
 }
 
+/// The MCP server URL a consumer pastes into their client: the gateway's own
+/// public origin (`API0_PUBLIC_GATEWAY_URL`, as for unsubscribe links), never
+/// another host — a client discovers sign-in from this URL's host, and only the
+/// gateway serves it.
+fn mcp_url() -> String {
+    let base = std::env::var("API0_PUBLIC_GATEWAY_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "https://gateway.api0.ai".to_string());
+    format!("{}/mcp", base.trim().trim_end_matches('/'))
+}
+
 // ── POST /api/consumer-keys/me ────────────────────────────────────────────────
 
 pub async fn generate_self_service_key(
@@ -173,7 +185,7 @@ pub async fn generate_self_service_key(
         "key_id": key_id,
         "provider_tenant_id": provider_tenant_id,
         "message": "Key created. Copy it now — it will not be shown again.",
-        "mcp_url": "https://api.api0.ai/mcp"
+        "mcp_url": mcp_url()
     }))
 }
 
@@ -247,6 +259,17 @@ pub async fn list_self_service_keys(
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "keys": keys,
-        "mcp_url": "https://api.api0.ai/mcp"
+        "mcp_url": mcp_url()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mcp_url;
+
+    #[test]
+    fn mcp_url_is_on_the_gateway() {
+        std::env::remove_var("API0_PUBLIC_GATEWAY_URL");
+        assert_eq!(mcp_url(), "https://gateway.api0.ai/mcp");
+    }
 }
